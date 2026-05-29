@@ -1,0 +1,30 @@
+name: Docs or contributor experience
+description: Report documentation gaps or repository/process improvements
+title: "[Docs]: "
+labels:
+  - docs
+  - needs-triage
+body:
+  - type: textarea
+    id: issue
+    attributes:
+      label: What needs improvement?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - docs site / repo
+        - ui
+        - runtime
+        - subagents
+        - models
+        - chains
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Suggested change

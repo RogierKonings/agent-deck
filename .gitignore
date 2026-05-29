@@ -1,0 +1,39 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Xcode / Swift build products
+build/
+DerivedData/
+.build/
+*.xcresult
+*.dSYM
+*.dSYM.zip
+
+# Xcode user-local state
+*.xcuserstate
+xcuserdata/
+*.xccheckout
+
+# Swift Package Manager local build/config
+.swiftpm/
+
+# Local Pi/agent custom resources
+.pi/
+.agents/
+
+# Local Claude Code state (per-machine; not for distribution)
+.claude/
+
+# Local logs and temporary files
+*.log
+/tmp/
+tmp/
+*.profraw
+
+# Xcode archive/export artifacts produced by local deploy scripts
+*.xcarchive
+
+# Local-only release helper (kept off the public repo on purpose)
+scripts/release.sh

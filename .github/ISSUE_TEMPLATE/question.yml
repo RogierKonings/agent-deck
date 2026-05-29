@@ -1,0 +1,19 @@
+name: Question
+description: Ask a scoped product or repo question
+title: "[Question]: "
+labels:
+  - question
+  - needs-triage
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: Ask one clear question.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Add any relevant details, screenshots, or links.

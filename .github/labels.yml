@@ -1,0 +1,65 @@
+# Canonical Agent Deck issue labels.
+# Source of truth — edited via PR, applied to the repo by .github/workflows/labels.yml.
+# Any label on the repo that is not listed here will be DELETED on the next sync.
+
+# --- Type: what kind of work ---
+- name: bug
+  color: 'd73a4a'
+  description: Something isn't working
+- name: feature
+  color: 'a2eeef'
+  description: Feature request or enhancement
+- name: docs
+  color: '0075ca'
+  description: Documentation or contributor-experience work
+- name: chore
+  color: 'c5def5'
+  description: Internal maintenance or cleanup
+- name: question
+  color: 'd876e3'
+  description: Further information is requested
+
+# --- Status: where it stands ---
+- name: needs-triage
+  color: 'FBCA04'
+  description: Awaiting triage / prioritization
+- name: backlog
+  color: 'bfdadc'
+  description: Accepted but not planned soon
+- name: blocked
+  color: 'b60205'
+  description: Blocked on external dependency or decision
+- name: good first issue
+  color: '7057ff'
+  description: Good for newcomers
+- name: help wanted
+  color: '008672'
+  description: Extra attention is needed
+
+# --- Priority ---
+- name: p0
+  color: 'b60205'
+  description: Critical
+- name: p1
+  color: 'd93f0b'
+  description: Important
+- name: p2
+  color: 'fbca04'
+  description: Normal
+
+# --- Area: which part of the app ---
+- name: ui
+  color: '1d76db'
+  description: UI and UX surface
+- name: runtime
+  color: '0e8a16'
+  description: Pi runtime, launch, and process integration
+- name: models
+  color: '006b75'
+  description: Models, providers, and pickers
+- name: subagents
+  color: '5319e7'
+  description: Native subagents and supervisor flows
+- name: chains
+  color: '5319e7'
+  description: Workflow/chain builder (canvas, triggers, runtime, integrations)

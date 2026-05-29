@@ -1,0 +1,24 @@
+{
+  "originHash" : "2d98360323287bce62376157dc7a6b88d9df9de0a4210630a005e1ac7aa0edca",
+  "pins" : [
+    {
+      "identity" : "sparkle",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/sparkle-project/Sparkle.git",
+      "state" : {
+        "revision" : "6276ba2b404829d139c45ff98427cf90e2efc59b",
+        "version" : "2.9.2"
+      }
+    },
+    {
+      "identity" : "tourkit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/rampatra/TourKit.git",
+      "state" : {
+        "revision" : "0cac3a51069e105286635601e82117c195058ee9",
+        "version" : "1.0.0"
+      }
+    }
+  ],
+  "version" : 3
+}
