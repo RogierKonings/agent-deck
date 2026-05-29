@@ -670,6 +670,40 @@ struct SkillsScreen: View {
                     }
                 }
             }
+
+            if viewModel.isImportedSkill(skill) {
+                AppCard(title: "Remove Skill") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Remove this skill from the \(AppBrand.displayName) catalog and clear its Default, project, and agent assignments. The skill files are not deleted.")
+                            .font(.callout)
+                            .foregroundStyle(AppTheme.mutedText)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                        Button("Remove from Catalog") {
+                            skillPendingRemoval = skill
+                        }
+                        .appSecondaryButton()
+                    }
+                }
+            }
+
+            if skill.source.kind != .builtin && viewModel.canDeleteSkill(skill) {
+                AppCard(title: "Delete Skill") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Move this skill's file to the Trash and remove its Default, project, and agent assignments.")
+                            .font(.callout)
+                            .foregroundStyle(AppTheme.mutedText)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                        Button("Delete Skill", role: .destructive) {
+                            skillPendingDeletion = skill
+                        }
+                        .appDestructiveButton()
+                    }
+                }
+            }
         } else {
             AppCard {
                 ContentUnavailableView("No Skill Selected", systemImage: "wand.and.stars")

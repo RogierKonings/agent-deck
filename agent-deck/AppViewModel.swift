@@ -6889,8 +6889,24 @@ final class AppViewModel: NSObject {
             var updated = repository
             updated.syncedSkillRelativePaths = remaining
             appSettingsController.upsertImportedSkillRepository(updated)
+            reconcileSparseCheckout(for: updated)
         }
         appSettings = appSettingsController.settings
+    }
+
+    /// Keep Git's sparse-checkout patterns aligned with Agent Deck's tracked
+    /// imported-skill set. This is best-effort because the user-facing removal
+    /// already succeeded once settings were updated.
+    private func reconcileSparseCheckout(for repository: ImportedSkillRepository) {
+        let cloneURL = URL(fileURLWithPath: repository.clonePath, isDirectory: true)
+        let directories = repository.syncedSkillRelativePaths.filter { !$0.isEmpty }
+        Task { [skillRepositorySyncService] in
+            do {
+                try await skillRepositorySyncService.setSparseCheckout(directories, inCloneAt: cloneURL)
+            } catch {
+                NSLog("Failed to reconcile sparse checkout for imported skill repository %@: %@", repository.displayName, String(describing: error))
+            }
+        }
     }
 
     func skillIsEnabledGlobally(_ skill: SkillRecord) -> Bool {

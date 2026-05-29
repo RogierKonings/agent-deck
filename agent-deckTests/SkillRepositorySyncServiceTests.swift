@@ -117,6 +117,31 @@ final class SkillRepositorySyncServiceTests: XCTestCase {
         )
     }
 
+    func testSparseCheckoutCanBeReconciledAfterUnlistingSkill() async throws {
+        let origin = try makeOriginRepository(
+            skills: [
+                "skills/alpha": "Alpha Skill",
+                "skills/beta": "Beta Skill",
+            ],
+            referenceFiles: [:]
+        )
+        let service = SkillRepositorySyncService()
+        let clonePath = try makeTempURL()
+
+        let source = RemoteSkillSource(remoteURL: origin.path, owner: "acme", repo: "kit", ref: nil, preselectedSkillSlug: nil)
+        _ = try await service.cloneForDiscovery(source, into: clonePath)
+        let candidates = try await service.listSkills(inCloneAt: clonePath)
+        try await service.checkout(candidates, inCloneAt: clonePath)
+
+        try await service.setSparseCheckout(["skills/beta"], inCloneAt: clonePath)
+
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: clonePath.appendingPathComponent("skills/alpha/SKILL.md").path),
+            "Unlisted skills should be removed from the materialised sparse checkout."
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: clonePath.appendingPathComponent("skills/beta/SKILL.md").path))
+    }
+
     func testWholeRepositorySkillCheckedOutEntirely() async throws {
         let origin = try makeOriginRepository(
             skills: ["": "Root Skill"],

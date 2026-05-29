@@ -348,7 +348,18 @@ nonisolated struct SkillRepositorySyncService {
         }
 
         let directories = candidates.map(\.repoRelativeDirectory).filter { !$0.isEmpty }
-        guard !directories.isEmpty else { return }
+        try await setSparseCheckout(directories, inCloneAt: clonePath, additive: additive)
+    }
+
+    /// Replace or extend the sparse-checkout directory set for an imported repo.
+    /// An empty directory list leaves sparse checkout enabled with no skill roots
+    /// materialised; callers usually unregister/delete the clone instead.
+    func setSparseCheckout(
+        _ directories: [String],
+        inCloneAt clonePath: URL,
+        additive: Bool = false
+    ) async throws {
+        let directories = directories.filter { !$0.isEmpty }
         let verb = additive ? "add" : "set"
         _ = try await git(["sparse-checkout", verb] + directories, in: clonePath, timeout: 180)
     }
