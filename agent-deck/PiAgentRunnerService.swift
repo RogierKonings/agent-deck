@@ -804,7 +804,11 @@ final class PiAgentRunnerService {
         pendingIdleTasksBySessionID[sessionID] = nil
         guard let session = store.sessions.first(where: { $0.id == sessionID }),
               session.status.isActive,
-              store.uiRequestsBySessionID[sessionID] == nil else { return }
+              store.uiRequestsBySessionID[sessionID] == nil,
+              assistantEntryIDsBySessionID[sessionID] == nil,
+              assistantTextBySessionID[sessionID] == nil,
+              thinkingEntryIDsBySessionID[sessionID] == nil,
+              thinkingTextBySessionID[sessionID] == nil else { return }
         mark(sessionID, status: .idle, error: nil)
         // Launch-affecting config changes (model/thinking) requested mid-turn are
         // queued in pendingConfigurationRestartSessionIDs. Drain that here so the
@@ -1567,6 +1571,14 @@ final class PiAgentRunnerService {
         } else if role == "user" {
             // Pi echoes user messages back over RPC. The app already records the submitted prompt.
             return
+        } else if role == "toolResult" {
+            if !text.isEmpty {
+                store.append(.init(sessionID: sessionID, role: .raw, title: role, text: text, rawJSON: rawLine))
+            }
+            // Some Pi RPC streams stop after the final tool result without a
+            // following assistant/turn_end event. Treat that as an idle candidate;
+            // any subsequent assistant/tool event will keep or restore activity.
+            scheduleIdleConfirmation(sessionID: sessionID)
         } else if !text.isEmpty {
             store.append(.init(sessionID: sessionID, role: .raw, title: role, text: text, rawJSON: rawLine))
         }
