@@ -153,9 +153,23 @@ jobs:
         # generated Info.plist. PlistBuddy them in directly here, on the
         # already-exported .app, before signing the DMG. Keep these values
         # in sync with scripts/inject-sparkle-info.sh.
+        #
+        # We ALSO force the version keys here: `agvtool new-marketing-version`
+        # was not reliably updating CFBundleShortVersionString in the build
+        # (shipped 1.1 still reported 1.0 in the About panel), so we set both
+        # the marketing version (from the tag) and the build number
+        # (GITHUB_RUN_NUMBER) directly on the exported app. This is the final
+        # word on the Info.plist before signing.
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
           PLIST="build/release/export/Agent Deck.app/Contents/Info.plist"
+          # Version (marketing = tag, build = run number).
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$PLIST" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $VERSION" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${GITHUB_RUN_NUMBER}" "$PLIST" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string ${GITHUB_RUN_NUMBER}" "$PLIST"
           /usr/libexec/PlistBuddy -c \
             "Add :SUFeedURL string https://agentdeck.site/appcast.xml" \
             "$PLIST" 2>/dev/null \
@@ -239,18 +253,36 @@ jobs:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
-          # First tag in repo may have no prior tag — fall back to plain notes.
-          if gh release create "$TAG" \
-              --title "Agent Deck $VERSION" \
-              --generate-notes \
-              "$DMG"; then
-            echo "Release created with generated notes"
+
+          # Build the changelog from the actual commits between the previous
+          # version tag and this one. This is more reliable than GitHub's
+          # PR-centric --generate-notes for a repo where work lands as direct
+          # commits to main. The appcast step reads this release body and
+          # renders it (as HTML) in the Sparkle update dialog.
+          git fetch --tags --force --quiet || true
+          PREV_TAG=$(git tag --list 'v*.*' --sort=-v:refname | grep -vx "$TAG" | head -1 || true)
+
+          if [ -n "$PREV_TAG" ]; then
+            COMMITS=$(git log "${PREV_TAG}..${TAG}" --no-merges --pretty=format:'- %s' \
+                      | grep -vE '^- (appcast|Initial commit)' || true)
+            if [ -z "$COMMITS" ]; then
+              COMMITS="- Maintenance and internal improvements"
+            fi
+            NOTES=$(printf '## What'\''s new in %s\n\n%s\n\n**Full Changelog**: https://github.com/%s/compare/%s...%s\n' \
+                    "$VERSION" "$COMMITS" "$GITHUB_REPOSITORY" "$PREV_TAG" "$TAG")
           else
-            gh release create "$TAG" \
-              --title "Agent Deck $VERSION" \
-              --notes "Release $VERSION" \
-              "$DMG"
+            NOTES=$(printf '## Agent Deck %s\n\nFirst public release.\n' "$VERSION")
           fi
+
+          printf '%s' "$NOTES" > release-notes.md
+          echo "----- release notes -----"
+          cat release-notes.md
+          echo "-------------------------"
+
+          gh release create "$TAG" \
+            --title "Agent Deck $VERSION" \
+            --notes-file release-notes.md \
+            "$DMG"
 
       - name: Publish appcast item asset
         # Instead of committing docs/appcast.xml back to main (which polluted
@@ -265,25 +297,54 @@ jobs:
           ED_FRAGMENT: ${{ steps.edsig.outputs.fragment }}
         run: |
           set -euo pipefail
-          PUBDATE=$(LC_ALL=en_US.UTF-8 date -u "+%a, %d %b %Y %H:%M:%S +0000")
-          NOTES=$(gh release view "$TAG" --json body --jq '.body' | sed 's/]]>/]]]]><![CDATA[>/g')
-          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/Agent-Deck-${VERSION}.dmg"
-          MIN_OS=$(awk -F'= ' '/MACOSX_DEPLOYMENT_TARGET/ {gsub(/[";]/,"",$2); print $2; exit}' agent-deck.xcodeproj/project.pbxproj)
-          MIN_OS=${MIN_OS:-14.0}
+          export PUBDATE=$(LC_ALL=en_US.UTF-8 date -u "+%a, %d %b %Y %H:%M:%S +0000")
+          export MIN_OS=$(awk -F'= ' '/MACOSX_DEPLOYMENT_TARGET/ {gsub(/[";]/,"",$2); print $2; exit}' agent-deck.xcodeproj/project.pbxproj)
+          export MIN_OS=${MIN_OS:-14.0}
 
-          cat > appcast-item.xml <<EOF
-              <item>
-                <title>${VERSION}</title>
-                <pubDate>${PUBDATE}</pubDate>
-                <sparkle:version>${GITHUB_RUN_NUMBER}</sparkle:version>
-                <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
-                <sparkle:minimumSystemVersion>${MIN_OS}</sparkle:minimumSystemVersion>
-                <enclosure url="${URL}" type="application/octet-stream" ${ED_FRAGMENT}/>
-                <description><![CDATA[
-          ${NOTES}
-                ]]></description>
-              </item>
-          EOF
+          # Sparkle renders the <description> as HTML, so we convert the
+          # GitHub release notes (markdown) to HTML — otherwise users see raw
+          # "**bold**" / unlinked URLs in the update dialog.
+          pip3 install --break-system-packages --quiet markdown
+
+          python3 - <<'PY'
+          import os, subprocess, markdown
+          tag = os.environ["TAG"]
+          version = os.environ["VERSION"]
+          ed = os.environ["ED_FRAGMENT"]
+          run = os.environ["GITHUB_RUN_NUMBER"]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          min_os = os.environ["MIN_OS"]
+          pubdate = os.environ["PUBDATE"]
+
+          notes_md = subprocess.check_output(
+              ["gh", "release", "view", tag, "--json", "body", "--jq", ".body"],
+              text=True,
+          ).strip()
+          notes_html = markdown.markdown(notes_md, extensions=["fenced_code", "tables"])
+          if not notes_html.strip():
+              notes_html = f'<p><a href="https://github.com/{repo}/releases/tag/{tag}">Release notes</a></p>'
+          # CDATA can't contain the literal "]]>" sequence — split it if present.
+          notes_html = notes_html.replace("]]>", "]]]]><![CDATA[>")
+
+          url = f"https://github.com/{repo}/releases/download/{tag}/Agent-Deck-{version}.dmg"
+          lines = [
+              "    <item>",
+              f"      <title>{version}</title>",
+              f"      <pubDate>{pubdate}</pubDate>",
+              f"      <sparkle:version>{run}</sparkle:version>",
+              f"      <sparkle:shortVersionString>{version}</sparkle:shortVersionString>",
+              f"      <sparkle:minimumSystemVersion>{min_os}</sparkle:minimumSystemVersion>",
+              f'      <enclosure url="{url}" type="application/octet-stream" {ed}/>',
+              "      <description><![CDATA[",
+              notes_html,
+              "      ]]></description>",
+              "    </item>",
+          ]
+          item = "\n".join(lines)
+          with open("appcast-item.xml", "w") as f:
+              f.write(item + "\n")
+          print(item)
+          PY
 
           # --clobber so re-running a release for the same tag overwrites cleanly.
           gh release upload "$TAG" appcast-item.xml --clobber
