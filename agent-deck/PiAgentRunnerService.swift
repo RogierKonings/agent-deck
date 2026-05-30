@@ -1071,6 +1071,12 @@ final class PiAgentRunnerService {
                 store.setProcessingActivity(.preparing, for: sessionID)
             }
         case "agent_end", "turn_end":
+            // Some Pi RPC streams include the final assistant message on turn_end/agent_end
+            // without a separate message_end. Finalize it here so stale streaming buffers
+            // do not keep the session card stuck in the active/running state.
+            if let message = finalAssistantMessage(from: event) {
+                finalizeCompletedMessage(message, rawLine: rawLine, sessionID: sessionID)
+            }
             scheduleIdleConfirmation(sessionID: sessionID)
             clientsBySessionID[sessionID]?.getState()
             clientsBySessionID[sessionID]?.getSessionStats()
@@ -1542,6 +1548,10 @@ final class PiAgentRunnerService {
 
     private func handleMessageEnd(_ event: PiAgentRPCEvent, rawLine: String, sessionID: UUID) {
         guard let message = event.message else { return }
+        finalizeCompletedMessage(message, rawLine: rawLine, sessionID: sessionID)
+    }
+
+    private func finalizeCompletedMessage(_ message: JSONValue, rawLine: String, sessionID: UUID) {
         let text = extractText(from: message)
         let role = message["role"]?.stringValue ?? "assistant"
         if role == "assistant" {
@@ -1582,6 +1592,15 @@ final class PiAgentRunnerService {
         } else if !text.isEmpty {
             store.append(.init(sessionID: sessionID, role: .raw, title: role, text: text, rawJSON: rawLine))
         }
+    }
+
+    private func finalAssistantMessage(from event: PiAgentRPCEvent) -> JSONValue? {
+        if let message = event.message,
+           (message["role"]?.stringValue ?? "assistant") == "assistant" {
+            return message
+        }
+        guard case let .array(messages) = event.messages else { return nil }
+        return messages.last { ($0["role"]?.stringValue ?? "") == "assistant" }
     }
 
     private func handleToolExecution(_ event: PiAgentRPCEvent, rawLine: String, sessionID: UUID) {
