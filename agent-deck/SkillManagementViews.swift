@@ -376,8 +376,17 @@ struct SkillsScreen: View {
             managed = preferred
         } else {
             managed = preferred.filter { skill in
-                [skill.name, skill.description ?? "", skill.source.kind.rawValue, skill.filePath, skill.body]
-                    .contains { $0.lowercased().contains(query) }
+                let repository = viewModel.importedRepository(for: skill)
+                return [
+                    skill.name,
+                    skill.description ?? "",
+                    skill.source.kind.rawValue,
+                    skill.filePath,
+                    skill.body,
+                    repository?.displayName ?? "",
+                    repository.map { "\($0.owner)/\($0.repo)" } ?? ""
+                ]
+                .contains { $0.lowercased().contains(query) }
             }
         }
 
@@ -1058,15 +1067,21 @@ struct SkillsScreen: View {
         let hasWarnings = metadata.hasWarnings
         let iconName = hasWarnings ? "exclamationmark.triangle.fill" : skillIcon(skill)
         let iconColor: Color = hasWarnings ? .orange : skillColor(isAssigned: isActive)
-        let hasUpdate = viewModel.importedRepository(for: skill)?.hasKnownUpdate == true
+        let repository = viewModel.importedRepository(for: skill)
+        let hasUpdate = repository?.hasKnownUpdate == true
         let canRename = viewModel.canRenameSkill(skill)
         return SkillListRowView(
             skill: skill,
             iconName: iconName,
             iconColor: iconColor,
             isInactive: isInactive,
+            repositoryDisplayName: repository?.displayName,
             hasUpdate: hasUpdate,
+            isUpdating: repository != nil && isUpdatingSkillRepository,
             canRename: canRename,
+            onUpdate: repository.map { repository in
+                { applySkillRepositoryUpdate(repository) }
+            },
             onEdit: { skillEditTarget = makeSkillEditTarget(skill) }
         )
         .contextMenu {
@@ -1749,8 +1764,11 @@ private struct SkillListRowView: View {
     let iconName: String
     let iconColor: Color
     let isInactive: Bool
+    let repositoryDisplayName: String?
     let hasUpdate: Bool
+    let isUpdating: Bool
     let canRename: Bool
+    let onUpdate: (() -> Void)?
     let onEdit: () -> Void
 
     @State private var isHovered = false
@@ -1771,18 +1789,40 @@ private struct SkillListRowView: View {
                     .foregroundStyle(AppTheme.mutedText)
                     .lineLimit(1)
                     .truncationMode(.tail)
+
+                if let repositoryDisplayName {
+                    HStack(spacing: 6) {
+                        Image("github")
+                            .resizable()
+                            .renderingMode(.template)
+                            .scaledToFit()
+                            .frame(width: 11, height: 11)
+                        Text(repositoryDisplayName)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(AppTheme.mutedText)
+                    .help("Synced from GitHub · \(repositoryDisplayName)")
+                }
             }
 
             Spacer(minLength: 0)
 
-            if hasUpdate {
-                Text("Update")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.orange)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2)
-                    .background(.orange.opacity(0.12), in: Capsule())
-                    .help("An update is available from the source repository")
+            if let onUpdate {
+                Button(action: onUpdate) {
+                    if isUpdating {
+                        AppSpinner().controlSize(.small)
+                    } else {
+                        Text("Update")
+                            .font(.caption.weight(.semibold))
+                    }
+                }
+                .appSmallSecondaryButton()
+                .opacity(isHovered ? 1 : 0)
+                .disabled(isUpdating)
+                .help(hasUpdate ? "Update available — sync this skill from GitHub" : "Sync this skill from GitHub")
+                .animation(.easeInOut(duration: 0.15), value: isHovered)
             }
 
             if canRename {
