@@ -119,7 +119,7 @@ nonisolated struct SkillRepositoryConflict: Identifiable, Hashable, Sendable {
 }
 
 nonisolated enum SkillRepositoryUpdateOutcome: Sendable {
-    case alreadyUpToDate
+    case alreadyUpToDate(commit: String)
     case updated(newCommit: String)
     case conflicts([SkillRepositoryConflict])
 }

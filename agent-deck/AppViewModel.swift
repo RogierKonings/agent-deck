@@ -1129,15 +1129,32 @@ final class AppViewModel: NSObject {
     }
 
     private func applyUpdateOutcome(_ outcome: SkillRepositoryUpdateOutcome, to repository: ImportedSkillRepository) {
-        guard case let .updated(newCommit) = outcome else { return }
+        // Reconcile the stored record to the clone's real HEAD for both a fresh
+        // fast-forward and the "already up to date" case. The latter matters when
+        // the clone advanced earlier but the record was left stale — otherwise the
+        // "update available" badge sticks even though there's nothing to pull.
+        let resolvedCommit: String
+        let didChangeFiles: Bool
+        switch outcome {
+        case let .updated(newCommit):
+            resolvedCommit = newCommit
+            didChangeFiles = true
+        case let .alreadyUpToDate(commit):
+            resolvedCommit = commit
+            didChangeFiles = false
+        case .conflicts:
+            return
+        }
+
         var updated = repository
-        updated.lastSyncedCommit = newCommit
-        updated.latestKnownRemoteCommit = newCommit
-        updated.lastSyncedDate = Date()
+        let commitChanged = updated.lastSyncedCommit != resolvedCommit
+        updated.lastSyncedCommit = resolvedCommit
+        updated.latestKnownRemoteCommit = resolvedCommit
+        if commitChanged { updated.lastSyncedDate = Date() }
         updated.lastCheckedDate = Date()
         appSettingsController.upsertImportedSkillRepository(updated)
         appSettings = appSettingsController.settings
-        refresh(includeModels: false, scanAllProjects: true)
+        if didChangeFiles { refresh(includeModels: false, scanAllProjects: true) }
     }
 
     /// Synced repositories a manual check has flagged as having an upstream update.

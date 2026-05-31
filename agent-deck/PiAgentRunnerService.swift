@@ -1,6 +1,28 @@
 import Foundation
 import os
 
+/// Temporary diagnostic logger for the inbound RPC → transcript-entry path.
+/// Off unless launched with `AGENTDECK_RPC_LOG=1`. Writes one line per event to
+/// `/tmp/agentdeck-rpc.log` (truncated each launch). Used to capture exactly what
+/// a provider emits at end-of-turn (e.g. duplicate end-events) — remove once the
+/// duplicate/empty assistant-entry questions are settled.
+@MainActor
+enum RPCDebugLog {
+    static let enabled = ProcessInfo.processInfo.environment["AGENTDECK_RPC_LOG"] != nil
+    private static var handle: FileHandle? = {
+        guard enabled else { return nil }
+        FileManager.default.createFile(atPath: "/tmp/agentdeck-rpc.log", contents: nil)
+        return FileHandle(forWritingAtPath: "/tmp/agentdeck-rpc.log")
+    }()
+
+    static func log(_ line: String) {
+        guard enabled else { return }
+        let out = line + "\n"
+        FileHandle.standardError.write(Data("[rpc] \(out)".utf8))
+        handle?.write(Data(out.utf8))
+    }
+}
+
 enum PiParentAppendPromptResolver {
     static func appendSystemPromptArguments(
         projectURL: URL,
@@ -1054,6 +1076,7 @@ final class PiAgentRunnerService {
 
     private func handle(rawLine: String, event: PiAgentRPCEvent?, sessionID: UUID, clientRunID: UUID) {
         guard isCurrentClientRun(clientRunID, for: sessionID) else { return }
+        RPCDebugLog.log("event type=\(event?.type ?? "unparsed") cmd=\(event?.command ?? "-")")
         // Within the window after a compaction completes, log the type of each inbound
         // event (never its content) so we can confirm whether Pi continues the turn.
         if let remaining = postCompactionLogCountBySessionID[sessionID], remaining > 0 {
@@ -1585,6 +1608,7 @@ final class PiAgentRunnerService {
             thinkingEntryIDsBySessionID[sessionID] = nil
             thinkingTextBySessionID[sessionID] = nil
             let visibleText = extractAssistantText(from: message)
+            RPCDebugLog.log("  finalize assistant: entryID=\(assistantEntryID.uuidString.prefix(8)) visibleLen=\(visibleText.count) streamedLen=\(streamedText.count) dedup=\(visibleText.isEmpty ? false : recentAssistantEntryExists(with: visibleText, sessionID: sessionID)) recentAssistantCount=\(store.transcript(for: sessionID).suffix(8).filter { $0.role == .assistant }.count)")
             if !visibleText.isEmpty {
                 guard !recentAssistantEntryExists(with: visibleText, sessionID: sessionID) else {
                     scheduleIdleConfirmation(sessionID: sessionID)

@@ -390,7 +390,7 @@ nonisolated struct SkillRepositorySyncService {
         _ = try await git(["fetch", "origin", ref], in: clonePath, timeout: 180)
         let localHead = try await trimmedGit(["rev-parse", "HEAD"], in: clonePath)
         let remoteCommit = try await trimmedGit(["rev-parse", "origin/\(ref)"], in: clonePath)
-        guard localHead != remoteCommit else { return .alreadyUpToDate }
+        guard localHead != remoteCommit else { return .alreadyUpToDate(commit: localHead) }
 
         let dirtyFiles = try await locallyModifiedFiles(in: clonePath)
         let upstreamChanges = try await filesChanged(from: "HEAD", to: "origin/\(ref)", in: clonePath)
