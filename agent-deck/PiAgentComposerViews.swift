@@ -2140,13 +2140,13 @@ struct PiAgentRuntimeFooter: View {
             if showsSubagentsToggle {
                 if subagentsToggleEnabled {
                     metricButton(
-                        "Deck agents: \(session.subagentsEnabled ? "on" : "off")",
+                        "agents: \(session.subagentsEnabled ? "on" : "off")",
                         icon: "paperplane",
                         action: onToggleSubagents
                     )
                     .help("Draft only. This sets the current draft and the default for new sessions.")
                 } else {
-                    metric("Deck agents: \(session.subagentsEnabled ? "on" : "off")", icon: "paperplane")
+                    metric("agents: \(session.subagentsEnabled ? "on" : "off")", icon: "paperplane")
                         .help("Deck agents can only be changed before the first message starts Pi.")
                 }
             }

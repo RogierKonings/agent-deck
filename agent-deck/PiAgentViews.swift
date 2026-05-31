@@ -7,6 +7,38 @@ import UniformTypeIdentifiers
 
 let piAgentLeakedToolNames: Set<String> = ["bash", "read", "edit", "write", "find", "grep", "subagent", "web_search", "fetch_content", "get_search_content", "web_fetch"]
 
+/// Diagnostic timeline logger for the streaming-transcript scroll/height path.
+/// Off unless the app is launched with `AGENTDECK_TRANSCRIPT_LOG=1` in the
+/// environment. Writes one tab-separated line per event to
+/// `/tmp/agentdeck-transcript-jank.log` (truncated on first write each launch)
+/// plus stderr, both stamped with a monotonic clock so the per-token ordering
+/// of measure → re-tile → scroll is exactly reconstructable. Used to *see* the
+/// streaming bounce; meant to be removed once the jank is fixed.
+@MainActor
+enum TranscriptJankLog {
+    static let enabled = ProcessInfo.processInfo.environment["AGENTDECK_TRANSCRIPT_LOG"] != nil
+    private static let path = "/tmp/agentdeck-transcript-jank.log"
+    private static var handle: FileHandle? = {
+        guard enabled else { return nil }
+        FileManager.default.createFile(atPath: path, contents: nil)
+        return FileHandle(forWritingAtPath: path)
+    }()
+    private static var startTime: CFTimeInterval = CACurrentMediaTime()
+
+    /// `event` is a short tag; `fields` are key=value pairs appended verbatim.
+    static func log(_ event: String, _ fields: [String: String] = [:]) {
+        guard enabled else { return }
+        let t = String(format: "%9.3f", (CACurrentMediaTime() - startTime) * 1000)
+        let kv = fields.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: "\t")
+        let line = "\(t)ms\t\(event)\t\(kv)\n"
+        FileHandle.standardError.write(Data("[jank] \(line)".utf8))
+        handle?.write(Data(line.utf8))
+    }
+
+    /// Short, stable id suffix so log lines stay readable.
+    static func shortID(_ id: String) -> String { String(id.suffix(6)) }
+}
+
 @MainActor
 enum PiAgentRPCEventRenderCache {
     private static var cache: [String: PiAgentRPCEvent] = [:]
@@ -767,6 +799,12 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             } else {
                 let changedIDs = nextIDs.filter { contentRevisionByID[$0] != nextRevisions[$0] }
                 for (id, revision) in nextRevisions { contentRevisionByID[id] = revision }
+                TranscriptJankLog.log("apply.stream", [
+                    "wasPinned": "\(wasPinned)",
+                    "userScroll": "\(isUserScrollingRecently)",
+                    "changed": changedIDs.map { TranscriptJankLog.shortID($0) }.joined(separator: ","),
+                    "streamRev": "\(streamingRevision)"
+                ])
                 if !changedIDs.isEmpty {
                     // Keep the last measured height (see the idsChanged branch):
                     // the cell re-renders and reports the new height, so the
@@ -775,6 +813,21 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                         estimateByID.removeValue(forKey: id)
                     }
                     reconfigureVisibleCellsForIDs(Set(changedIDs))
+                    // Re-tile the changed rows synchronously, in this same pass.
+                    // The cell was just handed taller content; if we wait for the
+                    // debounced async measurement (~16ms) the row stays tiled at
+                    // the old, shorter height in the meantime and the host —
+                    // pinned to the cell — renders the new content squished into
+                    // the old frame, then snaps when the re-tile lands. That
+                    // squish→snap every token is the streaming bubble's up/down
+                    // wobble. Measuring now and routing through the existing
+                    // noteHeightsChanged keeps the follow/anchor behaviour intact;
+                    // the later async report sees no height change and no-ops.
+                    let retileIDs = measureChangedCellsSynchronously(Set(changedIDs))
+                    if !retileIDs.isEmpty {
+                        flushPendingHeightWorkSynchronously()
+                        noteHeightsChanged(forIDs: retileIDs)
+                    }
                 } else if streamingUpdate || structuralUpdate {
                     publishPinnedState(isPinnedToBottom(scrollView))
                 }
@@ -858,6 +911,30 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             }
         }
 
+        /// Force-lay-out the freshly-reconfigured visible cells for `ids` and
+        /// write their true heights into `measuredHeightByID` synchronously, so a
+        /// re-tile issued in this same pass uses the new content height. Returns
+        /// the ids whose tiled height actually needs to change.
+        private func measureChangedCellsSynchronously(_ ids: Set<String>) -> Set<String> {
+            guard let tableView, !ids.isEmpty else { return [] }
+            let visible = tableView.rows(in: tableView.visibleRect)
+            guard visible.length > 0 else { return [] }
+            var needRetile = Set<String>()
+            for row in visible.location ..< visible.location + visible.length where row < orderedIDs.count {
+                let id = orderedIDs[row]
+                guard ids.contains(id),
+                      let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? TranscriptTableCellView else { continue }
+                let h = cell.forcedIntrinsicHeight()
+                guard h > 0 else { continue }
+                let height = ceil(h)
+                measuredHeightByID[id, default: [:]][widthBucket] = height
+                if abs((lastNotedHeight[id] ?? -1) - height) > heightChangeEpsilon {
+                    needRetile.insert(id)
+                }
+            }
+            return needRetile
+        }
+
         private func reconfigureAllVisibleCells() {
             guard let tableView else { return }
             let visible = tableView.rows(in: tableView.visibleRect)
@@ -903,6 +980,13 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // laid-out height actually changing.
             let baseline = lastNotedHeight[itemID] ?? priorMeasured ?? estimatedRowHeight
             let delta = abs(baseline - height)
+            TranscriptJankLog.log("measure", [
+                "id": TranscriptJankLog.shortID(itemID),
+                "h": String(format: "%.1f", height),
+                "baseline": String(format: "%.1f", baseline),
+                "delta": String(format: "%.1f", delta),
+                "retile": delta > heightChangeEpsilon ? "yes" : "no"
+            ])
             guard delta > heightChangeEpsilon else { return }
             pendingHeightIDs.insert(itemID)
             guard pendingHeightWork == nil else { return }
@@ -938,17 +1022,35 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             // reader. Capture the top-visible row and restore its on-screen
             // offset right after the re-tile so the shift is absorbed silently.
             //
-            // Do not apply an absolute anchor while the user is actively scrolling
-            // (or in the short grace window after input). Streaming cells often
-            // measure asynchronously during that burst; restoring an anchor captured
-            // before the user's latest wheel/trackpad delta fights the gesture and
-            // shows up as the response row jumping up/down while scroll anchoring is
-            // supposed to be disengaged.
-            // user's scroll is authoritative during the burst, then subsequent
-            // height corrections resume normal preservation.
+            // Preserve the anchor whenever we're not pinned — INCLUDING while the
+            // user is actively scrolling. Scrolling up through history is exactly
+            // when never-measured rows above the viewport first resolve from their
+            // rough estimate to a real height (a +1000pt correction is common for a
+            // long reply), and leaving those uncompensated is what makes the
+            // transcript lurch under the reader. Restoring the top-visible row's
+            // on-screen offset does NOT fight the gesture: capture and restore run
+            // synchronously around `noteHeightOfRows` here (no stale anchor), and
+            // `restoreScrollAnchor` self-guards — when the changed rows are at or
+            // below the anchor row its minY is unchanged, so the target equals the
+            // current origin and no scroll happens. The viewport only moves when a
+            // row *above* the anchor reflowed, which is precisely the shift we want
+            // to absorb. (Was previously gated on `!isUserScrollingRecently`, which
+            // disabled compensation during the one gesture that needs it most.)
+            // Every re-tile must compensate one way or the other: follow to the
+            // bottom when pinned, otherwise hold the top-visible anchor. The one
+            // case that must NOT be left bare is "pinned but the user just started
+            // scrolling" (wasPinned && isUserScrollingRecently): autoFollow is off
+            // (we don't yank a scrolling user to the bottom) so the anchor must
+            // carry it, or the streaming row grows with nothing holding position.
             let willAutoFollow = wasPinned && !isUserScrollingRecently
-            let preserveAnchor = !wasPinned && !isUserScrollingRecently
+            let preserveAnchor = !willAutoFollow
             let anchor = preserveAnchor ? captureScrollAnchor() : nil
+            TranscriptJankLog.log("retile", [
+                "rows": rows.map(String.init).joined(separator: ","),
+                "wasPinned": "\(wasPinned)",
+                "autoFollow": "\(willAutoFollow)",
+                "anchor": preserveAnchor ? (anchor.map { TranscriptJankLog.shortID($0.id) } ?? "nil") : "off"
+            ])
             NSAnimationContext.beginGrouping()
             NSAnimationContext.current.duration = 0
             // Suppress implicit Core Animation actions so a streaming row's
@@ -1006,7 +1108,14 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             let rowRect = tableView.rect(ofRow: row)
             let maxY = max(0, documentView.bounds.height - scrollView.contentView.bounds.height)
             let targetY = min(max(0, rowRect.minY + anchor.offsetFromRowTop), maxY)
-            guard abs(scrollView.contentView.bounds.origin.y - targetY) > 0.5 else { return }
+            let originY = scrollView.contentView.bounds.origin.y
+            TranscriptJankLog.log("restore", [
+                "anchorRow": "\(row)",
+                "fromY": String(format: "%.1f", originY),
+                "targetY": String(format: "%.1f", targetY),
+                "move": String(format: "%+.1f", targetY - originY)
+            ])
+            guard abs(originY - targetY) > 0.5 else { return }
             isProgrammaticScroll = true
             scrollView.contentView.scroll(to: NSPoint(x: 0, y: targetY))
             scrollView.reflectScrolledClipView(scrollView.contentView)
@@ -1064,6 +1173,13 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             documentView.layoutSubtreeIfNeeded()
             let maxY = max(0, documentView.bounds.height - scrollView.contentView.bounds.height)
             let clipView = scrollView.contentView
+            let fromY = clipView.bounds.origin.y
+            TranscriptJankLog.log("scrollBottom", [
+                "fromY": String(format: "%.1f", fromY),
+                "maxY": String(format: "%.1f", maxY),
+                "docH": String(format: "%.1f", documentView.bounds.height),
+                "move": String(format: "%+.1f", maxY - fromY)
+            ])
             guard abs(clipView.bounds.origin.y - maxY) > 1 else {
                 publishPinnedState(true)
                 return
@@ -1231,6 +1347,23 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                   abs(intrinsic - lastIntrinsicHeight) > 0.5 else { return }
             lastIntrinsicHeight = intrinsic
             onMeasuredHeight?(itemID, intrinsic)
+        }
+
+        /// Force the hosted SwiftUI content to lay out *now* and return its
+        /// intrinsic height, instead of waiting for AppKit's async `layout()`
+        /// pass to report it. Used right after installing new streaming content
+        /// so the coordinator can re-tile the row in the same pass — closing the
+        /// window where the row is still tiled at the old (shorter) height while
+        /// the host, pinned to the cell, squishes the new taller content into it.
+        /// Records `lastIntrinsicHeight` so the subsequent async `layout()` sees
+        /// no change and doesn't redundantly re-report.
+        func forcedIntrinsicHeight() -> CGFloat {
+            guard let hostingView, configuredWidth > 1 else { return -1 }
+            hostingView.layoutSubtreeIfNeeded()
+            let intrinsic = hostingView.intrinsicContentSize.height
+            guard intrinsic > 0, intrinsic.isFinite else { return -1 }
+            lastIntrinsicHeight = intrinsic
+            return intrinsic
         }
     }
 }

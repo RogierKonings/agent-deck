@@ -1399,6 +1399,8 @@ private extension String {
 
 private struct PiAgentInlineDiffCard: View {
     let row: PiAgentThreadDiffSummaryView.Row
+    @State private var isDiffSheetPresented = false
+    @State private var openTapCount = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1411,15 +1413,173 @@ private struct PiAgentInlineDiffCard: View {
                     .font(.caption2.monospacedDigit().weight(.semibold))
                     .foregroundStyle(AppTheme.mutedText)
                 Spacer(minLength: 0)
-                AppCopyTextButton(title: "Copy", text: row.diff)
-                    .font(.caption2.weight(.semibold))
-                    .buttonStyle(.plain)
+                Button {
+                    openTapCount += 1
+                    isDiffSheetPresented = true
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                            .contentTransition(.symbolEffect(.replace))
+                            .symbolEffect(.bounce, value: openTapCount)
+                            .frame(width: 15, height: 15)
+                        Text("Open")
+                    }
+                }
+                .font(.caption2.weight(.semibold))
+                .appSmallSecondaryButton()
+                .help("Open full diff")
+                PiAgentDiffCopyButton(text: row.diff)
             }
             PiAgentCompactDiffPreview(diffText: row.diff)
         }
         .padding(8)
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(AppTheme.textContentFill.opacity(0.75)))
+        .sheet(isPresented: $isDiffSheetPresented) {
+            PiAgentFullDiffSheet(row: row)
+        }
     }
+}
+
+private struct PiAgentDiffCopyButton: View {
+    let text: String
+    @State private var copied = false
+
+    var body: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            showCopiedFeedback()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .contentTransition(.symbolEffect(.replace))
+                    .frame(width: 15, height: 15)
+                Text("Copy")
+            }
+        }
+        .font(.caption2.weight(.semibold))
+        .appSmallSecondaryButton()
+        .help(copied ? "Copied" : "Copy diff")
+    }
+
+    private func showCopiedFeedback() {
+        copied = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(1100))
+            copied = false
+        }
+    }
+}
+
+private struct PiAgentFullDiffSheet: View {
+    let row: PiAgentThreadDiffSummaryView.Row
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(row.path)
+                    .font(.headline.weight(.semibold))
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                Text(row.changeCountText)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(AppTheme.mutedText)
+            }
+            PiAgentFullDiffView(diffText: row.diff)
+        }
+        .padding(AppTheme.pagePadding)
+        .frame(minWidth: 780, idealWidth: 920, minHeight: 520, idealHeight: 680)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Done") { dismiss() }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                AppCopyTextButton(title: "Copy Diff", text: row.diff)
+            }
+        }
+    }
+}
+
+private struct PiAgentFullDiffView: View {
+    let diffText: String
+    @State private var lines: [PiAgentFullDiffLine] = []
+
+    var body: some View {
+        ScrollView(.vertical, showsIndicators: true) {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(lines.indices, id: \.self) { index in
+                    let line = lines[index]
+                    HStack(alignment: .top, spacing: 10) {
+                        Text(line.gutter)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(line.gutterColor)
+                            .frame(width: 56, alignment: .trailing)
+                            .textSelection(.enabled)
+                        Text(line.content.isEmpty ? " " : line.content)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(line.textColor)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(line.background)
+                }
+            }
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(AppTheme.textContentFill))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(AppTheme.contentStroke, lineWidth: 1))
+        .task(id: diffText) {
+            lines = diffText.split(separator: "\n", omittingEmptySubsequences: false).map { PiAgentFullDiffLine(raw: String($0)) }
+        }
+    }
+}
+
+private struct PiAgentFullDiffLine: Hashable {
+    let prefix: String
+    let lineNumber: String
+    let content: String
+
+    init(raw: String) {
+        guard let first = raw.first, first == "+" || first == "-" || first == " " else {
+            prefix = raw.hasPrefix("@@") ? "…" : " "
+            lineNumber = ""
+            content = raw.replacingOccurrences(of: "\t", with: "   ")
+            return
+        }
+        prefix = String(first)
+        let remainder = raw.dropFirst()
+        let trimmedLeading = remainder.drop(while: { $0 == " " })
+        let numberPart = trimmedLeading.prefix(while: { $0.isNumber })
+        lineNumber = String(numberPart)
+        let body = numberPart.isEmpty ? remainder : trimmedLeading.dropFirst(numberPart.count)
+        content = String(body.drop(while: { $0 == " " })).replacingOccurrences(of: "\t", with: "   ")
+    }
+
+    var gutter: String { lineNumber.isEmpty ? prefix : "\(prefix)\(lineNumber)" }
+
+    var background: Color {
+        switch prefix {
+        case "+": return AppTheme.diffAdded.opacity(AppTheme.roleFillStrongOpacity)
+        case "-": return AppTheme.diffRemoved.opacity(AppTheme.roleFillStrongOpacity)
+        default: return Color.clear
+        }
+    }
+
+    var textColor: Color {
+        switch prefix {
+        case "+": return AppTheme.diffAdded
+        case "-": return AppTheme.diffRemoved
+        default: return AppTheme.mutedText
+        }
+    }
+
+    var gutterColor: Color { textColor.opacity(prefix == " " ? 0.75 : 1) }
 }
 
 private struct PiAgentCompactDiffPreview: View {

@@ -1566,6 +1566,10 @@ final class PiAgentRunnerService {
             thinkingTextBySessionID[sessionID] = nil
             let visibleText = extractAssistantText(from: message)
             if !visibleText.isEmpty {
+                guard !recentAssistantEntryExists(with: visibleText, sessionID: sessionID) else {
+                    scheduleIdleConfirmation(sessionID: sessionID)
+                    return
+                }
                 store.upsert(.init(id: assistantEntryID, sessionID: sessionID, role: .assistant, title: "Assistant", text: visibleText, rawJSON: nil))
             } else {
                 let thinkingText = extractAssistantThinking(from: message)
@@ -1592,6 +1596,13 @@ final class PiAgentRunnerService {
         } else if !text.isEmpty {
             store.append(.init(sessionID: sessionID, role: .raw, title: role, text: text, rawJSON: rawLine))
         }
+    }
+
+    private func recentAssistantEntryExists(with text: String, sessionID: UUID) -> Bool {
+        store.transcript(for: sessionID)
+            .reversed()
+            .prefix(8)
+            .contains { $0.role == .assistant && $0.text == text }
     }
 
     private func finalAssistantMessage(from event: PiAgentRPCEvent) -> JSONValue? {

@@ -1,15 +1,133 @@
 import AppKit
 import SwiftUI
 import WebKit
+import os
 
 struct MarkdownDocumentView: View {
     let source: String
     var minimumHeight: CGFloat = 24
     @State private var contentHeight: CGFloat = 0
+    @State private var resolvedSource: String?
 
     var body: some View {
-        MarkdownWebView(content: source, contentHeight: $contentHeight)
+        MarkdownWebView(content: resolvedSource ?? source, contentHeight: $contentHeight)
             .frame(height: max(minimumHeight, contentHeight))
+            .task(id: source) {
+                resolvedSource = nil
+                resolvedSource = await GitHubMarkdownAttachmentResolver.resolve(in: source)
+            }
+    }
+}
+
+private enum GitHubMarkdownAttachmentResolver {
+    nonisolated private static let logger = Logger(subsystem: "streetcoding.agent-deck", category: "MarkdownAttachments")
+    private static let sourcePattern = #"src=\"(https://github\.com/user-attachments/assets/[^\"]+)\""#
+
+    static func resolve(in markdown: String) async -> String {
+        let urls = attachmentURLs(in: markdown)
+        guard !urls.isEmpty else { return markdown }
+        logger.info("Resolving \(urls.count, privacy: .public) GitHub markdown attachment(s).")
+        guard let token = await githubToken() else {
+            logger.error("Cannot resolve GitHub markdown attachments: `gh auth token --hostname github.com` returned no token.")
+            return markdown
+        }
+
+        var resolved = markdown
+        for urlString in urls {
+            logger.info("Fetching GitHub markdown attachment: \(urlString, privacy: .public)")
+            guard let dataURL = await dataURL(for: urlString, token: token) else {
+                logger.error("Failed to resolve GitHub markdown attachment: \(urlString, privacy: .public)")
+                continue
+            }
+            logger.info("Resolved GitHub markdown attachment to data URL (\(dataURL.count, privacy: .public) characters).")
+            resolved = resolved.replacingOccurrences(of: urlString, with: dataURL)
+        }
+        return resolved
+    }
+
+    private static func attachmentURLs(in markdown: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: sourcePattern) else { return [] }
+        let range = NSRange(markdown.startIndex..., in: markdown)
+        var urls: [String] = []
+        for match in regex.matches(in: markdown, range: range) where match.numberOfRanges > 1 {
+            guard let urlRange = Range(match.range(at: 1), in: markdown) else { continue }
+            let value = String(markdown[urlRange])
+            if !urls.contains(value) { urls.append(value) }
+        }
+        return urls
+    }
+
+    private static func githubToken() async -> String? {
+        await Task.detached(priority: .utility) {
+            guard let ghURL = ghExecutableURL() else {
+                logger.error("Cannot resolve GitHub markdown attachments: `gh` executable was not found in the app environment.")
+                return nil
+            }
+            logger.info("Using gh executable at \(ghURL.path, privacy: .public) for markdown attachment auth.")
+            let process = Process()
+            process.executableURL = ghURL
+            process.arguments = ["auth", "token", "--hostname", "github.com"]
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = Pipe()
+            do {
+                try process.run()
+                process.waitUntilExit()
+                guard process.terminationStatus == 0 else {
+                    logger.error("gh auth token failed with exit code \(process.terminationStatus, privacy: .public).")
+                    return nil
+                }
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let token = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                if token?.isEmpty == false {
+                    logger.info("Loaded GitHub token from gh CLI for markdown attachment fetch.")
+                } else {
+                    logger.error("gh auth token succeeded but stdout was empty.")
+                }
+                return token?.isEmpty == false ? token : nil
+            } catch {
+                logger.error("Failed to run gh auth token: \(error.localizedDescription, privacy: .public)")
+                return nil
+            }
+        }.value
+    }
+
+    nonisolated private static func ghExecutableURL() -> URL? {
+        let fileManager = FileManager.default
+        for path in ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"] {
+            if fileManager.isExecutableFile(atPath: path) {
+                return URL(fileURLWithPath: path)
+            }
+        }
+        return nil
+    }
+
+    private static func dataURL(for urlString: String, token: String) async -> String? {
+        guard let url = URL(string: urlString) else { return nil }
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("AgentDeck", forHTTPHeaderField: "User-Agent")
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                logger.error("Attachment fetch returned a non-HTTP response for \(urlString, privacy: .public).")
+                return nil
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                logger.error("Attachment fetch failed for \(urlString, privacy: .public): HTTP \(http.statusCode, privacy: .public).")
+                return nil
+            }
+            guard !data.isEmpty else {
+                logger.error("Attachment fetch returned empty data for \(urlString, privacy: .public).")
+                return nil
+            }
+            let mimeType = http.mimeType ?? "image/png"
+            logger.info("Attachment fetch succeeded for \(urlString, privacy: .public): \(data.count, privacy: .public) bytes, mime \(mimeType, privacy: .public).")
+            return "data:\(mimeType);base64,\(data.base64EncodedString())"
+        } catch {
+            logger.error("Attachment fetch threw for \(urlString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
     }
 }
 
@@ -146,6 +264,9 @@ private final class NativeMarkdownTextContainer: NSView {
     private var isDismantled = false
     private var lastMeasuredWidth: CGFloat = 0
     private var lastMeasuredHeight: CGFloat = 0
+    /// Diagnostic only: last height handed to the streaming-jank logger, so we
+    /// emit one line per actual change (and flag DOWN moves) instead of flooding.
+    private var lastLoggedMeasureHeight: CGFloat = -1
     /// Memoized result of `measureHeight(forWidth:)`, keyed by width. Lives only
     /// for the current runloop turn (see `scheduleHeightCacheInvalidation`): long
     /// enough to collapse SwiftUI's burst of `sizeThatFits` probes into one
@@ -338,6 +459,17 @@ private final class NativeMarkdownTextContainer: NSView {
         // children may still report stale heights.
         stackView.layoutSubtreeIfNeeded()
         let height = ceil(stackView.fittingSize.height)
+        if TranscriptJankLog.enabled, abs(height - lastLoggedMeasureHeight) > 0.5 {
+            let dir = lastLoggedMeasureHeight >= 0 && height < lastLoggedMeasureHeight ? "DOWN" : "up"
+            TranscriptJankLog.log("mdMeasure", [
+                "w": String(format: "%.1f", width),
+                "h": String(format: "%.1f", height),
+                "d": String(format: "%+.1f", lastLoggedMeasureHeight >= 0 ? height - lastLoggedMeasureHeight : 0),
+                "dir": dir,
+                "blocks": "\(lastDocument?.blocks.count ?? 0)"
+            ])
+            lastLoggedMeasureHeight = height
+        }
         heightCache = (width, height)
         scheduleHeightCacheInvalidation()
         return height
@@ -1072,7 +1204,7 @@ private struct MarkdownWebView: NSViewRepresentable {
         <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;">
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: https:;">
         <style>\(Self.css)</style>
         <script>\(MarkedJSSource.source)</script>
         </head>
