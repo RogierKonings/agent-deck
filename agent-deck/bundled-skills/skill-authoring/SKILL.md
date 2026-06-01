@@ -9,7 +9,12 @@ Use this skill when the user wants to create, convert, review, or validate an Ag
 
 ## Choose the save location
 
-First decide whether the skill is project-specific or global. If the user's intent is unclear, ask before creating files.
+Before creating a new skill, explicitly ask the user where it should live using `ask_user` unless they already gave an unambiguous location. Offer at least these choices:
+
+- Global personal skill — reusable across projects and safe to assign to global/library agents.
+- Project skill — ad-hoc or repository-specific; only that project can resolve it unless separately imported/copied.
+
+Do not infer project-local just because the current working directory is a repository. A project-local skill assigned to a global/library agent can cause missing-skill warnings in other projects.
 
 Use a global personal skill when the skill should be reusable across projects:
 

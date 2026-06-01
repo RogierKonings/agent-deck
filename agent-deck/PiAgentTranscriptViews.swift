@@ -3338,10 +3338,10 @@ struct PiAgentTranscriptCard: View {
 
     @ViewBuilder
     private var thinkingContent: some View {
-        reasoningDisclosure(source: entry.text)
+        reasoningContent(source: entry.text)
     }
 
-    private func reasoningDisclosure(source: String) -> some View {
+    private func reasoningContent(source: String) -> some View {
         let displayText = source.trimmingCharacters(in: .whitespacesAndNewlines)
         return VStack(alignment: .leading, spacing: 6) {
             Text("Reasoning")

@@ -6517,6 +6517,27 @@ final class AppViewModel: NSObject {
         return matches.count == 1
     }
 
+    func unavailableSkillResolutionCandidate(for warning: SkillReferenceWarning) -> SkillRecord? {
+        let records = deduplicateByID(
+            allVisibleSkillRecords + allProjectSnapshots.values.flatMap { $0.skills + $0.librarySkills }
+        )
+        return records
+            .filter { $0.name == warning.missingSkill }
+            .filter { !skillNamed($0.name, isRuntimeVisibleIn: warning.project) }
+            .sorted { lhs, rhs in
+                let lhsIsProject = lhs.source.kind == .project || lhs.source.kind == .legacyProject
+                let rhsIsProject = rhs.source.kind == .project || rhs.source.kind == .legacyProject
+                if lhsIsProject != rhsIsProject { return lhsIsProject && !rhsIsProject }
+                return lhs.filePath < rhs.filePath
+            }
+            .first
+    }
+
+    func moveSkillToGlobalCatalog(_ skill: SkillRecord) throws {
+        try moveSkillToGlobalDirectory(skill)
+        refresh(includeModels: false, scanAllProjects: true)
+    }
+
     /// Recomputes the cached automation-model lookup. Called only at real
     /// boundaries — app launch / activation, a model-list reload, a settings
     /// change — never per `ContentView.body` eval. Mirrors `rebuildWarningCaches`.

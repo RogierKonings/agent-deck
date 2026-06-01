@@ -197,13 +197,30 @@ private struct NativeMarkdownRepresentable: NSViewRepresentable {
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         view.setContentHuggingPriority(.defaultHigh, for: .vertical)
         view.setContentCompressionResistancePriority(.defaultHigh, for: .vertical)
-        configure(view: view)
+        configure(view: view, coordinator: context.coordinator)
         return view
     }
 
     func updateNSView(_ nsView: NativeMarkdownTextContainer, context: Context) {
-        configure(view: nsView)
+        configure(view: nsView, coordinator: context.coordinator)
     }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        /// The balanced source whose parse is currently in flight (or last
+        /// applied async). Guards against re-spawning a parse for the same text
+        /// and against a stale async result overwriting a newer one.
+        var pendingSource: String?
+        var parseTask: Task<Void, Never>?
+        deinit { parseTask?.cancel() }
+    }
+
+    /// Above this many characters an uncached source is parsed off the main
+    /// thread. Below it, the line-based parse is cheap enough that a synchronous
+    /// pass costs less than a frame — and staying synchronous keeps the height
+    /// measurement (and the transcript's anti-wobble machinery) exact.
+    private static let asyncParseThreshold = 4_000
 
     // SwiftUI's sizing pass for an NSViewRepresentable goes through this method on
     // macOS 13+. Returning the TextKit-computed height for the proposed width is what
@@ -217,14 +234,63 @@ private struct NativeMarkdownRepresentable: NSViewRepresentable {
         return CGSize(width: width, height: max(1, height))
     }
 
-    static func dismantleNSView(_ nsView: NativeMarkdownTextContainer, coordinator: ()) {
+    static func dismantleNSView(_ nsView: NativeMarkdownTextContainer, coordinator: Coordinator) {
+        coordinator.parseTask?.cancel()
         nsView.dismantle()
     }
 
-    private func configure(view: NativeMarkdownTextContainer) {
+    private func configure(view: NativeMarkdownTextContainer, coordinator: Coordinator) {
         let displaySource = StreamingMarkdownBalancer.balance(source)
-        let document = MarkdownRenderCache.document(for: displaySource)
-        view.configure(document: document)
+
+        // Synchronous fast paths — no wobble, height stays exact this frame:
+        //  • cache hit (re-render, scroll-back, unchanged text), or
+        //  • small/medium source where a main-thread parse costs < one frame.
+        // This covers the overwhelming majority of flushes, including streaming
+        // of normal-length messages.
+        if let cached = MarkdownRenderCache.cachedDocument(for: displaySource) {
+            coordinator.parseTask?.cancel()
+            coordinator.pendingSource = nil
+            view.configure(document: cached)
+            return
+        }
+        if displaySource.count <= Self.asyncParseThreshold {
+            coordinator.parseTask?.cancel()
+            coordinator.pendingSource = nil
+            view.configure(document: MarkdownRenderCache.document(for: displaySource))
+            return
+        }
+
+        // First appearance of a large uncached block (e.g. session load, or
+        // scroll-back after cache eviction): parse synchronously so the row never
+        // flashes blank. Only a block already on screen and growing during
+        // streaming takes the async path below.
+        guard view.hasDocument else {
+            coordinator.parseTask?.cancel()
+            coordinator.pendingSource = nil
+            view.configure(document: MarkdownRenderCache.document(for: displaySource))
+            return
+        }
+
+        // Large, uncached source on an already-displayed block: parse off the main
+        // thread. Keep the previously applied document on screen until the parse
+        // lands (no blank/wobble) — for streaming it differs only by the newest
+        // tokens, and the table's height drift detector absorbs the eventual
+        // growth. Skip if this exact source is already being parsed.
+        if coordinator.pendingSource == displaySource { return }
+        coordinator.pendingSource = displaySource
+        coordinator.parseTask?.cancel()
+        coordinator.parseTask = Task { [weak coordinator, weak view] in
+            let document = await Task.detached(priority: .userInitiated) {
+                MarkdownRenderCache.parseDocument(for: displaySource)
+            }.value
+            guard !Task.isCancelled, let coordinator, let view else { return }
+            MarkdownRenderCache.store(document, for: displaySource)
+            // Only apply if this is still the latest requested source; a newer
+            // synchronous/async pass may have superseded it.
+            guard coordinator.pendingSource == displaySource else { return }
+            coordinator.pendingSource = nil
+            view.configure(document: document)
+        }
     }
 }
 
@@ -259,6 +325,10 @@ private struct NativeMarkdownTextView: NSViewRepresentable {
 private final class NativeMarkdownTextContainer: NSView {
     private let stackView = NSStackView()
     private var lastDocument: CachedMarkdownDocument?
+    /// Whether a document has ever been applied. Lets the representable parse
+    /// the first appearance synchronously (no blank flash) and reserve the
+    /// off-main path for an already-displayed block growing during streaming.
+    var hasDocument: Bool { lastDocument != nil }
     private var widthConstraint: NSLayoutConstraint?
     private var pendingHeightMeasurement = false
     private var isDismantled = false
@@ -735,6 +805,19 @@ private final class NativeMarkdownTextContainer: NSView {
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.allowsUndo = false
+        // Read-only model output: switch off the idle-time text services AppKit
+        // otherwise runs against `textStorage` on every edit. During streaming
+        // each appended token is an edit, so spell/grammar/substitution/link/data
+        // passes would fire ~30×/sec per block for zero benefit on non-editable
+        // content. (Mirrors osaurus's `SelectableTextView`.)
+        textView.isContinuousSpellCheckingEnabled = false
+        textView.isGrammarCheckingEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.isAutomaticLinkDetectionEnabled = false
+        textView.isAutomaticDataDetectionEnabled = false
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         textView.setContentHuggingPriority(.defaultLow, for: .horizontal)
         textView.textStorage?.setAttributedString(attributedString(source, font: font, color: color, parseInlineMarkdown: parseInlineMarkdown))
@@ -859,7 +942,9 @@ private enum MarkdownInlineRenderCache {
     }
 }
 
-private struct CachedMarkdownDocument: Sendable, Equatable {
+// `nonisolated` (the file builds with MainActor default isolation): a pure value
+// type that the off-main markdown parse produces and returns across actors.
+private nonisolated struct CachedMarkdownDocument: Sendable, Equatable {
     let frontmatter: String?
     let blocks: [MarkdownBlock]
 }
@@ -963,12 +1048,32 @@ private enum MarkdownRenderCache {
     private static let limit = 256
 
     static func document(for source: String) -> CachedMarkdownDocument {
-        let key = cacheKey(for: source)
-        if let cached = cache[key] { return cached }
+        if let cached = cachedDocument(for: source) { return cached }
+        let document = parseDocument(for: source)
+        store(document, for: source)
+        return document
+    }
 
+    /// Cache lookup only — no parse. Lets callers take a synchronous fast path
+    /// (apply immediately, height stays stable) and only fall back to a parse
+    /// when it misses.
+    static func cachedDocument(for source: String) -> CachedMarkdownDocument? {
+        cache[cacheKey(for: source)]
+    }
+
+    /// Pure parse, no cache access. `nonisolated` so it can run on a background
+    /// task for large uncached blocks (see `NativeMarkdownRepresentable`) — every
+    /// streaming flush of a big message otherwise re-parses the whole source on
+    /// the main thread.
+    nonisolated static func parseDocument(for source: String) -> CachedMarkdownDocument {
         let parsed = RawFrontmatterParser.parse(source)
         let markdown = parsed?.content ?? source
-        let document = CachedMarkdownDocument(frontmatter: parsed?.frontmatter, blocks: MarkdownBlock.parse(markdown))
+        return CachedMarkdownDocument(frontmatter: parsed?.frontmatter, blocks: MarkdownBlock.parse(markdown))
+    }
+
+    static func store(_ document: CachedMarkdownDocument, for source: String) {
+        let key = cacheKey(for: source)
+        guard cache[key] == nil else { return }
         cache[key] = document
         order.append(key)
         if order.count > limit {
@@ -978,17 +1083,18 @@ private enum MarkdownRenderCache {
             }
             order.removeFirst(overflow)
         }
-        return document
     }
 
-    private static func cacheKey(for source: String) -> String {
+    nonisolated private static func cacheKey(for source: String) -> String {
         var hasher = Hasher()
         hasher.combine(source)
         return "\(source.count):\(hasher.finalize())"
     }
 }
 
-private struct MarkdownBlock: Identifiable, Hashable {
+// `nonisolated` so `parse` and its helpers run on a background task (see
+// `MarkdownRenderCache.parseDocument`). Pure string/value logic — no UI state.
+private nonisolated struct MarkdownBlock: Identifiable, Hashable {
     enum Kind: Hashable {
         case heading(level: Int, text: String)
         case paragraph(String)
@@ -1563,7 +1669,7 @@ private struct MarkdownWebView: NSViewRepresentable {
     """
 }
 
-private enum RawFrontmatterParser {
+private nonisolated enum RawFrontmatterParser {
     struct Result {
         let frontmatter: String?
         let content: String

@@ -536,39 +536,45 @@ struct SkillsScreen: View {
     }
 
     private func skillWarningCard(_ warning: SkillReferenceWarning) -> some View {
-        Button {
-            selectedSkillIDs = []
-            selectedWarning = .missing(warning)
-        } label: {
-            HStack(alignment: .center, spacing: 10) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                    .imageScale(.medium)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(warning.missingSkill)
-                        .font(.headline)
-                        .fontWidth(.expanded)
-                        .lineLimit(1)
-                    Text("Referenced by \(warning.agentName) in \(warning.project.name)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 0)
-                Text("Missing")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.orange)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(.orange.opacity(0.12), in: Capsule())
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .imageScale(.medium)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(warning.missingSkill)
+                    .font(.headline)
+                    .fontWidth(.expanded)
+                    .lineLimit(1)
+                Text("Referenced by \(warning.agentName) in \(warning.project.name)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-            .padding(.leading, 8).padding(.trailing, 12)
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            Spacer(minLength: 0)
+            Button {
+                selectMissingSkillWarning(warning)
+            } label: {
+                Text("Resolve")
+                    .font(.caption.weight(.semibold))
+            }
+            .appSmallSecondaryButton()
+            .tint(.orange)
+            .help("Resolve missing skill")
         }
-        .buttonStyle(.plain)
+        .padding(.leading, 8).padding(.trailing, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .onTapGesture {
+            selectMissingSkillWarning(warning)
+        }
         .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(.orange.opacity(0.25), lineWidth: 1))
+    }
+
+    private func selectMissingSkillWarning(_ warning: SkillReferenceWarning) {
+        selectedSkillIDs = []
+        selectedWarning = .missing(warning)
     }
 
     private func diagnosticWarningCard(_ warning: DiagnosticWarning) -> some View {
@@ -845,29 +851,41 @@ struct SkillsScreen: View {
     }
 
     private func missingSkillWarningDetail(_ warning: SkillReferenceWarning) -> some View {
-        AppCard(title: "Missing Skill") {
+        let candidate = viewModel.unavailableSkillResolutionCandidate(for: warning)
+        return AppCard(title: "Missing Skill") {
             VStack(alignment: .leading, spacing: 14) {
-                Text("The agent references a skill that is not available to that project at runtime.")
+                Text(missingSkillExplanation(for: warning, candidate: candidate))
                     .foregroundStyle(AppTheme.mutedText)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
 
-                AppKeyValueList(rows: [
-                    ("Skill", warning.missingSkill),
-                    ("Agent", warning.agentName),
-                    ("Project", warning.project.repositoryDisplayName),
-                    ("Project Path", warning.project.path)
-                ])
+                AppKeyValueList(rows: missingSkillWarningRows(for: warning, candidate: candidate))
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Resolve by doing one of these:")
                         .font(.body.weight(.semibold))
-                    Text("Install or import a skill named `\(warning.missingSkill)`, then assign it to the project or make it Default.")
-                    Text("Or remove `\(warning.missingSkill)` from the agent's skill list if the reference is obsolete.")
+                    if candidate != nil {
+                        Text("Move the existing skill into the global skill catalog so every project can resolve the global/library agent reference.")
+                    } else {
+                        Text("Create, install, or import a skill named `\(warning.missingSkill)` somewhere `\(warning.project.repositoryDisplayName)` can see it.")
+                    }
+                    Text("Or remove `\(warning.missingSkill)` from `\(warning.agentName)` if the reference is obsolete.")
                 }
                 .foregroundStyle(AppTheme.mutedText)
                 .textSelection(.enabled)
 
                 HStack {
+                    if let candidate {
+                        Button("Move to Global Skills") {
+                            do {
+                                try viewModel.moveSkillToGlobalCatalog(candidate)
+                                selectedWarning = nil
+                            } catch {
+                                skillActionErrorMessage = error.localizedDescription
+                            }
+                        }
+                        .appPrimaryButton()
+                    }
                     Button("Search Catalog") {
                         searchText = warning.missingSkill
                     }
@@ -885,6 +903,26 @@ struct SkillsScreen: View {
                 }
             }
         }
+    }
+
+    private func missingSkillWarningRows(for warning: SkillReferenceWarning, candidate: SkillRecord?) -> [(String, String)] {
+        var rows = [
+            ("Skill", warning.missingSkill),
+            ("Agent", warning.agentName),
+            ("Project", warning.project.repositoryDisplayName),
+            ("Project Path", warning.project.path)
+        ]
+        if let candidate {
+            rows.append(("Found Elsewhere", candidate.filePath))
+        }
+        return rows
+    }
+
+    private func missingSkillExplanation(for warning: SkillReferenceWarning, candidate: SkillRecord?) -> String {
+        if let candidate {
+            return "`\(warning.agentName)` references `\(warning.missingSkill)`, but `\(warning.project.repositoryDisplayName)` cannot resolve that skill at runtime. A skill with that name exists elsewhere (`\(candidate.filePath)`), so it is probably scoped to another project or catalog source instead of being globally available."
+        }
+        return "`\(warning.agentName)` references `\(warning.missingSkill)`, but `\(warning.project.repositoryDisplayName)` cannot resolve a skill with that name at runtime."
     }
 
     private func diagnosticSkillWarningDetail(_ warning: DiagnosticWarning) -> some View {

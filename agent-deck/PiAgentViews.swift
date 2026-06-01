@@ -747,7 +747,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             autoScrollTurnRevision: Int,
             bottomScrollRequest: Int
         ) {
-            guard let tableView, let scrollView else { return }
+            guard let tableView, scrollView != nil else { return }
             let wasFollowing = isAutoFollowing
             let isSessionSwitch = self.sessionID != sessionID
             let structuralUpdate = lastRenderRevision != renderRevision
@@ -994,7 +994,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         }
 
         private func noteHeightsChanged(forIDs ids: Set<String>) {
-            guard let tableView, let scrollView, !ids.isEmpty else { return }
+            guard let tableView, scrollView != nil, !ids.isEmpty else { return }
             let wasFollowing = isAutoFollowing
             var rows = IndexSet()
             for id in ids {
@@ -1119,7 +1119,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         }
 
         private func handleScrollAfterUpdate(isSessionSwitch: Bool, explicitScroll: Bool, wasFollowing: Bool) {
-            guard let scrollView else { return }
+            guard scrollView != nil else { return }
             if isSessionSwitch || explicitScroll {
                 // An explicit request (send, jump-to-latest) or a session
                 // switch always wins — the user isn't fighting it. Re-arm
@@ -1893,6 +1893,7 @@ struct PiAgentScreen: View {
                     onWillSend: beginTranscriptAutoScrollTurn,
                     onDidSend: requestTranscriptBottomScroll
                 )
+                .equatable()
             }
             .padding(18)
         }
@@ -4134,5 +4135,22 @@ private struct PiAgentComposerPanel: View {
 
     private func syncRuntimeFooterSnapshot() {
         frozenRuntimeFooterSession = store.selectedSession
+    }
+}
+
+// Protect the composer — the app's most expensive chrome (glass card, slash
+// menu, suggestions) — from the parent transcript view's per-streaming-token
+// body churn. The parent re-runs ~30×/sec while tokens arrive (its body reads
+// the transcript cache); without this the composer's body re-ran each time even
+// though nothing it shows changed. Its only non-`@State` inputs are the two
+// reference-type stores and two action closures, and all of its display state
+// is driven by `@Observable` reads of those stores — so comparing store identity
+// (and ignoring the closures, which are recreated every parent pass) is correct:
+// `.equatable()` skips parent-churn re-renders while observation still drives
+// every real update (e.g. run/stop transitions). Mirrors osaurus isolating its
+// `FloatingInputCard` from streaming via a separate observable store.
+extension PiAgentComposerPanel: Equatable {
+    nonisolated static func == (lhs: PiAgentComposerPanel, rhs: PiAgentComposerPanel) -> Bool {
+        lhs.viewModel === rhs.viewModel && lhs.store === rhs.store
     }
 }
