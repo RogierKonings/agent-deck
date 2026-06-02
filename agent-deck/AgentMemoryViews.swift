@@ -41,6 +41,22 @@ struct MemoryScreen: View {
             )
         }
         .task(id: cacheKey) { recomputeCachedLayout() }
+        // Select a record requested from a transcript recall card. `.onChange`
+        // covers the case where this screen is already showing; `.onAppear`
+        // covers a fresh switch to the Memory tab (the id was set before we existed).
+        .onAppear { consumePendingMemorySelection() }
+        .onChange(of: viewModel.selectedMemoryID) { _, _ in consumePendingMemorySelection() }
+    }
+
+    /// Apply a memory selection queued by `AppViewModel.openMemory(byID:)`. Clears
+    /// filters/search so the target lands in the visible set, then consumes the id.
+    private func consumePendingMemorySelection() {
+        guard let id = viewModel.selectedMemoryID else { return }
+        selectedStatus = nil
+        selectedKind = nil
+        if !searchText.isEmpty { searchText = "" }
+        selectedRecordID = id
+        viewModel.selectedMemoryID = nil
     }
 
     private var cacheKey: String {
@@ -552,23 +568,23 @@ struct PiAgentMemoryActivityCard: View {
                 Image(systemName: event.event.systemImage)
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(event.event == .blocked ? .red : AppTheme.brandAccent)
-                    .frame(width: 28, height: 28)
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 8) {
-                        Text(event.title)
-                            .font(.headline)
-                        if let scope = event.scope {
-                            Text(scope.displayName)
-                                .font(.caption2.weight(.bold))
-                                .foregroundStyle(AppTheme.mutedText)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .appGlassCapsule()
-                        }
-                    }
+                    .frame(width: 30, height: 30)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(event.title)
+                        .font(.headline)
                     Text(event.summary)
+                        .font(.callout)
                         .foregroundStyle(AppTheme.mutedText)
-                    if !event.memoryIDs.isEmpty {
+                    if let titles = event.memoryTitles, !titles.isEmpty {
+                        // Titles snapshot taken at injection time; tapping opens
+                        // that exact record in the Memory screen via notification.
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(Array(zip(event.memoryIDs, titles).enumerated()), id: \.offset) { _, pair in
+                                injectedMemoryRow(id: pair.0, title: pair.1)
+                            }
+                        }
+                        .padding(.top, 2)
+                    } else if !event.memoryIDs.isEmpty {
                         Text("\(event.memoryIDs.count) memor\(event.memoryIDs.count == 1 ? "y" : "ies")")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(AppTheme.mutedText)
@@ -577,6 +593,29 @@ struct PiAgentMemoryActivityCard: View {
                 Spacer(minLength: 0)
             }
         }
+    }
+
+    private func injectedMemoryRow(id: String, title: String) -> some View {
+        Button {
+            NotificationCenter.default.post(
+                name: .agentDeckOpenMemoryRequested,
+                object: nil,
+                userInfo: ["id": id]
+            )
+        } label: {
+            HStack(spacing: 6) {
+                Text(title.isEmpty ? "Untitled Memory" : title)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Image(systemName: "chevron.right")
+                    .font(.caption2)
+                    .foregroundStyle(AppTheme.mutedText)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 

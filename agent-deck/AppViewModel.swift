@@ -89,6 +89,10 @@ final class AppViewModel: NSObject {
     @ObservationIgnored private var pendingSelectSkillFilePath: String?
     @ObservationIgnored private var pendingSelectPromptFilePath: String?
     var selectedCommandItemID: String?
+    /// Set by `openMemory(byID:)` when the user taps an injected memory title in a
+    /// transcript recall card. `MemoryScreen` consumes it to select that record,
+    /// then nils it. Observable so the screen's `.onChange` fires.
+    var selectedMemoryID: String?
     var selectedAgentFilter: AgentFilter = .all
     var discoveredProjects: [DiscoveredProject] = [] {
         didSet {
@@ -545,6 +549,21 @@ final class AppViewModel: NSObject {
             selectedCommandItemID = id
         }
         refresh(includeModels: false, scanAllProjects: true, silentlyReconcile: true)
+    }
+
+    /// Navigate to the Memory screen and select a specific record. Driven by the
+    /// `.agentDeckOpenMemoryRequested` notification a transcript recall card posts
+    /// when an injected memory title is tapped. Switches the project if the record
+    /// lives in another one so it lands in the visible set; `MemoryScreen` consumes
+    /// `selectedMemoryID`. A since-deleted id simply won't resolve — a graceful no-op.
+    func openMemory(byID id: String) {
+        if let record = agentMemoryStore.records.first(where: { $0.id == id }),
+           let projectPath = record.projectPath,
+           projectPath != selectedProjectPath {
+            selectedProjectPath = projectPath
+        }
+        selectedSidebarItem = .memory
+        selectedMemoryID = id
     }
 
     private func applyRefreshSnapshot(
@@ -4997,7 +5016,7 @@ final class AppViewModel: NSObject {
     private func appendMemoryBlockedEvent(_ summary: String, sessionID explicitSessionID: UUID? = nil) {
         guard appSettings.agentMemoryShowTranscriptCards,
               let sessionID = explicitSessionID ?? piAgentSessionStore.selectedSessionID else { return }
-        let event = AgentMemoryTranscriptEvent(type: AgentMemoryTranscriptEvent.rawType, event: .blocked, memoryIDs: [], scope: nil, title: AgentMemoryEventKind.blocked.displayTitle, summary: summary)
+        let event = AgentMemoryTranscriptEvent(type: AgentMemoryTranscriptEvent.rawType, event: .blocked, memoryIDs: [], memoryTitles: nil, scope: nil, title: AgentMemoryEventKind.blocked.displayTitle, summary: summary)
         let rawJSON = (try? JSONEncoder().encode(event)).flatMap { String(data: $0, encoding: .utf8) }
         piAgentSessionStore.append(.init(sessionID: sessionID, role: .status, title: event.title, text: event.summary, rawJSON: rawJSON))
     }

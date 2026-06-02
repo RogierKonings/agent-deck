@@ -310,6 +310,13 @@ struct ContentView: View {
         .onChange(of: viewModel.selectedSidebarItem) { _, newValue in
             handleSidebarSelectionChange(newValue)
         }
+        // Tapping an injected memory title in a transcript recall card posts this;
+        // handled here (always alive) since it switches the sidebar to Memory.
+        .onReceive(NotificationCenter.default.publisher(for: .agentDeckOpenMemoryRequested)) { note in
+            if let id = note.userInfo?["id"] as? String {
+                viewModel.openMemory(byID: id)
+            }
+        }
         .alert("Enable all projects?", isPresented: $showingEnableAllProjectsAlert) {
             Button("Enable All") { viewModel.setAllProjectsEnabled(true) }
             Button("Cancel", role: .cancel) {}

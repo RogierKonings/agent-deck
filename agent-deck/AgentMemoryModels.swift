@@ -127,6 +127,11 @@ struct AgentMemoryTranscriptEvent: Codable, Hashable {
     var type: String
     var event: AgentMemoryEventKind
     var memoryIDs: [String]
+    /// Index-aligned with `memoryIDs`: the title of each memory at the moment it
+    /// was injected. Optional so older transcript entries decode as nil (the card
+    /// then falls back to the bare count). A snapshot — a since-renamed memory
+    /// keeps the title it had when injected.
+    var memoryTitles: [String]?
     var scope: AgentMemoryScope?
     var title: String
     var summary: String

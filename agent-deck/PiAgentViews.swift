@@ -277,6 +277,7 @@ final class PiAgentTranscriptRenderCache: ObservableObject {
             return isMeaningfulAssistantEntry(entry)
         case .status:
             return entry.isNativeSubagentCard
+                || entry.agentMemoryEvent != nil
                 || entry.title == "Compaction"
                 || entry.title == "Retry"
                 || entry.title == "Subagent Started"

@@ -1167,6 +1167,9 @@ struct PiAgentTranscriptThreadCard: View {
         if entry.title == "System Prompt Captured" {
             return visibility.showFinalSystemPrompt
         }
+        if entry.agentMemoryEvent != nil {
+            return visibility.showMemoryCards
+        }
         return !shouldHideNativeSubagentStatus(entry, nativeSubagentRunsByID: nativeSubagentRunsByID)
     }
 
@@ -3272,7 +3275,7 @@ struct PiAgentTranscriptCard: View {
             HStack(spacing: 7) {
                 headerIcon
                 Text(headerTitle)
-                    .font(.caption.weight(.semibold))
+                    .font(.footnote.weight(.semibold))
                     .fontWidth(.expanded)
                     .foregroundStyle(headerColor)
                 Spacer(minLength: 0)

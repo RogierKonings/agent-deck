@@ -314,6 +314,13 @@ struct PiAgentTranscriptDisplayOptionsPopover: View {
                 isOn: visibility.showDiffs,
                 keyPath: \.showDiffs
             )
+            optionRow(
+                title: "Memory",
+                subtitle: "Show memory recall cards in the transcript",
+                systemImage: "brain",
+                isOn: visibility.showMemoryCards,
+                keyPath: \.showMemoryCards
+            )
         }
         .padding(12)
         .frame(width: 260)

@@ -222,6 +222,7 @@ final class AgentMemoryStore: ObservableObject {
             type: AgentMemoryTranscriptEvent.rawType,
             event: kind,
             memoryIDs: records.map(\.id),
+            memoryTitles: records.map(\.title),
             scope: records.first?.scope,
             title: kind.displayTitle,
             summary: summary
