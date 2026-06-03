@@ -7,10 +7,23 @@ import SwiftUI
 // chrome (rounded fill + stroke, header, hover copy button) is drawn with
 // CALayer + native subviews; the body reuses the shared NativeMarkdownTextContainer.
 
+/// Fork affordance for a user-question bubble: the single "Fork as Pi session"
+/// action plus an optional list of agents for the "Fork as 1:1 agent chat…"
+/// submenu. Carries closures, so the enclosing payload isn't Equatable.
+struct ForkModel {
+    let onForkSession: () -> Void
+    let agentOptions: [ForkAgentOption]
+}
+
+struct ForkAgentOption {
+    let title: String
+    let isDisabled: Bool
+    let action: () -> Void
+}
+
 /// Typed payload for a native message bubble. Built once in the items pass; the
-/// cell configures a `PiAgentNativeBubbleView` from it. Equatable so an
-/// unchanged payload can short-circuit reconfiguration.
-struct NativeBubblePayload: Equatable {
+/// cell configures a `PiAgentNativeBubbleView` from it.
+struct NativeBubblePayload {
     enum Role: Equatable { case user, assistant, thinking, tool, error, stderr, status, raw }
     enum CopySide: Equatable { case leading, trailing }
 
@@ -25,6 +38,10 @@ struct NativeBubblePayload: Equatable {
     var copySide: CopySide
     /// Thread-child rows use tighter padding (12/9) than standalone cards (14/11).
     var isThreadChild: Bool
+    /// User question bubbles hug their content width and sit at the trailing edge.
+    var isUserHugged: Bool = false
+    /// Hover-revealed fork affordance (user questions only).
+    var fork: ForkModel? = nil
 }
 
 /// Native message bubble: rounded role-tinted chrome + header + markdown body +
@@ -38,9 +55,13 @@ final class PiAgentNativeBubbleView: NSView {
     private let markdownContainer = NativeMarkdownTextContainer()
     private let markdownApplier = MarkdownSourceApplier()
 
-    // Hover copy button (real Liquid Glass via NSGlassEffectView).
+    // Hover-revealed copy (+ fork) buttons, real Liquid Glass via NSGlassEffectView,
+    // grouped in a horizontal stack pinned to the leading or trailing edge.
+    private let buttonStack = NSStackView()
     private let copyGlass = NSGlassEffectView()
     private let copyButton = NSButton()
+    private let forkGlass = NSGlassEffectView()
+    private let forkButton = NSButton()
     private var trackingArea: NSTrackingArea?
 
     private var payload: NativeBubblePayload?
@@ -79,7 +100,7 @@ final class PiAgentNativeBubbleView: NSView {
         addSubview(prefixLabel)
         addSubview(markdownContainer)
 
-        setupCopyButton()
+        setupButtons()
         buildConstraints()
     }
 
@@ -187,8 +208,11 @@ final class PiAgentNativeBubbleView: NSView {
         // Body — routes through the shared applier (in-place streaming update).
         markdownApplier.apply(source: payload.markdownSource, to: markdownContainer)
 
-        positionCopyButton(side: payload.copySide)
-        if roleChanged { applyChromeColors() } else { applyChromeColors() }
+        // Fork affordance (user questions only) sits outboard of copy.
+        forkGlass.isHidden = payload.fork == nil
+        configureButtonStack(side: payload.copySide, hasFork: payload.fork != nil)
+        _ = roleChanged
+        applyChromeColors()
     }
 
     // MARK: Chrome colors
@@ -231,6 +255,7 @@ final class PiAgentNativeBubbleView: NSView {
         iconView.contentTintColor = payload.iconSymbol == nil ? AppTheme.ns(AppTheme.piLogo) : headerColor
         headerLabel.textColor = headerColor
         copyButton.contentTintColor = AppTheme.ns(AppTheme.brandAccent)
+        forkButton.contentTintColor = AppTheme.ns(AppTheme.brandAccent)
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -257,50 +282,103 @@ final class PiAgentNativeBubbleView: NSView {
         max(16, ceil(headerLabel.intrinsicContentSize.height))
     }
 
-    // MARK: Copy button (Liquid Glass)
+    // MARK: Copy / fork buttons (Liquid Glass)
 
-    private func setupCopyButton() {
-        copyGlass.translatesAutoresizingMaskIntoConstraints = false
-        copyGlass.cornerRadius = 14
-        copyGlass.alphaValue = 0
-        copyButton.translatesAutoresizingMaskIntoConstraints = false
-        copyButton.isBordered = false
-        copyButton.bezelStyle = .regularSquare
-        copyButton.imagePosition = .imageOnly
-        copyButton.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: "Copy")
-        copyButton.contentTintColor = AppTheme.ns(AppTheme.brandAccent)
-        copyButton.target = self
-        copyButton.action = #selector(copyTapped)
-        copyGlass.contentView = copyButton
-        addSubview(copyGlass)
+    private func glassIconButton(_ glass: NSGlassEffectView, _ button: NSButton, symbol: String, help: String, action: Selector) {
+        glass.translatesAutoresizingMaskIntoConstraints = false
+        glass.cornerRadius = 14
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.isBordered = false
+        button.bezelStyle = .regularSquare
+        button.imagePosition = .imageOnly
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: help)
+        button.toolTip = help
+        button.contentTintColor = AppTheme.ns(AppTheme.brandAccent)
+        button.target = self
+        button.action = action
+        glass.contentView = button
         NSLayoutConstraint.activate([
-            copyGlass.widthAnchor.constraint(equalToConstant: 28),
-            copyGlass.heightAnchor.constraint(equalToConstant: 28),
-            copyButton.widthAnchor.constraint(equalToConstant: 28),
-            copyButton.heightAnchor.constraint(equalToConstant: 28)
+            glass.widthAnchor.constraint(equalToConstant: 28),
+            glass.heightAnchor.constraint(equalToConstant: 28),
+            button.widthAnchor.constraint(equalToConstant: 28),
+            button.heightAnchor.constraint(equalToConstant: 28)
         ])
-        copyGlassTopC = copyGlass.topAnchor.constraint(equalTo: topAnchor, constant: 4)
-        copyGlassTopC.isActive = true
     }
 
-    private var copyGlassTopC: NSLayoutConstraint!
-    private var copyGlassSideC: NSLayoutConstraint?
+    private func setupButtons() {
+        glassIconButton(copyGlass, copyButton, symbol: "doc.on.doc", help: "Copy message", action: #selector(copyTapped))
+        glassIconButton(forkGlass, forkButton, symbol: "arrow.trianglehead.branch", help: "Fork session…", action: #selector(forkTapped))
+        buttonStack.translatesAutoresizingMaskIntoConstraints = false
+        buttonStack.orientation = .horizontal
+        buttonStack.spacing = 4
+        buttonStack.alphaValue = 0
+        addSubview(buttonStack)
+        buttonStackTopC = buttonStack.topAnchor.constraint(equalTo: topAnchor, constant: 4)
+        buttonStackTopC.isActive = true
+    }
 
-    private func positionCopyButton(side: NativeBubblePayload.CopySide) {
-        copyGlassSideC?.isActive = false
+    private var buttonStackTopC: NSLayoutConstraint!
+    private var buttonStackSideC: NSLayoutConstraint?
+
+    /// Rebuilds the button stack order/edge: leading → [fork][copy] pinned left,
+    /// trailing → [copy][fork] pinned right (fork always outboard of copy).
+    private func configureButtonStack(side: NativeBubblePayload.CopySide, hasFork: Bool) {
+        buttonStack.arrangedSubviews.forEach { buttonStack.removeArrangedSubview($0); $0.removeFromSuperview() }
         switch side {
-        case .trailing:
-            copyGlassSideC = copyGlass.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6)
         case .leading:
-            copyGlassSideC = copyGlass.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6)
+            if hasFork { buttonStack.addArrangedSubview(forkGlass) }
+            buttonStack.addArrangedSubview(copyGlass)
+        case .trailing:
+            buttonStack.addArrangedSubview(copyGlass)
+            if hasFork { buttonStack.addArrangedSubview(forkGlass) }
         }
-        copyGlassSideC?.isActive = true
+        buttonStackSideC?.isActive = false
+        switch side {
+        case .leading:
+            buttonStackSideC = buttonStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6)
+        case .trailing:
+            buttonStackSideC = buttonStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6)
+        }
+        buttonStackSideC?.isActive = true
     }
 
     @objc private func copyTapped() {
         guard let text = payload?.copyText else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    @objc private func forkTapped() {
+        guard let fork = payload?.fork else { return }
+        if fork.agentOptions.isEmpty {
+            fork.onForkSession()
+            return
+        }
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        let piItem = NSMenuItem(title: "Fork as Pi session", action: #selector(forkPiSessionSelected), keyEquivalent: "")
+        piItem.target = self
+        menu.addItem(piItem)
+        let parent = NSMenuItem(title: "Fork as 1:1 agent chat…", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        submenu.autoenablesItems = false
+        for (index, option) in fork.agentOptions.enumerated() {
+            let item = NSMenuItem(title: option.title, action: #selector(forkAgentSelected(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = index
+            item.isEnabled = !option.isDisabled
+            submenu.addItem(item)
+        }
+        parent.submenu = submenu
+        menu.addItem(parent)
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: forkGlass.bounds.height + 2), in: forkGlass)
+    }
+
+    @objc private func forkPiSessionSelected() { payload?.fork?.onForkSession() }
+
+    @objc private func forkAgentSelected(_ item: NSMenuItem) {
+        guard let options = payload?.fork?.agentOptions, item.tag >= 0, item.tag < options.count else { return }
+        options[item.tag].action()
     }
 
     // MARK: Hover
@@ -317,14 +395,14 @@ final class PiAgentNativeBubbleView: NSView {
         trackingArea = area
     }
 
-    override func mouseEntered(with event: NSEvent) { setCopyVisible(true) }
-    override func mouseExited(with event: NSEvent) { setCopyVisible(false) }
+    override func mouseEntered(with event: NSEvent) { setButtonsVisible(true) }
+    override func mouseExited(with event: NSEvent) { setButtonsVisible(false) }
 
-    private func setCopyVisible(_ visible: Bool) {
+    private func setButtonsVisible(_ visible: Bool) {
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.15
             ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            copyGlass.animator().alphaValue = visible ? 1 : 0
+            buttonStack.animator().alphaValue = visible ? 1 : 0
         }
     }
 

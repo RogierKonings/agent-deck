@@ -32,32 +32,9 @@
 		9D1B4A5C7E8F901234567A02 /* bundled-prompts */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "bundled-prompts"; path = "agent-deck/bundled-prompts"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
-/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		9D1B4A5C7E8F901234567892 /* Exceptions for "agent-deck" folder in "agent-deck" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				"bundled-agents/coder.md",
-				"bundled-agents/explorer.md",
-				"bundled-agents/planner.md",
-				"bundled-agents/reviewer.md",
-				"bundled-prompts/investigate-a-bug.md",
-				"bundled-prompts/plan-a-feature.md",
-				"bundled-prompts/refactor-for-clarity.md",
-				"bundled-prompts/review-my-changes.md",
-				"bundled-skills/agent-authoring/SKILL.md",
-				"bundled-skills/prompt-authoring/SKILL.md",
-				"bundled-skills/skill-authoring/SKILL.md",
-			);
-			target = 6572B16A2FA2391500596CE4 /* agent-deck */;
-		};
-/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
-
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		6572B16D2FA2391500596CE4 /* agent-deck */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				9D1B4A5C7E8F901234567892 /* Exceptions for "agent-deck" folder in "agent-deck" target */,
-			);
 			path = "agent-deck";
 			sourceTree = "<group>";
 		};

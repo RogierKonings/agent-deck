@@ -1580,6 +1580,12 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         fileprivate var nativeBubble: PiAgentNativeBubbleView?
         private var nativeTopC: NSLayoutConstraint?
         private var nativeBottomC: NSLayoutConstraint?
+        private var nativeLeadingC: NSLayoutConstraint?
+        private var nativeTrailingC: NSLayoutConstraint?
+        private var nativeWidthC: NSLayoutConstraint?
+        /// The bubble's own width (full content width for replies; the hugged
+        /// width for user questions) — what the bubble measures/renders at.
+        private var nativeBubbleWidth: CGFloat = 0
         private var configuredTopInset: CGFloat = 0
         private var configuredBottomInset: CGFloat = 0
         fileprivate var configuredItemID: String?
@@ -1694,13 +1700,18 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 addSubview(bubble)
                 let top = bubble.topAnchor.constraint(equalTo: topAnchor, constant: item.topInset)
                 let bottom = bubble.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -item.bottomInset)
-                NSLayoutConstraint.activate([
-                    bubble.leadingAnchor.constraint(equalTo: leadingAnchor),
-                    bubble.trailingAnchor.constraint(equalTo: trailingAnchor),
-                    top, bottom
-                ])
+                let leading = bubble.leadingAnchor.constraint(equalTo: leadingAnchor)
+                let trailing = bubble.trailingAnchor.constraint(equalTo: trailingAnchor)
+                let widthC = bubble.widthAnchor.constraint(equalToConstant: width)
+                // Never let a hugged bubble overflow the cell's leading edge.
+                let minLeading = bubble.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor)
+                minLeading.priority = .required
+                NSLayoutConstraint.activate([top, bottom, leading, trailing, minLeading])
                 nativeTopC = top
                 nativeBottomC = bottom
+                nativeLeadingC = leading
+                nativeTrailingC = trailing
+                nativeWidthC = widthC
                 nativeBubble = bubble
                 lastIntrinsicHeight = -1
             }
@@ -1708,15 +1719,34 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 nativeTopC?.constant = item.topInset
                 nativeBottomC?.constant = -item.bottomInset
             }
+
+            // User questions hug their content width and pin to the trailing edge
+            // (leading copy/fork gutter on the left); replies fill the full width.
+            let bubbleWidth: CGFloat
+            if payload.isUserHugged {
+                let hugged = min(width, PiAgentBubbleWidth.huggedUser(text: payload.markdownSource, paneWidth: width))
+                bubbleWidth = max(1, hugged)
+                nativeLeadingC?.isActive = false
+                nativeTrailingC?.isActive = true
+                nativeWidthC?.constant = bubbleWidth
+                nativeWidthC?.isActive = true
+            } else {
+                bubbleWidth = width
+                nativeWidthC?.isActive = false
+                nativeLeadingC?.isActive = true
+                nativeTrailingC?.isActive = true
+            }
+
             let revisionChanged = configuredItemID != item.id || configuredRevision != item.contentRevision
-            let widthChanged = abs(configuredWidth - width) > 0.5
+            let widthChanged = abs(nativeBubbleWidth - bubbleWidth) > 0.5
             if revisionChanged || widthChanged {
-                bubble.configure(payload: payload, width: width)
+                bubble.configure(payload: payload, width: bubbleWidth)
                 lastIntrinsicHeight = -1
             }
             configuredItemID = item.id
             configuredRevision = item.contentRevision
             configuredWidth = width
+            nativeBubbleWidth = bubbleWidth
             configuredTopInset = item.topInset
             configuredBottomInset = item.bottomInset
         }
@@ -1733,7 +1763,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 super.layout()
             }
             if let bubble = nativeBubble, let itemID = configuredItemID, configuredWidth > 1 {
-                let h = configuredTopInset + bubble.measuredHeight(forWidth: configuredWidth) + configuredBottomInset
+                let h = configuredTopInset + bubble.measuredHeight(forWidth: nativeBubbleWidth) + configuredBottomInset
                 guard h > 0, h.isFinite, abs(h - lastIntrinsicHeight) > 0.5 else { return }
                 lastIntrinsicHeight = h
                 onMeasuredHeight?(itemID, h)
@@ -1760,7 +1790,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         func forcedIntrinsicHeight() -> CGFloat {
             if let bubble = nativeBubble, configuredWidth > 1 {
                 bubble.layoutSubtreeIfNeeded()
-                let h = configuredTopInset + bubble.measuredHeight(forWidth: configuredWidth) + configuredBottomInset
+                let h = configuredTopInset + bubble.measuredHeight(forWidth: nativeBubbleWidth) + configuredBottomInset
                 guard h > 0, h.isFinite else { return -1 }
                 lastIntrinsicHeight = h
                 return h
@@ -2450,14 +2480,20 @@ struct PiAgentScreen: View {
                 case let .thread(thread):
                     if let question = thread.question {
                         let blockID = "q-\(item.id)"
+                        // Native fast path for plain-text questions (no attachment
+                        // chips). Chip-bearing questions still render hosted.
+                        let hasChips = PiAgentUserMessageContent.displayChipsNaturalWidth(
+                            for: question, skills: skills, commandSlashNames: commandSlashNames) > 0
+                        let questionKind = hasChips ? nil : nativeQuestionKind(question, skills: skills, commandSlashNames: commandSlashNames)
                         descriptors.append(PiAgentTranscriptBlockDescriptor(
                             id: blockID,
-                            view: AnyView(threadBlockCard(
+                            view: questionKind == nil ? AnyView(threadBlockCard(
                                 thread: thread, visibility: visibility, skills: skills,
                                 commandSlashNames: commandSlashNames,
                                 projectPath: projectPath, subagentRuns: subagentRuns,
                                 renderMode: .question, blockID: blockID
-                            )),
+                            )) : nil,
+                            kind: questionKind,
                             baseRevision: appKitQuestionBlockRevision(question, contextRevision: contextRevision),
                             estimatedContentHeight: { Self.estimatedQuestionHeight(question, width: $0) },
                             threadID: item.id,
@@ -2577,6 +2613,41 @@ struct PiAgentScreen: View {
             }
         )
         .id(blockID)
+    }
+
+    /// Native payload for a plain-text user question (no attachment chips):
+    /// hugged-width right-aligned bubble with leading copy + fork affordance.
+    /// Instance method because the fork actions capture `viewModel`.
+    private func nativeQuestionKind(
+        _ question: PiAgentTranscriptEntry,
+        skills: [SkillRecord],
+        commandSlashNames: Set<String>
+    ) -> PiAgentTranscriptCellKind {
+        let text = PiAgentUserMessageContent.displayMessageText(
+            for: question, skills: skills, commandSlashNames: commandSlashNames)
+        let agentOptions: [ForkAgentOption] = (forkAgentChoicesForSelectedSession ?? []).map { agent in
+            ForkAgentOption(
+                title: agent.name,
+                isDisabled: agent.resolved.disabled == true,
+                action: { [viewModel] in viewModel.forkPiAgentSessionAsAgentChat(from: question, agent: agent) }
+            )
+        }
+        let fork = ForkModel(
+            onForkSession: { [viewModel] in viewModel.forkPiAgentSession(from: question) },
+            agentOptions: agentOptions
+        )
+        return .bubble(NativeBubblePayload(
+            role: .user,
+            headerTitle: "You",
+            iconSymbol: "person.crop.circle",
+            markdownSource: text,
+            bodyPrefix: nil,
+            copyText: question.text,
+            copySide: .leading,
+            isThreadChild: false,
+            isUserHugged: true,
+            fork: fork
+        ))
     }
 
     /// Per-block height estimators — character-count math, no SwiftUI pass.
