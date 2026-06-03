@@ -491,6 +491,12 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         tableView.intercellSpacing = NSSize(width: 0, height: 0)
         tableView.rowHeight = 120
         tableView.usesAutomaticRowHeights = false
+        // The default `.automatic` style resolves to `.inset`, which adds a
+        // system horizontal margin (~16pt) to every cell. That pushed all rows
+        // inboard of the composer (which lives outside the table). `.plain`
+        // removes the inset so a cell pinned at x=0 lines up with the composer's
+        // container edge. Row-internal padding is handled per-block instead.
+        tableView.style = .plain
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("TranscriptColumn"))
         column.resizingMask = .autoresizingMask
