@@ -3,9 +3,14 @@ import SwiftUI
 
 // Native (pure AppKit) rendering for transcript message bubbles. Replaces the
 // SwiftUI card hosted in an NSHostingView for the common text rows so scrolling
-// never re-runs SwiftUI layout or re-parses markdown on the layout pass. The
-// chrome (rounded fill + stroke, header, hover copy button) is drawn with
-// CALayer + native subviews; the body reuses the shared NativeMarkdownTextContainer.
+// never re-runs SwiftUI layout or re-parses markdown on the layout pass.
+//
+// Layout mirrors the SwiftUI message row exactly: a full-width row holding a
+// fixed-width "card" (rounded role-tinted chrome + header + markdown) on one
+// side, with the hover-revealed copy/fork glass buttons floating in the gutter
+// on the other side (never overlapping the card, never affecting its height):
+//   • replies   → card left-aligned at replyCap; copy floats to the RIGHT
+//   • questions → card hugged width, right-aligned; fork+copy float to the LEFT
 
 /// Fork affordance for a user-question bubble: the single "Fork as Pi session"
 /// action plus an optional list of agents for the "Fork as 1:1 agent chat…"
@@ -44,19 +49,21 @@ struct NativeBubblePayload {
     var fork: ForkModel? = nil
 }
 
-/// Native message bubble: rounded role-tinted chrome + header + markdown body +
-/// hover-revealed glass copy button. Self-measures via `measuredHeight(forWidth:)`;
-/// the owning cell adds the row insets and reports height to the coordinator.
+/// A full-width transcript row: a sized, role-tinted card plus hover-revealed
+/// glass copy/fork buttons in the gutter. Self-measures via
+/// `measuredHeight(forWidth:)`; the owning cell adds the row insets.
 final class PiAgentNativeBubbleView: NSView {
-    private let bubbleLayer = CALayer()
+    /// The bubble proper — rounded chrome drawn by its own layer; holds the
+    /// header + markdown. Sized to `replyCap` / hugged width and aligned left
+    /// (replies) or right (questions). The buttons live OUTSIDE it.
+    private let cardView = NSView()
     private let iconView = NSImageView()
     private let headerLabel = NSTextField(labelWithString: "")
     private let prefixLabel = NSTextField(labelWithString: "")
     private let markdownContainer = NativeMarkdownTextContainer()
     private let markdownApplier = MarkdownSourceApplier()
 
-    // Hover-revealed copy (+ fork) buttons, real Liquid Glass via NSGlassEffectView,
-    // grouped in a horizontal stack pinned to the leading or trailing edge.
+    // Hover-revealed copy (+ fork) buttons, real Liquid Glass via NSGlassEffectView.
     private let buttonStack = NSStackView()
     private let copyGlass = NSGlassEffectView()
     private let copyButton = NSButton()
@@ -68,14 +75,20 @@ final class PiAgentNativeBubbleView: NSView {
 
     private let headerSpacing: CGFloat = 8
     private let prefixSpacing: CGFloat = 6
+    /// Gap between the card edge and the nearest button, matching the SwiftUI
+    /// overlay (button offset 38 = 28pt button + 10pt gap).
+    private let gutterGap: CGFloat = 10
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.addSublayer(bubbleLayer)
-        bubbleLayer.cornerRadius = 16
-        bubbleLayer.cornerCurve = .continuous
-        bubbleLayer.borderWidth = 1
+
+        cardView.translatesAutoresizingMaskIntoConstraints = false
+        cardView.wantsLayer = true
+        cardView.layer?.cornerRadius = 16
+        cardView.layer?.cornerCurve = .continuous
+        cardView.layer?.borderWidth = 1
+        addSubview(cardView)
 
         iconView.translatesAutoresizingMaskIntoConstraints = false
         iconView.imageScaling = .scaleProportionallyUpOrDown
@@ -95,10 +108,10 @@ final class PiAgentNativeBubbleView: NSView {
         markdownContainer.translatesAutoresizingMaskIntoConstraints = false
         markdownContainer.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
-        addSubview(iconView)
-        addSubview(headerLabel)
-        addSubview(prefixLabel)
-        addSubview(markdownContainer)
+        cardView.addSubview(iconView)
+        cardView.addSubview(headerLabel)
+        cardView.addSubview(prefixLabel)
+        cardView.addSubview(markdownContainer)
 
         setupButtons()
         buildConstraints()
@@ -114,15 +127,10 @@ final class PiAgentNativeBubbleView: NSView {
     static let headerFont: NSFont = {
         let base = NSFont.preferredFont(forTextStyle: .footnote)
         let semibold = NSFontManager.shared.convert(base, toHaveTrait: .boldFontMask)
-        let expanded = NSFontDescriptor(fontAttributes: [
-            .traits: [NSFontDescriptor.TraitKey.width: 0.2]
-        ])
         let merged = semibold.fontDescriptor.addingAttributes([
             .traits: [NSFontDescriptor.TraitKey.width: 0.2]
         ])
-        return NSFont(descriptor: merged, size: base.pointSize)
-            ?? NSFont(descriptor: expanded, size: base.pointSize)
-            ?? semibold
+        return NSFont(descriptor: merged, size: base.pointSize) ?? semibold
     }()
 
     // MARK: Layout
@@ -130,63 +138,99 @@ final class PiAgentNativeBubbleView: NSView {
     private var hPad: CGFloat { (payload?.isThreadChild ?? false) ? 12 : 14 }
     private var vPad: CGFloat { (payload?.isThreadChild ?? false) ? 9 : 11 }
 
-    private var leadingC: NSLayoutConstraint!
-    private var trailingC: NSLayoutConstraint!
-    private var topC: NSLayoutConstraint!
+    // cardView placement / size
+    private var cardWidthC: NSLayoutConstraint!
+    private var cardLeadingC: NSLayoutConstraint!
+    private var cardTrailingC: NSLayoutConstraint!
+    // inner content (pinned to cardView)
     private var iconLeadingC: NSLayoutConstraint!
-    private var mdTopC: NSLayoutConstraint!
+    private var iconTopC: NSLayoutConstraint!
+    private var mdLeadingC: NSLayoutConstraint!
+    private var mdTrailingC: NSLayoutConstraint!
     private var mdBottomC: NSLayoutConstraint!
+    private var mdTopC: NSLayoutConstraint!
     private var prefixTopC: NSLayoutConstraint!
+    private var prefixLeadingC: NSLayoutConstraint!
+    private var headerTrailingC: NSLayoutConstraint!
 
     private func buildConstraints() {
-        iconLeadingC = iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: hPad)
-        topC = iconView.topAnchor.constraint(equalTo: topAnchor, constant: vPad)
-        leadingC = markdownContainer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: hPad)
-        trailingC = markdownContainer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -hPad)
-        mdBottomC = markdownContainer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -vPad)
-        mdTopC = markdownContainer.topAnchor.constraint(equalTo: headerLabel.bottomAnchor, constant: headerSpacing)
+        cardWidthC = cardView.widthAnchor.constraint(equalToConstant: 100)
+        cardLeadingC = cardView.leadingAnchor.constraint(equalTo: leadingAnchor)
+        cardTrailingC = cardView.trailingAnchor.constraint(equalTo: trailingAnchor)
+
+        iconLeadingC = iconView.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: hPad)
+        iconTopC = iconView.topAnchor.constraint(equalTo: cardView.topAnchor, constant: vPad)
+        headerTrailingC = headerLabel.trailingAnchor.constraint(lessThanOrEqualTo: cardView.trailingAnchor, constant: -hPad)
+        prefixLeadingC = prefixLabel.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: hPad)
         prefixTopC = prefixLabel.topAnchor.constraint(equalTo: headerLabel.bottomAnchor, constant: headerSpacing)
+        mdLeadingC = markdownContainer.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: hPad)
+        mdTrailingC = markdownContainer.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -hPad)
+        mdBottomC = markdownContainer.bottomAnchor.constraint(equalTo: cardView.bottomAnchor, constant: -vPad)
+        mdTopC = markdownContainer.topAnchor.constraint(equalTo: headerLabel.bottomAnchor, constant: headerSpacing)
 
         NSLayoutConstraint.activate([
-            iconLeadingC, topC,
+            cardView.topAnchor.constraint(equalTo: topAnchor),
+            cardView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            cardWidthC,
+            iconLeadingC, iconTopC,
             iconView.widthAnchor.constraint(equalToConstant: 16),
             iconView.heightAnchor.constraint(equalToConstant: 16),
             headerLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 7),
             headerLabel.centerYAnchor.constraint(equalTo: iconView.centerYAnchor),
-            headerLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -hPad),
-            prefixLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: hPad),
-            leadingC, trailingC, mdTopC, mdBottomC
+            headerTrailingC,
+            prefixLeadingC,
+            mdLeadingC, mdTrailingC, mdTopC, mdBottomC
         ])
+        // Default placement (replies): left-aligned.
+        cardLeadingC.isActive = true
     }
 
     override func layout() {
         super.layout()
-        bubbleLayer.frame = bounds
+        cardView.layer?.frame = cardView.bounds
+    }
+
+    // MARK: Card sizing
+
+    private func cardWidth(forRowWidth rowWidth: CGFloat) -> CGFloat {
+        guard let payload else { return rowWidth }
+        if payload.isUserHugged {
+            return max(1, min(rowWidth, PiAgentBubbleWidth.huggedUser(text: payload.markdownSource, paneWidth: rowWidth)))
+        }
+        return max(1, min(rowWidth, PiAgentBubbleWidth.replyCap(for: rowWidth)))
     }
 
     // MARK: Configure
 
-    func configure(payload: NativeBubblePayload, width: CGFloat) {
-        let roleChanged = self.payload?.role != payload.role
-            || self.payload?.isThreadChild != payload.isThreadChild
+    func configure(payload: NativeBubblePayload, width rowWidth: CGFloat) {
         self.payload = payload
 
         // Padding can change with style; keep constraints in sync.
         iconLeadingC.constant = hPad
-        topC.constant = vPad
-        leadingC.constant = hPad
-        trailingC.constant = -hPad
+        iconTopC.constant = vPad
+        headerTrailingC.constant = -hPad
+        prefixLeadingC.constant = hPad
+        mdLeadingC.constant = hPad
+        mdTrailingC.constant = -hPad
         mdBottomC.constant = -vPad
+
+        // Card size + side.
+        cardWidthC.constant = cardWidth(forRowWidth: rowWidth)
+        if payload.isUserHugged {
+            cardLeadingC.isActive = false
+            cardTrailingC.isActive = true
+        } else {
+            cardTrailingC.isActive = false
+            cardLeadingC.isActive = true
+        }
 
         // Header.
         headerLabel.stringValue = payload.headerTitle
         if let symbol = payload.iconSymbol {
             iconView.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
-            iconView.contentTintColor = headerColor
         } else {
             iconView.image = NSImage(named: "pi")
             iconView.image?.isTemplate = true
-            iconView.contentTintColor = AppTheme.ns(AppTheme.piLogo)
         }
 
         // Optional body prefix (e.g. "Reasoning").
@@ -208,10 +252,10 @@ final class PiAgentNativeBubbleView: NSView {
         // Body — routes through the shared applier (in-place streaming update).
         markdownApplier.apply(source: payload.markdownSource, to: markdownContainer)
 
-        // Fork affordance (user questions only) sits outboard of copy.
+        // Buttons: presence, order, and which gutter they float in.
         forkGlass.isHidden = payload.fork == nil
         configureButtonStack(side: payload.copySide, hasFork: payload.fork != nil)
-        _ = roleChanged
+
         applyChromeColors()
     }
 
@@ -247,15 +291,16 @@ final class PiAgentNativeBubbleView: NSView {
             : base.withAlphaComponent(AppTheme.roleStrokeOpacity)
 
         // Resolve through the view's effective appearance so light/dark is exact.
-        let appearance = effectiveAppearance
-        appearance.performAsCurrentDrawingAppearance {
-            bubbleLayer.backgroundColor = fill.cgColor
-            bubbleLayer.borderColor = stroke.cgColor
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            cardView.layer?.backgroundColor = fill.cgColor
+            cardView.layer?.borderColor = stroke.cgColor
         }
         iconView.contentTintColor = payload.iconSymbol == nil ? AppTheme.ns(AppTheme.piLogo) : headerColor
         headerLabel.textColor = headerColor
-        copyButton.contentTintColor = AppTheme.ns(AppTheme.brandAccent)
-        forkButton.contentTintColor = AppTheme.ns(AppTheme.brandAccent)
+        // Glass button glyphs use the primary label color — matches the SwiftUI
+        // AppCopyIconButton / AppForkIconButton (.foregroundStyle(.primary)).
+        copyButton.contentTintColor = .labelColor
+        forkButton.contentTintColor = .labelColor
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -265,10 +310,9 @@ final class PiAgentNativeBubbleView: NSView {
 
     // MARK: Height
 
-    /// Bubble height for a given full content width (excludes the row insets the
-    /// owning cell adds). Mirrors the SwiftUI VStack(spacing:8) + padding layout.
-    func measuredHeight(forWidth width: CGFloat) -> CGFloat {
-        let inner = max(1, width - hPad * 2)
+    /// Row height for a given full row width (excludes the cell's row insets).
+    func measuredHeight(forWidth rowWidth: CGFloat) -> CGFloat {
+        let inner = max(1, cardWidth(forRowWidth: rowWidth) - hPad * 2)
         var h = vPad + headerRowHeight() + headerSpacing
         if let prefix = payload?.bodyPrefix, !prefix.isEmpty {
             h += ceil(prefixLabel.intrinsicContentSize.height) + prefixSpacing
@@ -291,9 +335,11 @@ final class PiAgentNativeBubbleView: NSView {
         button.isBordered = false
         button.bezelStyle = .regularSquare
         button.imagePosition = .imageOnly
-        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: help)
+        let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: help)?
+            .withSymbolConfiguration(config)
         button.toolTip = help
-        button.contentTintColor = AppTheme.ns(AppTheme.brandAccent)
+        button.contentTintColor = .labelColor
         button.target = self
         button.action = action
         glass.contentView = button
@@ -320,8 +366,9 @@ final class PiAgentNativeBubbleView: NSView {
     private var buttonStackTopC: NSLayoutConstraint!
     private var buttonStackSideC: NSLayoutConstraint?
 
-    /// Rebuilds the button stack order/edge: leading → [fork][copy] pinned left,
-    /// trailing → [copy][fork] pinned right (fork always outboard of copy).
+    /// Rebuilds the button stack order/edge and floats it in the gutter beside
+    /// the card: leading copy → [fork][copy] to the LEFT of the card; trailing
+    /// copy → [copy][fork] to the RIGHT of the card (fork always outboard).
     private func configureButtonStack(side: NativeBubblePayload.CopySide, hasFork: Bool) {
         buttonStack.arrangedSubviews.forEach { buttonStack.removeArrangedSubview($0); $0.removeFromSuperview() }
         switch side {
@@ -335,9 +382,11 @@ final class PiAgentNativeBubbleView: NSView {
         buttonStackSideC?.isActive = false
         switch side {
         case .leading:
-            buttonStackSideC = buttonStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6)
+            // Float to the LEFT of the (right-aligned) card.
+            buttonStackSideC = buttonStack.trailingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: -gutterGap)
         case .trailing:
-            buttonStackSideC = buttonStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6)
+            // Float to the RIGHT of the (left-aligned) card.
+            buttonStackSideC = buttonStack.leadingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: gutterGap)
         }
         buttonStackSideC?.isActive = true
     }

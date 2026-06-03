@@ -1580,12 +1580,6 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         fileprivate var nativeBubble: PiAgentNativeBubbleView?
         private var nativeTopC: NSLayoutConstraint?
         private var nativeBottomC: NSLayoutConstraint?
-        private var nativeLeadingC: NSLayoutConstraint?
-        private var nativeTrailingC: NSLayoutConstraint?
-        private var nativeWidthC: NSLayoutConstraint?
-        /// The bubble's own width (full content width for replies; the hugged
-        /// width for user questions) — what the bubble measures/renders at.
-        private var nativeBubbleWidth: CGFloat = 0
         private var configuredTopInset: CGFloat = 0
         private var configuredBottomInset: CGFloat = 0
         fileprivate var configuredItemID: String?
@@ -1698,20 +1692,17 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 bubble = PiAgentNativeBubbleView()
                 bubble.translatesAutoresizingMaskIntoConstraints = false
                 addSubview(bubble)
+                // The bubble is a full-width row; it sizes/positions its own card
+                // (replyCap or hugged) and floats the buttons in the gutter.
                 let top = bubble.topAnchor.constraint(equalTo: topAnchor, constant: item.topInset)
                 let bottom = bubble.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -item.bottomInset)
-                let leading = bubble.leadingAnchor.constraint(equalTo: leadingAnchor)
-                let trailing = bubble.trailingAnchor.constraint(equalTo: trailingAnchor)
-                let widthC = bubble.widthAnchor.constraint(equalToConstant: width)
-                // Never let a hugged bubble overflow the cell's leading edge.
-                let minLeading = bubble.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor)
-                minLeading.priority = .required
-                NSLayoutConstraint.activate([top, bottom, leading, trailing, minLeading])
+                NSLayoutConstraint.activate([
+                    bubble.leadingAnchor.constraint(equalTo: leadingAnchor),
+                    bubble.trailingAnchor.constraint(equalTo: trailingAnchor),
+                    top, bottom
+                ])
                 nativeTopC = top
                 nativeBottomC = bottom
-                nativeLeadingC = leading
-                nativeTrailingC = trailing
-                nativeWidthC = widthC
                 nativeBubble = bubble
                 lastIntrinsicHeight = -1
             }
@@ -1720,33 +1711,15 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 nativeBottomC?.constant = -item.bottomInset
             }
 
-            // User questions hug their content width and pin to the trailing edge
-            // (leading copy/fork gutter on the left); replies fill the full width.
-            let bubbleWidth: CGFloat
-            if payload.isUserHugged {
-                let hugged = min(width, PiAgentBubbleWidth.huggedUser(text: payload.markdownSource, paneWidth: width))
-                bubbleWidth = max(1, hugged)
-                nativeLeadingC?.isActive = false
-                nativeTrailingC?.isActive = true
-                nativeWidthC?.constant = bubbleWidth
-                nativeWidthC?.isActive = true
-            } else {
-                bubbleWidth = width
-                nativeWidthC?.isActive = false
-                nativeLeadingC?.isActive = true
-                nativeTrailingC?.isActive = true
-            }
-
             let revisionChanged = configuredItemID != item.id || configuredRevision != item.contentRevision
-            let widthChanged = abs(nativeBubbleWidth - bubbleWidth) > 0.5
+            let widthChanged = abs(configuredWidth - width) > 0.5
             if revisionChanged || widthChanged {
-                bubble.configure(payload: payload, width: bubbleWidth)
+                bubble.configure(payload: payload, width: width)
                 lastIntrinsicHeight = -1
             }
             configuredItemID = item.id
             configuredRevision = item.contentRevision
             configuredWidth = width
-            nativeBubbleWidth = bubbleWidth
             configuredTopInset = item.topInset
             configuredBottomInset = item.bottomInset
         }
@@ -1763,7 +1736,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 super.layout()
             }
             if let bubble = nativeBubble, let itemID = configuredItemID, configuredWidth > 1 {
-                let h = configuredTopInset + bubble.measuredHeight(forWidth: nativeBubbleWidth) + configuredBottomInset
+                let h = configuredTopInset + bubble.measuredHeight(forWidth: configuredWidth) + configuredBottomInset
                 guard h > 0, h.isFinite, abs(h - lastIntrinsicHeight) > 0.5 else { return }
                 lastIntrinsicHeight = h
                 onMeasuredHeight?(itemID, h)
@@ -1790,7 +1763,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         func forcedIntrinsicHeight() -> CGFloat {
             if let bubble = nativeBubble, configuredWidth > 1 {
                 bubble.layoutSubtreeIfNeeded()
-                let h = configuredTopInset + bubble.measuredHeight(forWidth: nativeBubbleWidth) + configuredBottomInset
+                let h = configuredTopInset + bubble.measuredHeight(forWidth: configuredWidth) + configuredBottomInset
                 guard h > 0, h.isFinite else { return -1 }
                 lastIntrinsicHeight = h
                 return h
