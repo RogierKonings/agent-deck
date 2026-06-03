@@ -1513,7 +1513,38 @@ private struct PiAgentFullDiffSheet: View {
     }
 }
 
-private struct PiAgentFullDiffView: View {
+/// Full-diff sheet content hosted by the native tool-group's "Open" action. The
+/// sheet is modal (not a scroll hot path), so reusing the SwiftUI diff view here
+/// is pixel-identical to the original `PiAgentFullDiffSheet` by construction.
+struct PiAgentNativeFullDiffSheet: View {
+    let row: PiAgentThreadDiffSummaryView.Row
+    let onDone: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(row.path)
+                        .font(.headline.weight(.semibold))
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                    Text(row.changeCountText)
+                        .font(AppTheme.Font.caption.monospacedDigit())
+                        .foregroundStyle(AppTheme.mutedText)
+                }
+                Spacer(minLength: 0)
+                AppCopyTextButton(title: "Copy Diff", text: row.diff)
+                Button("Done", action: onDone)
+                    .keyboardShortcut(.cancelAction)
+            }
+            PiAgentFullDiffView(diffText: row.diff)
+        }
+        .padding(AppTheme.pagePadding)
+        .frame(minWidth: 780, idealWidth: 920, minHeight: 520, idealHeight: 680)
+    }
+}
+
+struct PiAgentFullDiffView: View {
     let diffText: String
     @State private var lines: [PiAgentFullDiffLine] = []
 

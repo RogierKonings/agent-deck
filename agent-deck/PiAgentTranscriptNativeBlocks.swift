@@ -1,5 +1,20 @@
 import AppKit
 
+/// Fixed-size fonts matching the transcript's SwiftUI styling. The transcript
+/// uses fixed 11/10pt captions (AppTheme.Font.caption/caption2), and SwiftUI's
+/// `.weight(.semibold)` is the SF semibold face — NOT NSFontManager's
+/// `.boldFontMask` (which is heavier, `.bold`). Use these for parity.
+enum NativeTranscriptFont {
+    static let captionSize: CGFloat = 11
+    static let caption2Size: CGFloat = 10
+    static func caption(_ weight: NSFont.Weight = .regular) -> NSFont { .systemFont(ofSize: captionSize, weight: weight) }
+    static func caption2(_ weight: NSFont.Weight = .regular) -> NSFont { .systemFont(ofSize: caption2Size, weight: weight) }
+    static func captionMono(_ weight: NSFont.Weight = .regular) -> NSFont { .monospacedSystemFont(ofSize: captionSize, weight: weight) }
+    static func callout(_ weight: NSFont.Weight = .regular) -> NSFont {
+        .systemFont(ofSize: NSFont.preferredFont(forTextStyle: .callout).pointSize, weight: weight)
+    }
+}
+
 // Native (pure AppKit) rendering for the non-bubble transcript rows — status,
 // error, retry, tool groups, and the chrome cards. These share a card scaffold
 // (`PiAgentNativeCardRowView`) that mirrors the SwiftUI `ThreadMessageRow`: a
@@ -299,22 +314,21 @@ final class PiAgentNativeStatusRowView: PiAgentNativeCardRowView {
         iconView.imageScaling = .scaleProportionallyUpOrDown
         iconView.setContentHuggingPriority(.required, for: .horizontal)
 
-        let caption = NSFont.preferredFont(forTextStyle: .caption1)
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        titleLabel.font = NSFontManager.shared.convert(caption, toHaveTrait: .boldFontMask)
+        titleLabel.font = NativeTranscriptFont.caption(.semibold)
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         titleLabel.setContentHuggingPriority(.required, for: .horizontal)
 
         detailLabel.translatesAutoresizingMaskIntoConstraints = false
-        detailLabel.font = caption
+        detailLabel.font = NativeTranscriptFont.caption()
         detailLabel.textColor = AppTheme.ns(AppTheme.mutedText)
         detailLabel.lineBreakMode = .byTruncatingMiddle
         detailLabel.maximumNumberOfLines = 1
         detailLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         timeLabel.translatesAutoresizingMaskIntoConstraints = false
-        timeLabel.font = NSFont.preferredFont(forTextStyle: .caption2)
+        timeLabel.font = NativeTranscriptFont.caption2()
         timeLabel.textColor = AppTheme.ns(AppTheme.mutedText)
         timeLabel.setContentHuggingPriority(.required, for: .horizontal)
         timeLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
@@ -430,11 +444,10 @@ final class PiAgentNativeStatusDividerView: NSView, PiAgentNativeRowContent {
         spinner.controlSize = .small
         spinner.isDisplayedWhenStopped = false
 
-        let caption = NSFontManager.shared.convert(NSFont.preferredFont(forTextStyle: .caption1), toHaveTrait: .boldFontMask)
-        labelField.font = caption
+        labelField.font = NativeTranscriptFont.caption(.semibold)
         labelField.textColor = AppTheme.ns(AppTheme.mutedText)
         labelField.lineBreakMode = .byTruncatingTail
-        timeField.font = NSFont.preferredFont(forTextStyle: .caption2)
+        timeField.font = NativeTranscriptFont.caption2()
         timeField.textColor = AppTheme.ns(AppTheme.mutedText)
 
         capsuleStack.translatesAutoresizingMaskIntoConstraints = false
@@ -516,18 +529,18 @@ final class PiAgentNativeRetryRowView: PiAgentNativeCardRowView {
         iconView.imageScaling = .scaleProportionallyUpOrDown
         iconView.setContentHuggingPriority(.required, for: .horizontal)
 
-        headlineLabel.font = NSFontManager.shared.convert(NSFont.preferredFont(forTextStyle: .callout), toHaveTrait: .boldFontMask)
+        headlineLabel.font = NativeTranscriptFont.callout(.semibold)
         headlineLabel.lineBreakMode = .byTruncatingTail
 
-        detailLabel.font = NSFont.preferredFont(forTextStyle: .caption1)
+        detailLabel.font = NativeTranscriptFont.caption()
         detailLabel.textColor = AppTheme.ns(AppTheme.mutedText)
         detailLabel.lineBreakMode = .byWordWrapping
         detailLabel.maximumNumberOfLines = 0
 
-        resetLabel.font = NSFontManager.shared.convert(NSFont.preferredFont(forTextStyle: .caption1), toHaveTrait: .boldFontMask)
+        resetLabel.font = NativeTranscriptFont.caption(.medium)
 
         timeLabel.translatesAutoresizingMaskIntoConstraints = false
-        timeLabel.font = NSFont.preferredFont(forTextStyle: .caption2)
+        timeLabel.font = NativeTranscriptFont.caption2()
         timeLabel.textColor = AppTheme.ns(AppTheme.mutedText)
         timeLabel.setContentHuggingPriority(.required, for: .horizontal)
 

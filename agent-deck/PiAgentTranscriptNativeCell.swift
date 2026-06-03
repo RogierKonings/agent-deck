@@ -192,7 +192,7 @@ final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
         headerLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         prefixLabel.translatesAutoresizingMaskIntoConstraints = false
-        prefixLabel.font = NSFont.systemFont(ofSize: AppTheme.Font.captionSize).bold()
+        prefixLabel.font = NSFont.systemFont(ofSize: AppTheme.Font.captionSize, weight: .semibold)
         prefixLabel.textColor = .secondaryLabelColor
         prefixLabel.isHidden = true
 
@@ -224,7 +224,9 @@ final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
     /// Footnote-sized semibold, expanded width — matches the SwiftUI header.
     static let headerFont: NSFont = {
         let base = NSFont.systemFont(ofSize: AppTheme.Font.footnoteSize)
-        let semibold = NSFontManager.shared.convert(base, toHaveTrait: .boldFontMask)
+        // SwiftUI .weight(.semibold) is the SF semibold face, not NSFontManager's
+        // .boldFontMask (heavier). Match it for header parity.
+        let semibold = NSFont.systemFont(ofSize: base.pointSize, weight: .semibold)
         let merged = semibold.fontDescriptor.addingAttributes([
             .traits: [NSFontDescriptor.TraitKey.width: 0.2]
         ])

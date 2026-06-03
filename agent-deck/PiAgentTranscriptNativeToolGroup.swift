@@ -181,12 +181,34 @@ extension NativeToolGroupModel {
 
 // MARK: - Tool-group view
 
+/// A pill view whose corner radius always equals half its height — a true
+/// SwiftUI `Capsule()`. Used for the tool chips and their count badges.
+private final class CapsuleView: NSView {
+    var fillColor: NSColor = .clear { didSet { needsLayout = true } }
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.actions = ["bounds": NSNull(), "position": NSNull(), "cornerRadius": NSNull(), "backgroundColor": NSNull()]
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override var isFlipped: Bool { true }
+    override func layout() {
+        super.layout()
+        layer?.cornerRadius = bounds.height / 2
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = fillColor.cgColor
+        }
+    }
+}
+
 final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
     private let sections = NSStackView()
     private var sectionsWidthC: NSLayoutConstraint!
     private var model: NativeToolGroupModel?
     /// Web rows whose link list is expanded (by row id).
     private var expandedWebRows: Set<UUID> = []
+    /// Diff rows whose preview is expanded past 10 lines (by path).
+    private var expandedDiffRows: Set<String> = []
 
     private static let inlineLinkLimit = 5
     // Mirror SwiftUI exactly: `contentSubtleFill.opacity(0.65)` — and
@@ -236,6 +258,7 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
 
     private func rebuildSections() {
         sections.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        diffByPath.removeAll()
         guard let model else { return }
         if let web = model.web { sections.addArrangedSubview(buildWebCard(web)) }
         if let chips = model.chips { sections.addArrangedSubview(buildChipsCard(chips)) }
@@ -256,9 +279,7 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         return card
     }
 
-    private static func captionBold() -> NSFont {
-        NSFontManager.shared.convert(NSFont.preferredFont(forTextStyle: .caption1), toHaveTrait: .boldFontMask)
-    }
+    private static func captionBold() -> NSFont { NativeTranscriptFont.caption(.semibold) }
 
     private static func label(_ text: String, font: NSFont, color: NSColor = .labelColor, wraps: Bool = false) -> NSTextField {
         let f = wraps ? NSTextField(wrappingLabelWithString: text) : NSTextField(labelWithString: text)
@@ -288,7 +309,7 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         globe.contentTintColor = web.hasErrors ? AppTheme.ns(AppTheme.roleError) : Self.muted
         header.addArrangedSubview(globe)
         header.addArrangedSubview(Self.label(web.title, font: Self.captionBold()))
-        header.addArrangedSubview(Self.label(web.callCount, font: NSFont.preferredFont(forTextStyle: .caption1), color: Self.muted))
+        header.addArrangedSubview(Self.label(web.callCount, font: NativeTranscriptFont.caption(), color: Self.muted))
         stack.addArrangedSubview(header)
 
         for row in web.rows {
@@ -297,7 +318,7 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         if web.hiddenCount > 0 {
             let suffix = web.hiddenCount == 1 ? "" : "s"
             stack.addArrangedSubview(Self.label("\(web.hiddenCount) older web update\(suffix) hidden",
-                                                font: NSFont.preferredFont(forTextStyle: .caption2), color: Self.muted))
+                                                font: NativeTranscriptFont.caption2(), color: Self.muted))
         }
 
         embed(stack, in: card, hInset: 10, vInset: 8)
@@ -315,13 +336,21 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         titleRow.orientation = .horizontal
         titleRow.spacing = 7
         titleRow.alignment = .firstBaseline
+        // Fixed 14pt icon column so the title starts at a consistent x and the
+        // bullet-link list (indented 21 = 14 icon + 7 gap) lines up under it.
         let icon = NSImageView()
-        icon.image = NSImage(systemSymbolName: row.icon, accessibilityDescription: nil)
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        icon.image = NSImage(systemSymbolName: row.icon, accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: NativeTranscriptFont.caption2Size, weight: .semibold))
         icon.contentTintColor = row.isError ? AppTheme.ns(AppTheme.roleError) : Self.muted
+        icon.imageScaling = .scaleProportionallyDown
+        icon.widthAnchor.constraint(equalToConstant: 14).isActive = true
         titleRow.addArrangedSubview(icon)
         titleRow.addArrangedSubview(Self.label(row.title, font: Self.captionBold()))
         if let detail = row.detail {
-            titleRow.addArrangedSubview(Self.label(detail, font: NSFont.preferredFont(forTextStyle: .caption1), color: Self.muted))
+            let d = Self.label(detail, font: NativeTranscriptFont.caption(), color: Self.muted)
+            d.lineBreakMode = .byTruncatingMiddle
+            titleRow.addArrangedSubview(d)
         }
         rowStack.addArrangedSubview(titleRow)
 
@@ -338,9 +367,13 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
                 linkRow.orientation = .horizontal
                 linkRow.spacing = 6
                 linkRow.alignment = .firstBaseline
-                linkRow.addArrangedSubview(Self.label("•", font: NSFont.preferredFont(forTextStyle: .caption2), color: Self.muted))
-                linkRow.addArrangedSubview(Self.label(link.title, font: NSFontManager.shared.convert(NSFont.preferredFont(forTextStyle: .caption2), toHaveTrait: .boldFontMask)))
-                linkRow.addArrangedSubview(Self.label(link.domain, font: NSFont.preferredFont(forTextStyle: .caption2), color: Self.muted))
+                linkRow.addArrangedSubview(Self.label("•", font: NativeTranscriptFont.caption2(), color: Self.muted))
+                let linkTitle = Self.label(link.title, font: NativeTranscriptFont.caption2(.semibold))
+                linkTitle.lineBreakMode = .byTruncatingTail
+                linkRow.addArrangedSubview(linkTitle)
+                let domain = Self.label(link.domain, font: NativeTranscriptFont.caption2(), color: Self.muted)
+                domain.lineBreakMode = .byTruncatingMiddle
+                linkRow.addArrangedSubview(domain)
                 linksStack.addArrangedSubview(linkRow)
             }
             if row.links.count > Self.inlineLinkLimit {
@@ -348,7 +381,7 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
                                     target: self, action: #selector(toggleWebRow(_:)))
                 more.isBordered = false
                 more.bezelStyle = .inline
-                more.font = NSFontManager.shared.convert(NSFont.preferredFont(forTextStyle: .caption2), toHaveTrait: .boldFontMask)
+                more.font = NativeTranscriptFont.caption2(.semibold)
                 more.contentTintColor = AppTheme.ns(AppTheme.brandAccent)
                 more.identifier = NSUserInterfaceItemIdentifier(row.id.uuidString)
                 linksStack.addArrangedSubview(more)
@@ -380,7 +413,7 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         icon.contentTintColor = chips.hasErrors ? AppTheme.ns(AppTheme.roleError) : Self.muted
         row.addArrangedSubview(icon)
         row.addArrangedSubview(Self.label("Tools", font: Self.captionBold()))
-        row.addArrangedSubview(Self.label(chips.callCount, font: NSFont.preferredFont(forTextStyle: .caption1), color: Self.muted))
+        row.addArrangedSubview(Self.label(chips.callCount, font: NativeTranscriptFont.caption(), color: Self.muted))
 
         let chipRow = NSStackView()
         chipRow.orientation = .horizontal
@@ -408,12 +441,9 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
 
     private func buildChip(_ chip: NativeToolGroupModel.Chips.Chip) -> NSView {
         let color = chip.isError ? AppTheme.ns(AppTheme.roleError) : Self.muted
-        let capsule = NSView()
-        capsule.translatesAutoresizingMaskIntoConstraints = false
-        capsule.wantsLayer = true
-        capsule.layer?.cornerRadius = 9
-        capsule.layer?.backgroundColor = (chip.isError ? AppTheme.ns(AppTheme.roleError) : Self.subtleStroke)
-            .withAlphaComponent(AppTheme.roleChipOpacity).cgColor
+        // Outer capsule: (roleError | contentStroke).opacity(roleChipOpacity).
+        let capsule = CapsuleView()
+        capsule.fillColor = AppTheme.ns((chip.isError ? AppTheme.roleError : AppTheme.contentStroke).opacity(AppTheme.roleChipOpacity))
 
         let stack = NSStackView()
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -421,12 +451,21 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         stack.spacing = 5
         stack.alignment = .centerY
         let icon = NSImageView()
-        icon.image = NSImage(systemSymbolName: chip.icon, accessibilityDescription: nil)
+        icon.image = NSImage(systemSymbolName: chip.icon, accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: NativeTranscriptFont.caption2Size, weight: .semibold))
         icon.contentTintColor = color
         stack.addArrangedSubview(icon)
-        stack.addArrangedSubview(Self.label(chip.name, font: NSFont.preferredFont(forTextStyle: .caption1), color: color))
-        let count = Self.label("\(chip.count)", font: NSFontManager.shared.convert(NSFont.monospacedDigitSystemFont(ofSize: NSFont.preferredFont(forTextStyle: .caption2).pointSize, weight: .bold), toHaveTrait: []), color: color)
-        stack.addArrangedSubview(count)
+        stack.addArrangedSubview(Self.label(chip.name, font: NativeTranscriptFont.caption(), color: color))
+
+        // Count sits in its own inner capsule (contentStroke.opacity(0.55)).
+        let countBadge = CapsuleView()
+        countBadge.fillColor = AppTheme.ns(AppTheme.contentStroke.opacity(0.55))
+        let countLabel = Self.label("\(chip.count)",
+                                    font: .monospacedDigitSystemFont(ofSize: NativeTranscriptFont.caption2Size, weight: .bold),
+                                    color: color)
+        embed(countLabel, in: countBadge, hInset: 5, vInset: 1)
+        stack.addArrangedSubview(countBadge)
+
         embed(stack, in: capsule, hInset: 7, vInset: 3)
         return capsule
     }
@@ -450,14 +489,14 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         header.addArrangedSubview(icon)
         header.addArrangedSubview(Self.label("Changes", font: Self.captionBold()))
         header.addArrangedSubview(Self.label(diff.fileCount == 1 ? "1 file" : "\(diff.fileCount) files",
-                                             font: NSFont.preferredFont(forTextStyle: .caption1), color: Self.muted))
+                                             font: NativeTranscriptFont.caption(), color: Self.muted))
         stack.addArrangedSubview(header)
 
         for row in diff.rows { stack.addArrangedSubview(buildDiffRow(row)) }
         let hidden = diff.rows.count > 4 ? diff.rows.count - 4 : 0
         if hidden > 0 {
             stack.addArrangedSubview(Self.label("\(hidden) more changed file\(hidden == 1 ? "" : "s") hidden",
-                                                font: NSFont.preferredFont(forTextStyle: .caption2), color: Self.muted))
+                                                font: NativeTranscriptFont.caption2(), color: Self.muted))
         }
 
         embed(stack, in: card, hInset: 10, vInset: 8)
@@ -476,64 +515,184 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         head.orientation = .horizontal
         head.spacing = 8
         head.alignment = .firstBaseline
-        head.addArrangedSubview(Self.label(row.path.truncatedMiddle(max: 54), font: Self.captionBold()))
-        head.addArrangedSubview(Self.label(row.changeCountText, font: NSFontManager.shared.convert(NSFont.monospacedDigitSystemFont(ofSize: NSFont.preferredFont(forTextStyle: .caption2).pointSize, weight: .semibold), toHaveTrait: []), color: Self.muted))
+        let pathLabel = Self.label(row.path.truncatedMiddle(max: 54), font: Self.captionBold())
+        pathLabel.lineBreakMode = .byTruncatingMiddle
+        head.addArrangedSubview(pathLabel)
+        head.addArrangedSubview(Self.label(row.changeCountText,
+                                           font: .monospacedDigitSystemFont(ofSize: NativeTranscriptFont.caption2Size, weight: .semibold),
+                                           color: Self.muted))
+        head.addArrangedSubview(NSView())  // spacer
         let openBtn = NSButton(title: "Open", target: self, action: #selector(openDiff(_:)))
         openBtn.bezelStyle = .rounded
         openBtn.controlSize = .small
-        openBtn.font = NSFont.preferredFont(forTextStyle: .caption2)
-        openBtn.identifier = NSUserInterfaceItemIdentifier("diff:\(row.path)")
-        diffByPath[row.path] = (title: row.path, text: row.diff)
+        openBtn.font = NativeTranscriptFont.caption2(.semibold)
+        openBtn.image = NSImage(systemSymbolName: "arrow.up.left.and.arrow.down.right", accessibilityDescription: nil)
+        openBtn.imagePosition = .imageLeading
+        openBtn.identifier = NSUserInterfaceItemIdentifier(row.path)
+        let copyBtn = NSButton(title: "Copy", target: self, action: #selector(copyDiff(_:)))
+        copyBtn.bezelStyle = .rounded
+        copyBtn.controlSize = .small
+        copyBtn.font = NativeTranscriptFont.caption2(.semibold)
+        copyBtn.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: nil)
+        copyBtn.imagePosition = .imageLeading
+        copyBtn.identifier = NSUserInterfaceItemIdentifier(row.path)
+        diffByPath[row.path] = row
         head.addArrangedSubview(openBtn)
+        head.addArrangedSubview(copyBtn)
         stack.addArrangedSubview(head)
+        head.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
-        // Compact colored preview (capped lines), matching PiAgentCompactDiffPreview.
-        stack.addArrangedSubview(buildDiffPreview(row.diff))
+        stack.addArrangedSubview(buildDiffPreview(for: row))
 
         embed(stack, in: inner, hInset: 8, vInset: 8)
         return inner
     }
 
-    private var diffByPath: [String: (title: String, text: String)] = [:]
+    private var diffByPath: [String: PiAgentThreadDiffSummaryView.Row] = [:]
 
-    private func buildDiffPreview(_ diff: String) -> NSView {
-        let textView = NSTextView()
-        textView.translatesAutoresizingMaskIntoConstraints = false
-        textView.isEditable = false
-        textView.isSelectable = true
-        textView.drawsBackground = false
-        textView.textContainerInset = .zero
-        textView.textContainer?.lineFragmentPadding = 0
-        textView.isVerticallyResizable = true
-        textView.isHorizontallyResizable = false
-        textView.textContainer?.widthTracksTextView = true
+    /// Compact colored diff preview — faithful to `PiAgentCompactDiffPreview`:
+    /// filtered "meaningful" lines, a right-aligned gutter (prefix + line number)
+    /// and content column with per-line tint, capped at 10 lines with an inline
+    /// "Show N more lines" expander.
+    private func buildDiffPreview(for row: PiAgentThreadDiffSummaryView.Row) -> NSView {
+        let container = NSStackView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        container.orientation = .vertical
+        container.alignment = .leading
+        container.spacing = 0
 
-        let font = NSFont.monospacedSystemFont(ofSize: NSFont.preferredFont(forTextStyle: .caption2).pointSize, weight: .regular)
-        let attr = NSMutableAttributedString()
-        let lines = diff.split(separator: "\n", omittingEmptySubsequences: false).prefix(12)
-        let added = NSColor.systemGreen
-        let removed = NSColor.systemRed
-        for (i, line) in lines.enumerated() {
-            let s = String(line)
-            let color: NSColor
-            if s.hasPrefix("+") && !s.hasPrefix("+++") { color = added }
-            else if s.hasPrefix("-") && !s.hasPrefix("---") { color = removed }
-            else { color = Self.muted }
-            attr.append(NSAttributedString(string: s + (i < lines.count - 1 ? "\n" : ""), attributes: [.font: font, .foregroundColor: color]))
+        let lines = Self.meaningfulDiffLines(row.diff)
+        let expanded = expandedDiffRows.contains(row.path)
+        let visible = expanded ? lines : Array(lines.prefix(10))
+
+        let linesStack = NSStackView()
+        linesStack.translatesAutoresizingMaskIntoConstraints = false
+        linesStack.orientation = .vertical
+        linesStack.alignment = .leading
+        linesStack.spacing = 0
+        linesStack.wantsLayer = true
+        linesStack.layer?.cornerRadius = 8
+        linesStack.layer?.masksToBounds = true
+        for line in visible { linesStack.addArrangedSubview(buildDiffLineRow(line)) }
+        container.addArrangedSubview(linesStack)
+        linesStack.widthAnchor.constraint(equalTo: container.widthAnchor).isActive = true
+        for lineRow in linesStack.arrangedSubviews {
+            lineRow.widthAnchor.constraint(equalTo: linesStack.widthAnchor).isActive = true
         }
-        textView.textStorage?.setAttributedString(attr)
-        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        return textView
+
+        if lines.count > 10 {
+            let title = expanded ? "Show fewer lines" : "Show \(lines.count - 10) more lines"
+            let symbol = expanded ? "chevron.up" : "chevron.down"
+            let more = NSButton(title: " " + title, target: self, action: #selector(toggleDiffRow(_:)))
+            more.isBordered = false
+            more.bezelStyle = .inline
+            more.font = NativeTranscriptFont.caption2()
+            more.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+            more.imagePosition = .imageLeading
+            more.contentTintColor = Self.muted
+            more.identifier = NSUserInterfaceItemIdentifier(row.path)
+            let wrap = NSStackView(views: [more])
+            wrap.edgeInsets = NSEdgeInsets(top: 3, left: 0, bottom: 0, right: 0)
+            container.addArrangedSubview(wrap)
+        }
+        return container
     }
 
+    private func buildDiffLineRow(_ line: DiffLine) -> NSView {
+        let bg = NSView()
+        bg.translatesAutoresizingMaskIntoConstraints = false
+        bg.wantsLayer = true
+        bg.layer?.backgroundColor = line.background.cgColor
+
+        let mono = NSFont.monospacedSystemFont(ofSize: NativeTranscriptFont.captionSize, weight: .regular)
+        let monoBold = NSFont.monospacedSystemFont(ofSize: NativeTranscriptFont.captionSize, weight: .semibold)
+
+        let gutter = Self.label(line.gutter, font: monoBold, color: line.color)
+        gutter.alignment = .right
+        gutter.translatesAutoresizingMaskIntoConstraints = false
+
+        let content = Self.label(line.content.isEmpty ? " " : line.content, font: mono, color: line.color)
+        content.lineBreakMode = .byTruncatingTail
+        content.translatesAutoresizingMaskIntoConstraints = false
+
+        bg.addSubview(gutter)
+        bg.addSubview(content)
+        NSLayoutConstraint.activate([
+            gutter.leadingAnchor.constraint(equalTo: bg.leadingAnchor),
+            gutter.widthAnchor.constraint(equalToConstant: 40),
+            gutter.topAnchor.constraint(equalTo: bg.topAnchor, constant: 1),
+            gutter.bottomAnchor.constraint(equalTo: bg.bottomAnchor, constant: -1),
+            content.leadingAnchor.constraint(equalTo: gutter.trailingAnchor, constant: 9),
+            content.trailingAnchor.constraint(lessThanOrEqualTo: bg.trailingAnchor),
+            content.centerYAnchor.constraint(equalTo: gutter.centerYAnchor)
+        ])
+        return bg
+    }
+
+    struct DiffLine {
+        var gutter: String
+        var content: String
+        var color: NSColor
+        var background: NSColor
+    }
+
+    private static func meaningfulDiffLines(_ diff: String) -> [DiffLine] {
+        let added = AppTheme.ns(AppTheme.diffAdded)
+        let removed = AppTheme.ns(AppTheme.diffRemoved)
+        let addedBg = AppTheme.ns(AppTheme.diffAdded.opacity(AppTheme.roleFillStrongOpacity))
+        let removedBg = AppTheme.ns(AppTheme.diffRemoved.opacity(AppTheme.roleFillStrongOpacity))
+        return diff.split(separator: "\n", omittingEmptySubsequences: false).map(String.init).filter { line in
+            guard !line.hasPrefix("diff --git"), !line.hasPrefix("index "), !line.hasPrefix("---"), !line.hasPrefix("+++") else { return false }
+            return line.hasPrefix("+") || line.hasPrefix("-") || line.hasPrefix("@@")
+        }.map { raw in
+            if raw.hasPrefix("@@") {
+                return DiffLine(gutter: "…", content: raw, color: Self.muted, background: .clear)
+            }
+            guard let first = raw.first, first == "+" || first == "-" || first == " " else {
+                return DiffLine(gutter: " ", content: raw.trimmingCharacters(in: .whitespaces), color: Self.muted, background: .clear)
+            }
+            let prefix = String(first)
+            let trimmedLeading = raw.dropFirst().drop(while: { $0 == " " })
+            let numberPart = trimmedLeading.prefix(while: { $0.isNumber })
+            let content = String(trimmedLeading.dropFirst(numberPart.count).drop(while: { $0 == " " }))
+            let gutter = numberPart.isEmpty ? prefix : "\(prefix) \(numberPart)"
+            let color: NSColor = first == "+" ? added : (first == "-" ? removed : Self.muted)
+            let bg: NSColor = first == "+" ? addedBg : (first == "-" ? removedBg : .clear)
+            return DiffLine(gutter: gutter, content: content, color: color, background: bg)
+        }
+    }
+
+    @objc private func toggleDiffRow(_ sender: NSButton) {
+        guard let path = sender.identifier?.rawValue else { return }
+        if expandedDiffRows.contains(path) { expandedDiffRows.remove(path) } else { expandedDiffRows.insert(path) }
+        rebuildSections()
+        notifyContentHeightChanged()
+    }
+
+    @objc private func copyDiff(_ sender: NSButton) {
+        guard let path = sender.identifier?.rawValue, let row = diffByPath[path] else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(row.diff, forType: .string)
+        if let checkmark = NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil) {
+            sender.image = checkmark
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) {
+                sender.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: nil)
+            }
+        }
+    }
+
+    /// Present the full diff in a modal sheet (hosting the SwiftUI diff view — a
+    /// modal is not a scroll hot path, so it's pixel-identical to the original).
     @objc private func openDiff(_ sender: NSButton) {
-        guard let raw = sender.identifier?.rawValue, raw.hasPrefix("diff:") else { return }
-        let path = String(raw.dropFirst("diff:".count))
-        guard let entry = diffByPath[path] else { return }
-        let popover = NSPopover()
-        popover.behavior = .transient
-        popover.contentViewController = PiAgentNativeTextPopoverController(title: entry.title, text: entry.text)
-        popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .maxY)
+        guard let path = sender.identifier?.rawValue, let row = diffByPath[path],
+              let host = window?.contentViewController else { return }
+        var hosting: NSViewController?
+        let sheet = PiAgentNativeFullDiffSheet(row: row) { [weak host] in
+            if let hosting { host?.dismiss(hosting) }
+        }
+        let controller = NSHostingController(rootView: sheet)
+        hosting = controller
+        host.presentAsSheet(controller)
     }
 
     // MARK: Helpers
@@ -552,6 +711,7 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
     override func prepareForReuseIfNeeded() {
         super.prepareForReuseIfNeeded()
         expandedWebRows.removeAll()
+        expandedDiffRows.removeAll()
         diffByPath.removeAll()
     }
 }
