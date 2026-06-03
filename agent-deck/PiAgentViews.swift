@@ -2732,16 +2732,23 @@ struct PiAgentScreen: View {
             // Memory and prompt-audit statuses stay hosted.
             if entry.agentMemoryEvent != nil { return nil }
             if let runID = entry.nativeSubagentRunID, let run = subagentRuns[runID] {
-                // Single-run subagent cards render natively (the scroll-hang fix);
-                // parallel-grid runs stay hosted for now.
-                if NativeSubagentCardPayload.isParallel(run) { return nil }
-                let payload = NativeSubagentCardPayload.make(
+                if NativeSubagentFactory.isParallel(run) {
+                    let payload = NativeSubagentParallelPayload.make(
+                        run: run,
+                        imageStore: viewModel.agentImageStore,
+                        onOpenChildTranscript: { [self] in selectedSubagentTranscriptRunID = $0 },
+                        onStopChild: { [viewModel] in viewModel.stopNativeSubagent(runID: $0, parentSessionID: run.parentSessionID) }
+                    )
+                    return .native(.of(PiAgentNativeSubagentParallelCardView.self) { view, width in
+                        view.configure(payload: payload, width: width)
+                    })
+                }
+                let payload = NativeAgentBlockPayload.makeSingle(
                     run: run,
                     imageStore: viewModel.agentImageStore,
                     onStop: { [viewModel] in viewModel.stopNativeSubagent(runID: run.id, parentSessionID: run.parentSessionID) },
                     onTranscript: { [self] in selectedSubagentTranscriptRunID = run.id },
-                    onReveal: { [self] in revealSubagentRun(run) },
-                    onGraph: { [self] in selectedSubagentGraphRunID = run.id }
+                    onReveal: { [self] in revealSubagentRun(run) }
                 )
                 return .native(.of(PiAgentNativeSubagentRunCardView.self) { view, width in
                     view.configure(payload: payload, width: width)
