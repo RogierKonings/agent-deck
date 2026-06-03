@@ -209,6 +209,16 @@ final class PiAgentNativeBubbleView: NSView {
         cardLeadingC.isActive = true
     }
 
+    // A recycled/freshly-vended cell can be DRAWN before a layout pass applies
+    // the card's new leading constant (set in configure) — so the card paints at
+    // its previous x and only snaps to the right spot when something later forces
+    // layout (e.g. hover). Laying out here, right before the view draws, guarantees
+    // the card is at its correct position in the painted frame. Cheap when clean.
+    override func viewWillDraw() {
+        layoutSubtreeIfNeeded()
+        super.viewWillDraw()
+    }
+
     override func layout() {
         super.layout()
         cardView.layer?.frame = cardView.bounds
@@ -264,6 +274,9 @@ final class PiAgentNativeBubbleView: NSView {
         let cardW = cardWidth(forRowWidth: rowWidth)
         cardWidthC.constant = cardW
         cardLeadingC.constant = payload.isUserHugged ? max(0, rowWidth - cardW) : 0
+        // Ensure the new constant is applied before the (possibly recycled) cell
+        // next draws — viewWillDraw lays out only if the subtree is dirty.
+        needsLayout = true
 
         // Header.
         headerLabel.stringValue = payload.headerTitle
