@@ -179,6 +179,13 @@ final class PiAgentNativeBubbleView: NSView {
         mdLeadingC = markdownContainer.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: hPad)
         mdTrailingC = markdownContainer.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -hPad)
         mdBottomC = markdownContainer.bottomAnchor.constraint(equalTo: cardView.bottomAnchor, constant: -vPad)
+        // The cell imposes a fixed height (NSView-Encapsulated-Layout-Height). If a
+        // measured height is even 1pt short of the markdown's required intrinsic
+        // height, that fixed height vs. the required content height is unsatisfiable
+        // and AppKit logs a constraint-conflict storm. Let this bottom pin yield
+        // (just below required) so the fixed cell height always wins gracefully —
+        // the measure is accurate, so in practice this never actually slacks.
+        mdBottomC.priority = NSLayoutConstraint.Priority(999)
         mdTopC = markdownContainer.topAnchor.constraint(equalTo: headerLabel.bottomAnchor, constant: headerSpacing)
 
         NSLayoutConstraint.activate([
