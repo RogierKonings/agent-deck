@@ -333,7 +333,6 @@ final class MarkdownSourceApplier {
 
 final class NativeMarkdownTextContainer: NSView {
     private let stackView = NSStackView()
-    private static let bottomContentInset: CGFloat = 8
     private var lastDocument: CachedMarkdownDocument?
     /// Whether a document has ever been applied. Lets the representable parse
     /// the first appearance synchronously (no blank flash) and reserve the
@@ -385,7 +384,7 @@ final class NativeMarkdownTextContainer: NSView {
             stackView.leadingAnchor.constraint(equalTo: leadingAnchor),
             stackView.trailingAnchor.constraint(equalTo: trailingAnchor),
             stackView.topAnchor.constraint(equalTo: topAnchor),
-            stackView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Self.bottomContentInset)
+            stackView.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
     }
 
@@ -560,7 +559,7 @@ final class NativeMarkdownTextContainer: NSView {
         stackView.layoutSubtreeIfNeeded()
         invalidateBlockIntrinsics(in: stackView)
         stackView.layoutSubtreeIfNeeded()
-        let height = ceil(stackView.fittingSize.height) + Self.bottomContentInset
+        let height = ceil(stackView.fittingSize.height)
         heightCache = (width, height)
         return height
     }
@@ -584,7 +583,7 @@ final class NativeMarkdownTextContainer: NSView {
     var renderedContentHeight: CGFloat {
         invalidateBlockIntrinsics(in: stackView)
         stackView.layoutSubtreeIfNeeded()
-        return ceil(stackView.fittingSize.height) + Self.bottomContentInset
+        return ceil(stackView.fittingSize.height)
     }
 
     // Must be side-effect-free: AppKit calls this during the window's update-constraints
@@ -865,7 +864,7 @@ final class NativeMarkdownTextContainer: NSView {
         textView.isEditable = false
         textView.isSelectable = true
         textView.drawsBackground = false
-        textView.textContainerInset = .zero
+        textView.textContainerInset = NSSize(width: 0, height: 2)
         textView.textContainer?.lineFragmentPadding = 0
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.heightTracksTextView = false
@@ -948,7 +947,7 @@ private final class AutoSizingMarkdownTextView: NSTextView {
         let width = max(bounds.width, textContainer.containerSize.width, 1)
         textContainer.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
         layoutManager.ensureLayout(for: textContainer)
-        let height = ceil(layoutManager.usedRect(for: textContainer).height) + textContainerInset.height * 2 + 4
+        let height = ceil(layoutManager.usedRect(for: textContainer).height) + textContainerInset.height * 2
         return NSSize(width: NSView.noIntrinsicMetric, height: max(1, height))
     }
 
