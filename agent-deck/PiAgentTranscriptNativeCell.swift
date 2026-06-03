@@ -149,13 +149,17 @@ final class PiAgentNativeBubbleView: NSView {
     private var hPad: CGFloat { (payload?.isThreadChild ?? false) ? 12 : 14 }
     private var vPad: CGFloat { (payload?.isThreadChild ?? false) ? 9 : 11 }
 
-    // cardView placement / size — a fixed width plus a SINGLE leading
-    // constraint whose constant is recomputed from the bubble's real width each
-    // layout pass (see applyCardOffset). One constraint can't over-constrain, so
-    // the card can never flip sides on a relayout, and recomputing from the live
-    // width means it's correct even if `configure` ran before the width settled.
+    // cardView placement / size — a fixed width plus EXACTLY ONE edge pin:
+    // replies pin leading (column edge), questions pin trailing (right edge).
+    // This is pure geometry — it does NOT read bounds.width — so the card lands
+    // on the correct side on the very first layout, with no dependence on when
+    // the row width becomes known (the "rests left, jumps right on hover" bug).
+    // configure() activates exactly one (deactivating the other first), so the
+    // card is always fully constrained (width + one edge + top + bottom) and
+    // never over-constrained.
     private var cardWidthC: NSLayoutConstraint!
     private var cardLeadingC: NSLayoutConstraint!
+    private var cardTrailingC: NSLayoutConstraint!
     // inner content (pinned to cardView)
     private var iconLeadingC: NSLayoutConstraint!
     private var iconTopC: NSLayoutConstraint!
@@ -170,6 +174,7 @@ final class PiAgentNativeBubbleView: NSView {
     private func buildConstraints() {
         cardWidthC = cardView.widthAnchor.constraint(equalToConstant: 100)
         cardLeadingC = cardView.leadingAnchor.constraint(equalTo: leadingAnchor)
+        cardTrailingC = cardView.trailingAnchor.constraint(equalTo: trailingAnchor)
 
         iconLeadingC = iconView.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: hPad)
         iconTopC = iconView.topAnchor.constraint(equalTo: cardView.topAnchor, constant: vPad)
@@ -201,29 +206,13 @@ final class PiAgentNativeBubbleView: NSView {
             prefixLeadingC,
             mdLeadingC, mdTrailingC, mdTopC, mdBottomC
         ])
-        // A single always-active leading constraint positions the card. Its
-        // constant is recomputed from the bubble's REAL width in `layout()`
-        // (replies → 0; questions → width − cardWidth, i.e. right-aligned), so
-        // it never depends on the width passed to `configure` being final, and
-        // there is no second edge pin that could over-constrain and flip which
-        // side wins on a relayout (the "shifts on hover" bug).
+        // Default placement (replies): pinned to the leading edge. configure()
+        // swaps to the trailing pin for hugged questions.
         cardLeadingC.isActive = true
-    }
-
-    /// Recompute the card's leading offset from the bubble's current width so
-    /// the placement is correct on every layout pass (no dependency on the
-    /// `configure`-time width, no second constraint to conflict with).
-    private func applyCardOffset() {
-        let target = (payload?.isUserHugged ?? false)
-            ? max(0, bounds.width - cardWidthC.constant)
-            : 0
-        if abs(cardLeadingC.constant - target) > 0.5 {
-            cardLeadingC.constant = target
-        }
+        cardTrailingC.isActive = false
     }
 
     override func layout() {
-        applyCardOffset()
         super.layout()
         cardView.layer?.frame = cardView.bounds
     }
@@ -252,11 +241,18 @@ final class PiAgentNativeBubbleView: NSView {
         mdTrailingC.constant = -hPad
         mdBottomC.constant = -vPad
 
-        // Fix the card width; the leading offset (and thus left/right alignment)
-        // is applied from the real bubble width in `layout()` via applyCardOffset.
-        let cardW = cardWidth(forRowWidth: rowWidth)
-        cardWidthC.constant = cardW
-        cardLeadingC.constant = payload.isUserHugged ? max(0, rowWidth - cardW) : 0
+        // Fix the card width, then pin exactly one edge (geometry only — no
+        // bounds.width read, so it's correct on the first layout). Deactivate the
+        // unwanted pin BEFORE activating the wanted one so they're never both
+        // active (over-constrained). Questions → trailing (right); replies → leading.
+        cardWidthC.constant = cardWidth(forRowWidth: rowWidth)
+        if payload.isUserHugged {
+            cardLeadingC.isActive = false
+            cardTrailingC.isActive = true
+        } else {
+            cardTrailingC.isActive = false
+            cardLeadingC.isActive = true
+        }
 
         // Header.
         headerLabel.stringValue = payload.headerTitle
