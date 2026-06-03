@@ -426,7 +426,7 @@ private struct JumpToLatestPill: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: "chevron.down")
-                .font(.system(size: 12, weight: .bold))
+                .font(AppTheme.Font.footnote.weight(.bold))
                 .offset(x: 0.5, y: 0.5)
         }
         .foregroundStyle(AppTheme.brandAccent)
@@ -2157,7 +2157,7 @@ struct PiAgentScreen: View {
                             requestDeleteSessions(selectedSessionIDs)
                         } label: {
                             Image(systemName: "trash.fill")
-                                .font(.system(size: 14, weight: .semibold))
+                                .font(AppTheme.Font.body.weight(.semibold))
                                 .foregroundStyle(Color.red)
                                 .contentTransition(.symbolEffect(.replace))
                                 .frame(width: 30, height: 30)
@@ -2204,7 +2204,7 @@ struct PiAgentScreen: View {
                         AppList(
                             sections: [AppListSection(id: "sessions", title: nil, items: visibleSessions)],
                             selection: .multi($selectedSessionIDs),
-                            cornerRadius: 10,
+                            cornerRadius: AppTheme.Chat.subCardCornerRadius,
                             rowHorizontalPadding: 0,
                             rowVerticalPadding: 0,
                             listHorizontalInset: 6
@@ -2325,9 +2325,9 @@ struct PiAgentScreen: View {
                     if session.isAgentBound, let agentName = session.agentName, !agentName.isEmpty {
                         HStack(spacing: 4) {
                             Image(systemName: "sparkles.rectangle.stack")
-                                .font(.caption2.weight(.semibold))
+                                .font(AppTheme.Font.caption2.weight(.semibold))
                             Text("Chat with \(agentName)")
-                                .font(.footnote.weight(.semibold))
+                                .font(AppTheme.Font.footnote.weight(.semibold))
                         }
                         .foregroundStyle(AppTheme.brandAccent)
                         .padding(.horizontal, 6)
@@ -2336,7 +2336,7 @@ struct PiAgentScreen: View {
                     }
                     AppLabelTag(text: effectiveStatus(for: session), color: effectiveStatusColor(for: session))
                     Text(session.updatedAt.formatted(date: .abbreviated, time: .shortened))
-                        .font(.footnote)
+                        .font(AppTheme.Font.footnote)
                         .foregroundStyle(AppTheme.mutedText)
                     Spacer(minLength: 0)
                 }
@@ -2350,7 +2350,7 @@ struct PiAgentScreen: View {
 
                 if let error = session.lastError {
                     Text(error)
-                        .font(.footnote)
+                        .font(AppTheme.Font.footnote)
                         .foregroundStyle(.red)
                 }
             }
@@ -3092,12 +3092,12 @@ struct PiAgentScreen: View {
     private func preCompactionArchiveCard(_ archive: (hiddenCount: Int, compactedAt: Date)) -> some View {
         HStack(spacing: 10) {
             Image(systemName: showArchivedPreCompactionTranscript ? "tray.and.arrow.up" : "archivebox")
-                .font(.caption.weight(.semibold))
+                .font(AppTheme.Font.caption.weight(.semibold))
                 .foregroundStyle(AppTheme.mutedText)
             Text(showArchivedPreCompactionTranscript ? "Showing pre-compaction transcript" : "Pre-compaction transcript hidden")
-                .font(.caption.weight(.semibold))
+                .font(AppTheme.Font.caption.weight(.semibold))
             Text("\(archive.hiddenCount) earlier item\(archive.hiddenCount == 1 ? "" : "s") before \(archive.compactedAt.formatted(date: .omitted, time: .shortened))")
-                .font(.caption)
+                .font(AppTheme.Font.caption)
                 .foregroundStyle(AppTheme.mutedText)
             Spacer(minLength: 0)
             Button(showArchivedPreCompactionTranscript ? "Hide" : "Load Earlier") {
@@ -3106,24 +3106,24 @@ struct PiAgentScreen: View {
                 }
             }
             .buttonStyle(.borderless)
-            .font(.caption.weight(.semibold))
+            .font(AppTheme.Font.caption.weight(.semibold))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.8)).stroke(AppTheme.contentStroke, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.8)).stroke(AppTheme.contentStroke, lineWidth: 1))
     }
 
     @ViewBuilder
     private func recentWindowArchiveCard(_ archive: (hiddenCount: Int, limit: Int)) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "clock.arrow.circlepath")
-                .font(.caption.weight(.semibold))
+                .font(AppTheme.Font.caption.weight(.semibold))
                 .foregroundStyle(AppTheme.mutedText)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Earlier transcript hidden")
-                    .font(.caption.weight(.semibold))
+                    .font(AppTheme.Font.caption.weight(.semibold))
                 Text("Showing the latest \(archive.limit) items to keep this chat responsive. \(archive.hiddenCount) earlier item\(archive.hiddenCount == 1 ? "" : "s") are available.")
-                    .font(.caption)
+                    .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
             }
             Spacer(minLength: 0)
@@ -3131,11 +3131,11 @@ struct PiAgentScreen: View {
                 isEarlierTranscriptSheetPresented = true
             }
             .buttonStyle(.borderless)
-            .font(.caption.weight(.semibold))
+            .font(AppTheme.Font.caption.weight(.semibold))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.8)).stroke(AppTheme.contentStroke, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.8)).stroke(AppTheme.contentStroke, lineWidth: 1))
     }
 
     private var earlierTranscriptSheet: some View {

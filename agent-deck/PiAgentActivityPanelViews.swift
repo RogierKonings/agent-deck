@@ -106,7 +106,7 @@ struct PiAgentActivityPanel: View {
     private var activityHeader: some View {
         HStack(alignment: .center, spacing: 10) {
             Image(systemName: "wrench.and.screwdriver")
-                .font(.system(size: 15, weight: .semibold))
+                .font(AppTheme.Font.body.weight(.semibold))
                 .foregroundStyle(AppTheme.mutedText)
                 .frame(width: 28, height: 28)
                 .background(Circle().fill(AppTheme.contentFill).stroke(AppTheme.contentStroke, lineWidth: 1))
@@ -212,13 +212,13 @@ struct PiAgentActivityPanel: View {
             Text(title)
                 .font(.headline.weight(.semibold))
             Text(message)
-                .font(.callout)
+                .font(AppTheme.Font.callout)
                 .foregroundStyle(AppTheme.mutedText)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(AppTheme.contentFill).stroke(AppTheme.contentStroke, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: AppTheme.Chat.panelCornerRadius, style: .continuous).fill(AppTheme.contentFill).stroke(AppTheme.contentStroke, lineWidth: 1))
     }
 }
 
@@ -251,7 +251,7 @@ struct PiAgentCurrentPlanCard: View {
         if showsSurface {
             content
                 .padding(12)
-                .appContentSurface(cornerRadius: 14)
+                .appContentSurface(cornerRadius: AppTheme.Chat.panelCornerRadius)
         } else {
             content
         }
@@ -288,7 +288,7 @@ struct PiAgentCurrentPlanCard: View {
 
             if items.isEmpty {
                 Text("No active plan items")
-                    .font(.callout)
+                    .font(AppTheme.Font.callout)
                     .foregroundStyle(AppTheme.mutedText)
             } else {
                 VStack(alignment: .leading, spacing: 0) {
@@ -304,7 +304,7 @@ struct PiAgentCurrentPlanCard: View {
                                 .foregroundStyle(color(for: item.status))
                         }
                         Text(item.title)
-                            .font(.callout)
+                            .font(AppTheme.Font.callout)
                             .foregroundStyle(item.status == .done || item.status == .skipped ? AppTheme.mutedText : .primary)
                             .strikethrough(item.status == .done || item.status == .skipped, color: AppTheme.mutedText)
                             .lineLimit(3)
@@ -403,7 +403,7 @@ private struct PiAgentActivitySubagentsCard: View {
             }
         }
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.82)).stroke(AppTheme.contentStroke, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.82)).stroke(AppTheme.contentStroke, lineWidth: 1))
     }
 }
 
@@ -882,7 +882,7 @@ private struct PiAgentActivityRow: View {
             }
         }
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(isSelected ? AppTheme.selectionFill : AppTheme.contentSubtleFill.opacity(0.55)).stroke(isSelected ? AppTheme.selectionStroke : AppTheme.contentStroke, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius, style: .continuous).fill(isSelected ? AppTheme.selectionFill : AppTheme.contentSubtleFill.opacity(0.55)).stroke(isSelected ? AppTheme.selectionStroke : AppTheme.contentStroke, lineWidth: 1))
     }
 }
 
@@ -955,7 +955,7 @@ private struct PiAgentActivityDetail: View {
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(9)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.6)))
+            .background(RoundedRectangle(cornerRadius: AppTheme.Chat.subCardCornerRadius, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.6)))
     }
 
     private func resolvedURL(for path: String) -> URL? {
@@ -1011,7 +1011,7 @@ private struct PiAgentCodePreview: View {
                     .padding(9)
             }
             .frame(maxHeight: maxHeight)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(AppTheme.textContentFill))
+            .background(RoundedRectangle(cornerRadius: AppTheme.Chat.subCardCornerRadius, style: .continuous).fill(AppTheme.textContentFill))
         }
         .onAppear(perform: rebuildDisplayText)
         .onChange(of: text) { _, _ in rebuildDisplayText() }
@@ -1138,7 +1138,7 @@ private struct PiAgentDiffView: View {
                 .padding(.vertical, 6)
             }
             .frame(maxHeight: 320)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(AppTheme.textContentFill))
+            .background(RoundedRectangle(cornerRadius: AppTheme.Chat.subCardCornerRadius, style: .continuous).fill(AppTheme.textContentFill))
         }
         .task(id: diffText) {
             isLoading = true

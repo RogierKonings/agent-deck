@@ -145,7 +145,7 @@ struct PiAgentComposerBox: View {
             ZStack(alignment: .topLeading) {
                 if text.isEmpty {
                     Text(placeholder)
-                        .font(.body)
+                        .font(AppTheme.Font.body)
                         .foregroundStyle(AppTheme.mutedText.opacity(0.72))
                         .padding(.horizontal, 16)
                         .padding(.vertical, 14)
@@ -259,19 +259,19 @@ struct PiAgentComposerBox: View {
             .padding(.horizontal, 12)
             .padding(.bottom, 12)
         }
-        .appContentSurface(cornerRadius: 20)
+        .appContentSurface(cornerRadius: AppTheme.Chat.composerCornerRadius)
         .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
+            RoundedRectangle(cornerRadius: AppTheme.Chat.composerCornerRadius, style: .continuous)
                 .stroke(isDropTargeted ? AppTheme.brandAccent.opacity(0.7) : Color.clear, lineWidth: isDropTargeted ? 2 : 1)
         )
         .overlay {
             if isDropTargeted {
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    RoundedRectangle(cornerRadius: AppTheme.Chat.composerCornerRadius, style: .continuous)
                         .fill(AppTheme.brandAccent.opacity(0.10))
                         .allowsHitTesting(false)
             }
             if isDisabled {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                RoundedRectangle(cornerRadius: AppTheme.Chat.composerCornerRadius, style: .continuous)
                     .fill(AppTheme.contentFill.opacity(0.35))
                     .allowsHitTesting(false)
             }
@@ -319,7 +319,7 @@ struct PiAgentComposerBox: View {
             guard !Task.isCancelled else { return }
             resolvedBranch = (branch?.isEmpty == false && branch != "HEAD") ? branch : nil
         }
-        .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: AppTheme.Chat.composerCornerRadius, style: .continuous))
     }
 
     private var composerActionControls: some View {
@@ -751,7 +751,7 @@ struct PiAgentSubagentPopover: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
                 Label("Deck agents", systemImage: "paperplane")
-                    .font(.body.weight(.medium))
+                    .font(AppTheme.Font.body.weight(.medium))
                 Spacer(minLength: 24)
                 Toggle("Deck agents", isOn: $isEnabled)
                     .appSwitch()
@@ -969,15 +969,15 @@ struct PiAgentImageAttachmentThumbnail: View {
                 }
             }
             .frame(width: 68, height: 68)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: AppTheme.Chat.thumbnailCornerRadius, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: AppTheme.Chat.thumbnailCornerRadius, style: .continuous)
                     .stroke(AppTheme.contentStroke, lineWidth: 1)
             )
 
             Button(action: onRemove) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .bold))
+                    .font(AppTheme.Font.caption2.weight(.bold))
                     .foregroundStyle(.white)
                     .frame(width: 18, height: 18)
                     .background(Circle().fill(.black.opacity(0.7)))
@@ -1305,7 +1305,7 @@ private struct PiAgentComposerProjectPickerPopover: View {
                                 ProjectIconView(imageURL: project.iconFileURL, symbolName: project.fallbackSymbolName, size: 24, assetName: project.projectType.assetName)
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(project.repositoryDisplayName)
-                                        .font(.callout.weight(.semibold))
+                                        .font(AppTheme.Font.callout.weight(.semibold))
                                         .foregroundStyle(.primary)
                                         .lineLimit(1)
                                     Text(project.path)
@@ -1329,7 +1329,7 @@ private struct PiAgentComposerProjectPickerPopover: View {
             .frame(maxHeight: 300)
         }
         .frame(width: 340)
-        .appGlassPanel(cornerRadius: 14)
+        .appGlassPanel(cornerRadius: AppTheme.Chat.panelCornerRadius)
     }
 }
 
@@ -1342,7 +1342,7 @@ struct PiAgentSendButton: View {
     var body: some View {
         Button(action: isRunning ? stopAction : sendAction) {
             Image(systemName: isRunning ? "stop.fill" : "arrow.up")
-                .font(.system(size: 15, weight: .bold))
+                .font(AppTheme.Font.body.weight(.bold))
                 .contentTransition(.symbolEffect(.replace))
                 .frame(width: 18, height: 18)
         }
@@ -2042,7 +2042,7 @@ struct PiAgentModelStatus: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
-        .font(.footnote.weight(.semibold))
+        .font(AppTheme.Font.footnote.weight(.semibold))
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .appGlassCapsule()
@@ -2072,7 +2072,7 @@ struct PiAgentThinkingStatus: View {
 
     var body: some View {
         Label("Thinking: \(displayLevel)", systemImage: "brain.head.profile")
-            .font(.footnote.weight(.semibold))
+            .font(AppTheme.Font.footnote.weight(.semibold))
             .lineLimit(1)
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
@@ -2312,7 +2312,7 @@ struct PiAgentModelPicker: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
-        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(isSelected ? AppTheme.selectionFill : Color.clear))
+        .background(RoundedRectangle(cornerRadius: AppTheme.Chat.chipCornerRadius, style: .continuous).fill(isSelected ? AppTheme.selectionFill : Color.clear))
     }
 
     @ViewBuilder
@@ -2457,7 +2457,7 @@ struct PiAgentThinkingPicker: View {
     private func thinkingLevelRow(_ candidate: String) -> some View {
         let isSelected = candidate == resolvedLevel
         let isHovered = hoveredLevel == candidate
-        let rowShape = RoundedRectangle(cornerRadius: 9, style: .continuous)
+        let rowShape = RoundedRectangle(cornerRadius: AppTheme.Chat.chipCornerRadius, style: .continuous)
 
         return Button {
             optimisticLevel = candidate

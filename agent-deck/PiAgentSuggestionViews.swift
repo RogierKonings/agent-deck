@@ -133,10 +133,10 @@ struct PiAgentCommandSuggestions: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         // Clip row backgrounds to the panel's rounded shape so the highlight
         // doesn't bleed past the corners.
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .appGlassPanel(cornerRadius: 12)
+        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous))
+        .appGlassPanel(cornerRadius: AppTheme.Chat.suggestionCornerRadius)
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous)
                 .strokeBorder(AppTheme.contentStroke, lineWidth: 0.5)
         )
         .shadow(color: .black.opacity(0.18), radius: 14, x: 0, y: 6)
@@ -156,15 +156,15 @@ struct PiAgentCommandSuggestions: View {
     private func sectionHeader(for kind: ComposerSuggestionItem.Kind) -> some View {
         HStack(spacing: 4) {
             Image(systemName: sectionIcon(kind))
-                .font(.system(size: 9, weight: .semibold))
+                .font(AppTheme.Font.caption2.weight(.semibold))
             Text(sectionTitle(kind))
-                .font(.caption2.weight(.semibold))
+                .font(AppTheme.Font.caption2.weight(.semibold))
             // File scans are capped at 10 results — surface the cap on the same
             // row so the user knows to keep typing to narrow things down.
             if kind == .file && items.count >= 10 {
                 Spacer(minLength: 8)
                 Text("showing top 10 — keep typing to refine")
-                    .font(.caption2.italic())
+                    .font(AppTheme.Font.caption2.italic())
             }
         }
         .foregroundStyle(AppTheme.mutedText)
@@ -179,11 +179,11 @@ struct PiAgentCommandSuggestions: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: icon(for: item))
-                    .font(.caption)
+                    .font(AppTheme.Font.caption)
                     .foregroundStyle(isSelected ? AppTheme.brandAccent : AppTheme.mutedText)
                     .frame(width: 16)
                 Text(item.title)
-                    .font(.callout.monospaced())
+                    .font(AppTheme.Font.callout.monospaced())
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 0)
@@ -284,10 +284,10 @@ struct PiAgentSlashSuggestions: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         // Clip row backgrounds to the panel's rounded shape so the highlight
         // doesn't bleed past the corners.
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .appGlassPanel(cornerRadius: 12)
+        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous))
+        .appGlassPanel(cornerRadius: AppTheme.Chat.suggestionCornerRadius)
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous)
                 .strokeBorder(AppTheme.contentStroke, lineWidth: 0.5)
         )
         .shadow(color: .black.opacity(0.18), radius: 14, x: 0, y: 6)
@@ -307,7 +307,7 @@ struct PiAgentSlashSuggestions: View {
             if let onBack {
                 Button(action: onBack) {
                     Image(systemName: "chevron.left")
-                        .font(.caption.weight(.semibold))
+                        .font(AppTheme.Font.caption.weight(.semibold))
                         .foregroundStyle(AppTheme.mutedText)
                         .frame(width: 18, height: 18)
                 }
@@ -315,7 +315,7 @@ struct PiAgentSlashSuggestions: View {
                 .help("Back")
             }
             Text(title)
-                .font(.caption2.weight(.semibold))
+                .font(AppTheme.Font.caption2.weight(.semibold))
                 .foregroundStyle(AppTheme.mutedText)
             Spacer(minLength: 0)
         }
@@ -338,7 +338,7 @@ struct PiAgentSlashSuggestions: View {
         switch row.kind {
         case .header(let label):
             Text(label)
-                .font(.caption2.weight(.semibold))
+                .font(AppTheme.Font.caption2.weight(.semibold))
                 .foregroundStyle(AppTheme.mutedText)
                 .padding(.horizontal, 10)
                 .frame(maxWidth: .infinity, minHeight: headerHeight, maxHeight: headerHeight, alignment: .leading)
@@ -363,15 +363,15 @@ struct PiAgentSlashSuggestions: View {
         Button { onSelect(row) } label: {
             HStack(spacing: 8) {
                 Image(systemName: icon(for: kind))
-                    .font(.caption)
+                    .font(AppTheme.Font.caption)
                     .foregroundStyle(highlighted ? AppTheme.brandAccent : AppTheme.mutedText)
                     .frame(width: 16)
                 Text(label(for: kind))
-                    .font(.callout.weight(.medium))
+                    .font(AppTheme.Font.callout.weight(.medium))
                     .lineLimit(1)
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.semibold))
+                    .font(AppTheme.Font.caption2.weight(.semibold))
                     .foregroundStyle(AppTheme.mutedText)
             }
             .foregroundStyle(.primary)
@@ -392,16 +392,16 @@ struct PiAgentSlashSuggestions: View {
         Button { onSelect(row) } label: {
             HStack(spacing: 8) {
                 Image(systemName: icon(for: item.kind))
-                    .font(.caption)
+                    .font(AppTheme.Font.caption)
                     .foregroundStyle(highlighted ? AppTheme.brandAccent : AppTheme.mutedText)
                     .frame(width: 16)
                 Text(item.displayName)
-                    .font(.callout.monospaced())
+                    .font(AppTheme.Font.callout.monospaced())
                     .lineLimit(1)
                     .truncationMode(.middle)
                 if let description = item.description {
                     Text(description)
-                        .font(.caption)
+                        .font(AppTheme.Font.caption)
                         .foregroundStyle(AppTheme.mutedText)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -409,7 +409,7 @@ struct PiAgentSlashSuggestions: View {
                 Spacer(minLength: 6)
                 if let scope = item.scopeLabel {
                     Text(scope)
-                        .font(.caption2.weight(.semibold))
+                        .font(AppTheme.Font.caption2.weight(.semibold))
                         .foregroundStyle(AppTheme.mutedText)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
@@ -468,7 +468,7 @@ struct PiAgentSlashSelectionChip: View {
             }
             .buttonStyle(.plain)
         }
-        .font(.caption.weight(.medium))
+        .font(AppTheme.Font.caption.weight(.medium))
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .appGlassCapsule()
@@ -504,13 +504,13 @@ struct ShortcutComboHint: View {
             ForEach(symbols.indices, id: \.self) { index in
                 if index > 0 {
                     Image(systemName: "plus")
-                        .font(.system(size: 7, weight: .bold))
+                        .font(AppTheme.Font.smallLabel)
                 }
                 Image(systemName: symbols[index])
-                    .font(.caption2.weight(.semibold))
+                    .font(AppTheme.Font.caption2.weight(.semibold))
             }
             Text(text)
-                .font(.caption.weight(.medium))
+                .font(AppTheme.Font.caption.weight(.medium))
                 .fontWidth(.condensed)
         }
         .foregroundStyle(AppTheme.mutedText)
@@ -531,9 +531,9 @@ struct PiAgentUIRequestInlineNotice: View {
                 .foregroundStyle(AppTheme.brandAccent)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Pi is waiting for your response")
-                    .font(.callout.weight(.semibold))
+                    .font(AppTheme.Font.callout.weight(.semibold))
                 Text(request.title)
-                    .font(.caption)
+                    .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
                     .lineLimit(1)
             }
@@ -545,7 +545,7 @@ struct PiAgentUIRequestInlineNotice: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous)
                 .fill(AppTheme.contentFill)
                 .stroke(AppTheme.contentStroke, lineWidth: 1)
         )
@@ -665,7 +665,7 @@ struct PiAgentUIRequestCard: View {
                                 }
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 10)
-                                .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous))
                             }
                             .buttonStyle(.plain)
                         }
@@ -723,7 +723,7 @@ struct PiAgentUIRequestCard: View {
         }
         .background(
             isComposingFreeform ? AppTheme.brandAccent.opacity(0.12) : AppTheme.contentSubtleFill,
-            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+            in: RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous)
         )
     }
 
@@ -750,7 +750,7 @@ struct PiAgentUIRequestCard: View {
                             }
                             .padding(.horizontal, 12)
                             .padding(.vertical, 10)
-                            .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous))
                         }
                         .buttonStyle(.plain)
                     }
@@ -793,7 +793,7 @@ struct PiAgentUIRequestCard: View {
                                 .fontWeight(.semibold)
                             if let description = request.optionDescriptions[option], !description.isEmpty {
                                 Text(description)
-                                    .font(.caption)
+                                    .font(AppTheme.Font.caption)
                                     .foregroundStyle(AppTheme.mutedText)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
@@ -802,7 +802,7 @@ struct PiAgentUIRequestCard: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
-                    .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous))
                 }
                 .buttonStyle(.plain)
             }
@@ -846,7 +846,7 @@ struct PiAgentUIRequestCard: View {
                 }
                 .background(
                     isComposingFreeform ? AppTheme.brandAccent.opacity(0.12) : AppTheme.contentSubtleFill,
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    in: RoundedRectangle(cornerRadius: AppTheme.Chat.suggestionCornerRadius, style: .continuous)
                 )
             }
 

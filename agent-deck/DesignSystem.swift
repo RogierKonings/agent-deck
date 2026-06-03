@@ -50,6 +50,12 @@ enum AppTheme {
         static let cardCornerRadius: CGFloat = 12
         static let codeCornerRadius: CGFloat = 8
         static let inputCornerRadius: CGFloat = 8
+        static let panelCornerRadius: CGFloat = 14
+        static let subCardCornerRadius: CGFloat = 10
+        static let thumbnailCornerRadius: CGFloat = 14
+        static let composerCornerRadius: CGFloat = 20
+        static let suggestionCornerRadius: CGFloat = 12
+        static let chipCornerRadius: CGFloat = 6
 
         static let bubbleHPadding: CGFloat = 16
         static let bubbleVPadding: CGFloat = 12

@@ -226,6 +226,106 @@ private final class PiAgentNativeSubagentGlyph: NSView {
     }
 }
 
+// MARK: - Capped + expandable markdown
+
+/// Markdown that renders to a max height when collapsed (with a bottom fade and a
+/// "Show more" toggle) and to its full height when expanded. Reused by the single
+/// and parallel subagent blocks. Self-measures; the toggle drives the re-measure
+/// hook so the row re-tiles.
+final class PiAgentNativeExpandableMarkdown: NSView {
+    private let clipView = NSView()
+    private let container = NativeMarkdownTextContainer()
+    private let applier = MarkdownSourceApplier()
+    private let fadeLayer = CAGradientLayer()
+    private let toggle = NSButton()
+
+    private var clipHeightC: NSLayoutConstraint!
+    private(set) var isExpanded = false
+    var collapsedCap: CGFloat = 150
+    var fadeColor: NSColor = .clear
+    var onToggle: (() -> Void)?
+
+    private var currentSource: String?
+    private var measuredContentHeight: CGFloat = 0
+    private var capped = false
+
+    init() {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+
+        clipView.translatesAutoresizingMaskIntoConstraints = false
+        clipView.wantsLayer = true
+        clipView.layer?.masksToBounds = true
+        addSubview(clipView)
+
+        container.translatesAutoresizingMaskIntoConstraints = false
+        clipView.addSubview(container)
+
+        fadeLayer.isHidden = true
+        fadeLayer.startPoint = CGPoint(x: 0.5, y: 0)
+        fadeLayer.endPoint = CGPoint(x: 0.5, y: 1)
+        clipView.layer?.addSublayer(fadeLayer)
+
+        toggle.translatesAutoresizingMaskIntoConstraints = false
+        toggle.isBordered = false
+        toggle.bezelStyle = .inline
+        toggle.font = NativeTranscriptFont.caption(.semibold)
+        toggle.contentTintColor = AppTheme.ns(AppTheme.brandAccent)
+        toggle.target = self
+        toggle.action = #selector(toggleTapped)
+        toggle.isHidden = true
+        addSubview(toggle)
+
+        clipHeightC = clipView.heightAnchor.constraint(equalToConstant: 0)
+        NSLayoutConstraint.activate([
+            clipView.topAnchor.constraint(equalTo: topAnchor),
+            clipView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            clipView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            clipHeightC,
+            container.topAnchor.constraint(equalTo: clipView.topAnchor),
+            container.leadingAnchor.constraint(equalTo: clipView.leadingAnchor),
+            container.trailingAnchor.constraint(equalTo: clipView.trailingAnchor),
+            toggle.topAnchor.constraint(equalTo: clipView.bottomAnchor, constant: 4),
+            toggle.leadingAnchor.constraint(equalTo: leadingAnchor),
+            toggle.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override var isFlipped: Bool { true }
+
+    func configure(source: String) {
+        if source != currentSource { isExpanded = false; currentSource = source }
+        applier.apply(source: source, to: container)
+    }
+
+    func measuredHeight(forWidth width: CGFloat) -> CGFloat {
+        measuredContentHeight = container.measureHeight(forWidth: width)
+        capped = measuredContentHeight > collapsedCap + 24
+        let visible = (isExpanded || !capped) ? measuredContentHeight : collapsedCap
+        clipHeightC.constant = visible
+        toggle.isHidden = !capped
+        toggle.title = isExpanded ? "Show less" : "Show more"
+        let toggleH = capped ? ceil(toggle.intrinsicContentSize.height) + 4 : 0
+        return ceil(visible + toggleH)
+    }
+
+    override func layout() {
+        super.layout()
+        let showFade = capped && !isExpanded
+        fadeLayer.isHidden = !showFade
+        if showFade {
+            fadeLayer.frame = CGRect(x: 0, y: clipView.bounds.height - 30, width: clipView.bounds.width, height: 30)
+            effectiveAppearance.performAsCurrentDrawingAppearance {
+                fadeLayer.colors = [fadeColor.withAlphaComponent(0).cgColor, fadeColor.cgColor]
+            }
+        }
+    }
+
+    @objc private func toggleTapped() { isExpanded.toggle(); onToggle?() }
+    func cancel() { applier.cancel() }
+}
+
 // MARK: - Native subagent card view
 
 final class PiAgentNativeSubagentRunCardView: NSView, PiAgentNativeRowContent {
@@ -234,8 +334,7 @@ final class PiAgentNativeSubagentRunCardView: NSView, PiAgentNativeRowContent {
     private let nameLabel = NSTextField(labelWithString: "")
     private let metaLabel = NSTextField(labelWithString: "")
     private let taskHeader = NSTextField(labelWithString: "TASK")
-    private let markdownContainer = NativeMarkdownTextContainer()
-    private let markdownApplier = MarkdownSourceApplier()
+    private let task = PiAgentNativeExpandableMarkdown()
     private let buttonStack = NSStackView()
 
     private var payload: NativeSubagentCardPayload?
@@ -280,13 +379,13 @@ final class PiAgentNativeSubagentRunCardView: NSView, PiAgentNativeRowContent {
         taskHeader.font = NSFont.systemFont(ofSize: 9, weight: .bold)
         taskHeader.textColor = AppTheme.ns(AppTheme.mutedText).withAlphaComponent(0.85)
 
-        markdownContainer.translatesAutoresizingMaskIntoConstraints = false
+        task.onToggle = { [weak self] in self?.onIntrinsicHeightChange?() }
 
         surface.addSubview(headerStack)
         surface.addSubview(taskHeader)
-        surface.addSubview(markdownContainer)
+        surface.addSubview(task)
 
-        let mdBottom = markdownContainer.bottomAnchor.constraint(equalTo: surface.bottomAnchor, constant: -pad)
+        let mdBottom = task.bottomAnchor.constraint(equalTo: surface.bottomAnchor, constant: -pad)
         mdBottom.priority = NSLayoutConstraint.Priority(999)
 
         NSLayoutConstraint.activate([
@@ -302,9 +401,9 @@ final class PiAgentNativeSubagentRunCardView: NSView, PiAgentNativeRowContent {
             taskHeader.topAnchor.constraint(equalTo: headerStack.bottomAnchor, constant: headerToTask),
             taskHeader.leadingAnchor.constraint(equalTo: surface.leadingAnchor, constant: pad),
 
-            markdownContainer.topAnchor.constraint(equalTo: taskHeader.bottomAnchor, constant: taskHeaderToBody),
-            markdownContainer.leadingAnchor.constraint(equalTo: surface.leadingAnchor, constant: pad),
-            markdownContainer.trailingAnchor.constraint(equalTo: surface.trailingAnchor, constant: -pad),
+            task.topAnchor.constraint(equalTo: taskHeader.bottomAnchor, constant: taskHeaderToBody),
+            task.leadingAnchor.constraint(equalTo: surface.leadingAnchor, constant: pad),
+            task.trailingAnchor.constraint(equalTo: surface.trailingAnchor, constant: -pad),
             mdBottom
         ])
     }
@@ -319,7 +418,8 @@ final class PiAgentNativeSubagentRunCardView: NSView, PiAgentNativeRowContent {
         glyph.configure(color: payload.statusColor, isActive: payload.isActive, avatarURL: payload.avatarURL)
         nameLabel.stringValue = payload.agentName
         metaLabel.attributedStringValue = metaLine(payload)
-        markdownApplier.apply(source: payload.task, to: markdownContainer)
+        task.fadeColor = AppTheme.ns(AppTheme.contentSubtleFill.opacity(0.55))
+        task.configure(source: payload.task)
         rebuildButtons(payload)
         needsLayout = true
     }
@@ -398,11 +498,11 @@ final class PiAgentNativeSubagentRunCardView: NSView, PiAgentNativeRowContent {
         let metaH = ceil(metaLabel.intrinsicContentSize.height)
         let headerH = max(36, nameH + 3 + metaH)
         let taskHeaderH = ceil(taskHeader.intrinsicContentSize.height)
-        let markdownH = markdownContainer.measureHeight(forWidth: innerWidth)
+        let markdownH = task.measuredHeight(forWidth: innerWidth)
         return ceil(pad + headerH + headerToTask + taskHeaderH + taskHeaderToBody + markdownH + pad)
     }
 
-    func prepareForReuseIfNeeded() { markdownApplier.cancel() }
+    func prepareForReuseIfNeeded() { task.cancel() }
 }
 
 // MARK: - Native key/value popover (run details)
