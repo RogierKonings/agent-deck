@@ -16,7 +16,7 @@ enum AppTheme {
     // styles (.body = 13pt, .caption = 10pt, .caption2 = 9pt) render too small
     // for comfortable reading in a conversation thread. These tokens bump every
     // tier up ~1pt so body text lands at 14pt, captions at 11–12pt — matching
-    // the sizing used by osaurus and aligned with Apple HIG guidance to avoid
+    // aligned with Apple HIG guidance to avoid
     // sub-11pt readable text.
     //
     // Non-chat views (settings, management, sidebar) can keep using semantic

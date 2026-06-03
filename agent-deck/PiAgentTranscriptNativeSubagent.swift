@@ -8,7 +8,7 @@ import SwiftUI
 // reuses ONE markdown container across vends and only rebuilds on content change.
 //
 // Parallel-mode runs (a grid of child tiles) still render hosted for now; this
-// covers the single-agent case. Mirrors PiNativeSubagentRunCard's `else` branch.
+// covers the single-agent case.
 
 // MARK: - Payload (computed in the items pass; the view is a dumb renderer)
 
@@ -175,8 +175,8 @@ private final class PiAgentNativeSubagentGlyph: NSView {
         avatar.layer?.masksToBounds = true
         addSubview(avatar)
         NSLayoutConstraint.activate([
-            widthAnchor.constraint(equalToConstant: 34),
-            heightAnchor.constraint(equalToConstant: 34),
+            widthAnchor.constraint(equalToConstant: 36),
+            heightAnchor.constraint(equalToConstant: 36),
             avatar.widthAnchor.constraint(equalToConstant: 28),
             avatar.heightAnchor.constraint(equalToConstant: 28),
             avatar.centerXAnchor.constraint(equalTo: centerXAnchor),
@@ -187,16 +187,16 @@ private final class PiAgentNativeSubagentGlyph: NSView {
     override var isFlipped: Bool { true }
 
     func configure(color: NSColor, isActive: Bool, avatarURL: URL?) {
-        bgLayer.fillColor = color.withAlphaComponent(isActive ? 0.10 : 0.06).cgColor
-        strokeLayer.strokeColor = color.withAlphaComponent(isActive ? 0.22 : 0.12).cgColor
+        bgLayer.fillColor = color.withAlphaComponent(isActive ? 0.12 : 0.08).cgColor
+        strokeLayer.strokeColor = color.withAlphaComponent(isActive ? 0.30 : 0.16).cgColor
         ringLayer.strokeColor = color.cgColor
         ringLayer.isHidden = !isActive
         if let nsImage = AgentImageLoader.image(at: avatarURL) {
             avatar.image = nsImage
             avatar.contentTintColor = nil
         } else {
-            avatar.image = NSImage(systemSymbolName: "paperplane", accessibilityDescription: nil)?
-                .withSymbolConfiguration(.init(pointSize: 18, weight: .medium))
+            avatar.image = NSImage(systemSymbolName: "paperplane.fill", accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: 15, weight: .medium))
             avatar.contentTintColor = color
         }
         if isActive { startSpin() } else { ringLayer.removeAnimation(forKey: "spin") }
@@ -221,7 +221,6 @@ private final class PiAgentNativeSubagentGlyph: NSView {
         bgLayer.frame = bounds; strokeLayer.frame = bounds
         ringLayer.frame = bounds
         ringLayer.path = CGPath(ellipseIn: bounds.insetBy(dx: 2, dy: 2), transform: nil)
-        // Rotate around center.
         ringLayer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
         ringLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
     }
@@ -233,127 +232,80 @@ final class PiAgentNativeSubagentRunCardView: NSView, PiAgentNativeRowContent {
     private let surface = NativeCardSurface()
     private let glyph = PiAgentNativeSubagentGlyph()
     private let nameLabel = NSTextField(labelWithString: "")
-    private let runIDLabel = NSTextField(labelWithString: "")
-    private let runIDCapsule = NativeCardSurface()
-    private let statusLabel = NSTextField(labelWithString: "")
-    private let taskHeader = NSTextField(labelWithString: "Task")
-    private let taskCard = NativeCardSurface()
+    private let metaLabel = NSTextField(labelWithString: "")
+    private let taskHeader = NSTextField(labelWithString: "TASK")
     private let markdownContainer = NativeMarkdownTextContainer()
     private let markdownApplier = MarkdownSourceApplier()
-    private let metricsStack = NSStackView()
     private let buttonStack = NSStackView()
 
     private var payload: NativeSubagentCardPayload?
-
     var onIntrinsicHeightChange: (() -> Void)?
 
-    private let pad: CGFloat = 14
-    private let taskHPad: CGFloat = 12
-    private let taskVPad: CGFloat = 10
-
-    private var taskTopC: NSLayoutConstraint!
-    private var metricsTopC: NSLayoutConstraint!
+    private let pad: CGFloat = 16
+    private let headerToTask: CGFloat = 14
+    private let taskHeaderToBody: CGFloat = 6
 
     required init() {
         super.init(frame: .zero)
         wantsLayer = true
 
         surface.translatesAutoresizingMaskIntoConstraints = false
-        surface.cardCornerRadius = 14
+        surface.cardCornerRadius = 16
         addSubview(surface)
 
-        nameLabel.font = NSFont.preferredFont(forTextStyle: .headline)
+        nameLabel.font = NSFont.systemFont(ofSize: NSFont.preferredFont(forTextStyle: .body).pointSize, weight: .semibold)
         nameLabel.lineBreakMode = .byTruncatingTail
+        nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        runIDLabel.font = .monospacedSystemFont(ofSize: 10, weight: .medium)
-        runIDLabel.textColor = AppTheme.ns(AppTheme.mutedText)
-        runIDCapsule.translatesAutoresizingMaskIntoConstraints = false
-        runIDCapsule.cardCornerRadius = 6
-        runIDCapsule.fillColor = AppTheme.ns(AppTheme.contentSubtleFill.opacity(0.65))
-        runIDCapsule.strokeColor = AppTheme.ns(AppTheme.contentStroke)
+        metaLabel.lineBreakMode = .byTruncatingTail
+        metaLabel.maximumNumberOfLines = 1
+        metaLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        statusLabel.font = NativeTranscriptFont.caption(.semibold)
-
-        let headerStack = NSStackView()
-        headerStack.translatesAutoresizingMaskIntoConstraints = false
-        headerStack.orientation = .horizontal
-        headerStack.spacing = 10
-        headerStack.alignment = .centerY
-        let titleStack = NSStackView()
+        let titleStack = NSStackView(views: [nameLabel, metaLabel])
         titleStack.orientation = .vertical
         titleStack.alignment = .leading
         titleStack.spacing = 3
-        let nameRow = NSStackView(views: [nameLabel, runIDCapsule])
-        nameRow.orientation = .horizontal
-        nameRow.spacing = 7
-        nameRow.alignment = .firstBaseline
-        titleStack.addArrangedSubview(nameRow)
-        titleStack.addArrangedSubview(statusLabel)
-        headerStack.addArrangedSubview(glyph)
-        headerStack.addArrangedSubview(titleStack)
-        headerStack.addArrangedSubview(NSView())  // spacer
+
         buttonStack.orientation = .horizontal
-        buttonStack.spacing = 6
-        headerStack.addArrangedSubview(buttonStack)
+        buttonStack.spacing = 2
 
-        runIDLabel.translatesAutoresizingMaskIntoConstraints = false
-        runIDCapsule.addSubview(runIDLabel)
-        NSLayoutConstraint.activate([
-            runIDLabel.leadingAnchor.constraint(equalTo: runIDCapsule.leadingAnchor, constant: 5),
-            runIDLabel.trailingAnchor.constraint(equalTo: runIDCapsule.trailingAnchor, constant: -5),
-            runIDLabel.topAnchor.constraint(equalTo: runIDCapsule.topAnchor, constant: 2),
-            runIDLabel.bottomAnchor.constraint(equalTo: runIDCapsule.bottomAnchor, constant: -2)
-        ])
+        let headerStack = NSStackView(views: [glyph, titleStack, NSView(), buttonStack])
+        headerStack.translatesAutoresizingMaskIntoConstraints = false
+        headerStack.orientation = .horizontal
+        headerStack.spacing = 11
+        headerStack.alignment = .centerY
+        headerStack.setHuggingPriority(.defaultLow, for: .horizontal)
 
-        taskHeader.font = NativeTranscriptFont.caption(.semibold)
-        taskHeader.textColor = AppTheme.ns(AppTheme.mutedText)
-        taskCard.translatesAutoresizingMaskIntoConstraints = false
-        taskCard.cardCornerRadius = 14
-        taskCard.fillColor = AppTheme.ns(AppTheme.contentSubtleFill.opacity(0.65))
-        taskCard.strokeColor = AppTheme.ns(AppTheme.contentStroke)
+        // "TASK" eyebrow label — small, tracked-out, muted.
+        taskHeader.font = NSFont.systemFont(ofSize: 9, weight: .bold)
+        taskHeader.textColor = AppTheme.ns(AppTheme.mutedText).withAlphaComponent(0.85)
+
         markdownContainer.translatesAutoresizingMaskIntoConstraints = false
-        let taskInner = NSStackView(views: [taskHeader, markdownContainer])
-        taskInner.translatesAutoresizingMaskIntoConstraints = false
-        taskInner.orientation = .vertical
-        taskInner.alignment = .leading
-        taskInner.spacing = 8
-        taskCard.addSubview(taskInner)
-        NSLayoutConstraint.activate([
-            taskInner.leadingAnchor.constraint(equalTo: taskCard.leadingAnchor, constant: taskHPad),
-            taskInner.trailingAnchor.constraint(equalTo: taskCard.trailingAnchor, constant: -taskHPad),
-            taskInner.topAnchor.constraint(equalTo: taskCard.topAnchor, constant: taskVPad),
-            taskInner.bottomAnchor.constraint(equalTo: taskCard.bottomAnchor, constant: -taskVPad),
-            markdownContainer.widthAnchor.constraint(equalTo: taskInner.widthAnchor)
-        ])
-
-        metricsStack.translatesAutoresizingMaskIntoConstraints = false
-        metricsStack.orientation = .horizontal
-        metricsStack.spacing = 10
 
         surface.addSubview(headerStack)
-        surface.addSubview(taskCard)
-        surface.addSubview(metricsStack)
+        surface.addSubview(taskHeader)
+        surface.addSubview(markdownContainer)
 
-        taskTopC = taskCard.topAnchor.constraint(equalTo: headerStack.bottomAnchor, constant: 12)
-        metricsTopC = metricsStack.topAnchor.constraint(equalTo: taskCard.bottomAnchor, constant: 12)
-        let metricsBottom = metricsStack.bottomAnchor.constraint(equalTo: surface.bottomAnchor, constant: -pad)
-        metricsBottom.priority = NSLayoutConstraint.Priority(999)
+        let mdBottom = markdownContainer.bottomAnchor.constraint(equalTo: surface.bottomAnchor, constant: -pad)
+        mdBottom.priority = NSLayoutConstraint.Priority(999)
 
         NSLayoutConstraint.activate([
             surface.topAnchor.constraint(equalTo: topAnchor),
             surface.bottomAnchor.constraint(equalTo: bottomAnchor),
             surface.leadingAnchor.constraint(equalTo: leadingAnchor),
             surface.trailingAnchor.constraint(equalTo: trailingAnchor),
+
             headerStack.topAnchor.constraint(equalTo: surface.topAnchor, constant: pad),
             headerStack.leadingAnchor.constraint(equalTo: surface.leadingAnchor, constant: pad),
             headerStack.trailingAnchor.constraint(equalTo: surface.trailingAnchor, constant: -pad),
-            taskTopC,
-            taskCard.leadingAnchor.constraint(equalTo: surface.leadingAnchor, constant: pad),
-            taskCard.trailingAnchor.constraint(equalTo: surface.trailingAnchor, constant: -pad),
-            metricsTopC,
-            metricsStack.leadingAnchor.constraint(equalTo: surface.leadingAnchor, constant: pad),
-            metricsStack.trailingAnchor.constraint(lessThanOrEqualTo: surface.trailingAnchor, constant: -pad),
-            metricsBottom
+
+            taskHeader.topAnchor.constraint(equalTo: headerStack.bottomAnchor, constant: headerToTask),
+            taskHeader.leadingAnchor.constraint(equalTo: surface.leadingAnchor, constant: pad),
+
+            markdownContainer.topAnchor.constraint(equalTo: taskHeader.bottomAnchor, constant: taskHeaderToBody),
+            markdownContainer.leadingAnchor.constraint(equalTo: surface.leadingAnchor, constant: pad),
+            markdownContainer.trailingAnchor.constraint(equalTo: surface.trailingAnchor, constant: -pad),
+            mdBottom
         ])
     }
 
@@ -362,66 +314,59 @@ final class PiAgentNativeSubagentRunCardView: NSView, PiAgentNativeRowContent {
 
     func configure(payload: NativeSubagentCardPayload, width rowWidth: CGFloat) {
         self.payload = payload
-        surface.fillColor = AppTheme.ns(AppTheme.contentFill.opacity(0.62))
+        surface.fillColor = AppTheme.ns(AppTheme.contentSubtleFill.opacity(0.55))
         surface.strokeColor = AppTheme.ns(AppTheme.contentStroke)
         glyph.configure(color: payload.statusColor, isActive: payload.isActive, avatarURL: payload.avatarURL)
         nameLabel.stringValue = payload.agentName
-        runIDLabel.stringValue = payload.shortRunID
-        runIDLabel.toolTip = payload.fullRunID
-        statusLabel.stringValue = payload.statusText
-        statusLabel.textColor = payload.statusColor
-
+        metaLabel.attributedStringValue = metaLine(payload)
         markdownApplier.apply(source: payload.task, to: markdownContainer)
-
-        rebuildMetrics(payload.metrics)
         rebuildButtons(payload)
         needsLayout = true
     }
 
-    private func rebuildMetrics(_ metrics: [NativeSubagentCardPayload.Metric]) {
-        metricsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        metricsTopC.constant = metrics.isEmpty ? 0 : 12
-        for m in metrics {
-            let icon = NSImageView()
-            icon.image = NSImage(systemSymbolName: m.icon, accessibilityDescription: nil)?
-                .withSymbolConfiguration(.init(pointSize: NativeTranscriptFont.caption2Size, weight: .semibold))
-            icon.contentTintColor = AppTheme.ns(AppTheme.mutedText)
-            let label = NSTextField(labelWithString: m.text)
-            label.font = NativeTranscriptFont.caption()
-            label.textColor = AppTheme.ns(AppTheme.mutedText)
-            let item = NSStackView(views: [icon, label])
-            item.orientation = .horizontal
-            item.spacing = 3
-            metricsStack.addArrangedSubview(item)
+    /// "● Completed · 1s · 2.3k · 5 tools · gpt-5" — status word colored, the rest muted.
+    private func metaLine(_ payload: NativeSubagentCardPayload) -> NSAttributedString {
+        let muted = AppTheme.ns(AppTheme.mutedText)
+        let caption = NativeTranscriptFont.caption()
+        let captionSemi = NativeTranscriptFont.caption(.semibold)
+        let result = NSMutableAttributedString()
+        result.append(NSAttributedString(string: "● ", attributes: [.foregroundColor: payload.statusColor, .font: NSFont.systemFont(ofSize: 8)]))
+        result.append(NSAttributedString(string: payload.statusText, attributes: [.foregroundColor: payload.statusColor, .font: captionSemi]))
+        let tail = payload.metrics.map(\.text)
+        if !tail.isEmpty {
+            result.append(NSAttributedString(string: "  ·  " + tail.joined(separator: "  ·  "), attributes: [.foregroundColor: muted, .font: caption]))
         }
+        return result
     }
 
     private func rebuildButtons(_ payload: NativeSubagentCardPayload) {
         buttonStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        let info = NSButton(image: NSImage(systemSymbolName: "info.circle", accessibilityDescription: "Run details")!, target: self, action: #selector(showDetails(_:)))
-        info.isBordered = false
-        info.contentTintColor = AppTheme.ns(AppTheme.mutedText)
-        info.toolTip = "Run details"
-        buttonStack.addArrangedSubview(info)
+        buttonStack.addArrangedSubview(iconButton("info.circle", "Run details", #selector(showDetails(_:))))
         if payload.showGraph {
-            buttonStack.addArrangedSubview(smallButton("Graph", #selector(openGraph)))
+            buttonStack.addArrangedSubview(iconButton("point.3.connected.trianglepath.dotted", "Graph", #selector(openGraph)))
         }
-        let sysPrompt = smallButton("System Prompt", #selector(showSystemPrompt(_:)))
-        sysPrompt.isEnabled = payload.canOpenSystemPrompt
-        buttonStack.addArrangedSubview(sysPrompt)
-        buttonStack.addArrangedSubview(smallButton("Transcript", #selector(openTranscript)))
+        let sys = iconButton("doc.text.magnifyingglass", "Final runtime system prompt", #selector(showSystemPrompt(_:)))
+        sys.isEnabled = payload.canOpenSystemPrompt
+        buttonStack.addArrangedSubview(sys)
+        buttonStack.addArrangedSubview(iconButton("text.bubble", "Open transcript", #selector(openTranscript)))
         if payload.isActive {
-            let stop = smallButton("Stop", #selector(stop))
+            let stop = iconButton("stop.circle.fill", "Stop", #selector(stop))
             stop.contentTintColor = .systemRed
             buttonStack.addArrangedSubview(stop)
         }
     }
 
-    private func smallButton(_ title: String, _ action: Selector) -> NSButton {
-        let b = NSButton(title: title, target: self, action: action)
-        b.bezelStyle = .rounded
-        b.controlSize = .small
-        b.font = NativeTranscriptFont.caption(.semibold)
+    private func iconButton(_ symbol: String, _ help: String, _ action: Selector) -> NSButton {
+        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: help)?
+            .withSymbolConfiguration(.init(pointSize: 13, weight: .regular))
+        let b = NSButton(image: image ?? NSImage(), target: self, action: action)
+        b.isBordered = false
+        b.bezelStyle = .smallSquare
+        b.imagePosition = .imageOnly
+        b.contentTintColor = AppTheme.ns(AppTheme.mutedText)
+        b.toolTip = help
+        b.widthAnchor.constraint(equalToConstant: 26).isActive = true
+        b.heightAnchor.constraint(equalToConstant: 24).isActive = true
         return b
     }
 
@@ -448,11 +393,13 @@ final class PiAgentNativeSubagentRunCardView: NSView, PiAgentNativeRowContent {
     // MARK: Measure
 
     func measuredHeight(forWidth rowWidth: CGFloat) -> CGFloat {
-        let innerTaskWidth = max(1, rowWidth - pad * 2 - taskHPad * 2)
-        let headerH = max(34, ceil(nameLabel.intrinsicContentSize.height) + ceil(statusLabel.intrinsicContentSize.height) + 3)
-        let taskH = taskVPad + ceil(taskHeader.intrinsicContentSize.height) + 8 + markdownContainer.measureHeight(forWidth: innerTaskWidth) + taskVPad
-        let metricsH = (payload?.metrics.isEmpty == false) ? 12 + 16 : 0
-        return ceil(pad + headerH + 12 + taskH + CGFloat(metricsH) + pad)
+        let innerWidth = max(1, rowWidth - pad * 2)
+        let nameH = ceil(nameLabel.intrinsicContentSize.height)
+        let metaH = ceil(metaLabel.intrinsicContentSize.height)
+        let headerH = max(36, nameH + 3 + metaH)
+        let taskHeaderH = ceil(taskHeader.intrinsicContentSize.height)
+        let markdownH = markdownContainer.measureHeight(forWidth: innerWidth)
+        return ceil(pad + headerH + headerToTask + taskHeaderH + taskHeaderToBody + markdownH + pad)
     }
 
     func prepareForReuseIfNeeded() { markdownApplier.cancel() }
@@ -496,11 +443,10 @@ final class PiAgentNativeKeyValuePopover: NSViewController {
             row.spacing = 10
             stack.addArrangedSubview(row)
         }
-        if let revealAction {
+        if revealAction != nil {
             let reveal = NSButton(title: "Reveal Run Folder", target: self, action: #selector(revealTapped))
             reveal.bezelStyle = .rounded
             reveal.controlSize = .small
-            objc_setAssociatedObject(reveal, &Self.actionKey, revealAction, .OBJC_ASSOCIATION_RETAIN)
             stack.addArrangedSubview(reveal)
         }
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -516,6 +462,5 @@ final class PiAgentNativeKeyValuePopover: NSViewController {
         view = container
     }
 
-    private static var actionKey: UInt8 = 0
     @objc private func revealTapped() { revealAction?() }
 }
