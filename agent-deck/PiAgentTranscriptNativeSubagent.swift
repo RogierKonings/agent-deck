@@ -152,7 +152,10 @@ final class PiAgentNativeExpandableMarkdown: NSView {
         collapsedLabel.font = NativeTranscriptFont.body()
         collapsedLabel.textColor = .labelColor
         collapsedLabel.maximumNumberOfLines = collapsedLineLimit
-        collapsedLabel.lineBreakMode = .byTruncatingTail
+        // Wrap each paragraph normally and ellipsize only when the whole excerpt
+        // overflows the line limit. `.byTruncatingTail` would instead clip every
+        // long paragraph to a single line with its own ellipsis.
+        collapsedLabel.lineBreakMode = .byWordWrapping
         collapsedLabel.cell?.truncatesLastVisibleLine = true
         wrapper.addSubview(collapsedLabel)
 
@@ -454,6 +457,9 @@ final class PiAgentNativeSubagentParallelCardView: NSView, PiAgentNativeRowConte
     private let pad: CGFloat = 16
     private let childPad: CGFloat = 14
     private let childSpacing: CGFloat = 10
+    // Single-line header height: NSTextField's intrinsic height for a 14pt
+    // semibold run comes up a hair short and clips descenders, so pin a floor.
+    private let headerHeight: CGFloat = 22
     private var surfaceWidthC: NSLayoutConstraint!
 
     required init() {
@@ -466,6 +472,7 @@ final class PiAgentNativeSubagentParallelCardView: NSView, PiAgentNativeRowConte
         // Set the field's own font to the largest run so it sizes tall enough
         // for the body-sized title (otherwise the ascenders clip).
         headerLabel.font = NativeTranscriptFont.body(.semibold)
+        headerLabel.maximumNumberOfLines = 1
         headerLabel.lineBreakMode = .byTruncatingTail
         childStack.translatesAutoresizingMaskIntoConstraints = false
         childStack.orientation = .vertical
@@ -486,6 +493,7 @@ final class PiAgentNativeSubagentParallelCardView: NSView, PiAgentNativeRowConte
             headerLabel.topAnchor.constraint(equalTo: surface.topAnchor, constant: pad),
             headerLabel.leadingAnchor.constraint(equalTo: surface.leadingAnchor, constant: pad),
             headerLabel.trailingAnchor.constraint(equalTo: surface.trailingAnchor, constant: -pad),
+            headerLabel.heightAnchor.constraint(equalToConstant: headerHeight),
             childStack.topAnchor.constraint(equalTo: headerLabel.bottomAnchor, constant: 12),
             childStack.leadingAnchor.constraint(equalTo: surface.leadingAnchor, constant: pad),
             childStack.trailingAnchor.constraint(equalTo: surface.trailingAnchor, constant: -pad),
@@ -558,9 +566,8 @@ final class PiAgentNativeSubagentParallelCardView: NSView, PiAgentNativeRowConte
     }
 
     func measuredHeight(forWidth rowWidth: CGFloat) -> CGFloat {
-        let headerH = max(20, ceil(headerLabel.intrinsicContentSize.height))
         let childInner = max(1, cardWidth(rowWidth) - pad * 2 - childPad * 2)
-        var h = pad + headerH + 12
+        var h = pad + headerHeight + 12
         for (i, blk) in blocks.enumerated() {
             if i > 0 { h += childSpacing }
             h += childPad + blk.measuredHeight(forWidth: childInner) + childPad

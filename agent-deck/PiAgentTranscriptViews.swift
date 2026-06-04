@@ -1575,8 +1575,8 @@ struct PiAgentFullDiffView: View {
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(AppTheme.textContentFill))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(AppTheme.contentStroke, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius, style: .continuous).fill(AppTheme.textContentFill))
+        .overlay(RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius, style: .continuous).stroke(AppTheme.contentStroke, lineWidth: 1))
         .task(id: diffText) {
             lines = diffText.split(separator: "\n", omittingEmptySubsequences: false).map { PiAgentFullDiffLine(raw: String($0)) }
         }
@@ -1999,7 +1999,7 @@ struct PiAgentActivityDetailView: View {
         if let summary = activity.subagentSummary {
             PiAgentSubagentTranscriptView(summary: summary)
                 .padding(10)
-                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.65)))
+                .background(RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.65)))
         } else {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
@@ -3065,7 +3065,7 @@ private struct AttachmentPreviewPopover: View {
                     .resizable()
                     .scaledToFit()
                     .frame(maxWidth: .infinity, maxHeight: 240)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(AppTheme.contentSubtleFill))
+                    .background(RoundedRectangle(cornerRadius: AppTheme.Chat.codeCornerRadius).fill(AppTheme.contentSubtleFill))
             } else {
                 empty("Preview is not available for this image.")
             }

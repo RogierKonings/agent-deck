@@ -13,7 +13,6 @@ struct NativeToolGroupModel {
     var web: Web?
     var chips: Chips?
     var diff: Diff?
-    var copyText: String
 
     struct Web {
         var title: String
@@ -104,8 +103,7 @@ extension NativeToolGroupModel {
         }
 
         guard web != nil || chips != nil || diff != nil else { return nil }
-        let copyText = group.entries.map(\.text).joined(separator: "\n\n")
-        return NativeToolGroupModel(web: web, chips: chips, diff: diff, copyText: copyText)
+        return NativeToolGroupModel(web: web, chips: chips, diff: diff)
     }
 
     private static func callCountText(_ activities: [PiAgentTranscriptActivity]) -> String {
@@ -220,7 +218,7 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
         applyCard(
             fill: .clear, stroke: .clear, cornerRadius: 0,
             hPad: 0, vPad: 0, placement: .leftAtCap,
-            copyText: model.copyText, width: rowWidth
+            copyText: nil, width: rowWidth
         )
         sectionsWidthC.constant = innerCardWidth(forRowWidth: rowWidth)
         rebuildSections()
@@ -250,7 +248,7 @@ final class PiAgentNativeToolGroupView: PiAgentNativeCardRowView {
 
     // MARK: Sub-card chrome
 
-    private func makeSubCard(cornerRadius: CGFloat = 12, fill: NSColor = subtleFill, stroke: NSColor = subtleStroke) -> NativeCardSurface {
+    private func makeSubCard(cornerRadius: CGFloat = AppTheme.Chat.cardCornerRadius, fill: NSColor = subtleFill, stroke: NSColor = subtleStroke) -> NativeCardSurface {
         let card = NativeCardSurface()
         card.translatesAutoresizingMaskIntoConstraints = false
         card.cardCornerRadius = cornerRadius

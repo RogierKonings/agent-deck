@@ -2618,15 +2618,16 @@ struct PiAgentScreen: View {
         ))
 
         // --- Inset pass: NSTableView intercell spacing is uniform, so split
-        // each inter-row gap in half across the two adjacent rows. Gaps:
-        // question↔reply 10, sibling children 8, everything else 12. ---
+        // each inter-row gap in half across the two adjacent rows. Gaps come from
+        // the design system: question↔reply (threadSpacing), sibling children
+        // (childSpacing), everything else (rowSpacing). ---
         if descriptors.count > 1 {
             for i in 0 ..< descriptors.count - 1 {
                 let gap: CGFloat
                 if let tid = descriptors[i].threadID, tid == descriptors[i + 1].threadID {
-                    gap = descriptors[i].isThreadQuestion ? 10 : 8
+                    gap = descriptors[i].isThreadQuestion ? AppTheme.Chat.threadSpacing : AppTheme.Chat.childSpacing
                 } else {
-                    gap = 12
+                    gap = AppTheme.Chat.rowSpacing
                 }
                 descriptors[i].bottomInset += gap / 2
                 descriptors[i + 1].topInset += gap / 2

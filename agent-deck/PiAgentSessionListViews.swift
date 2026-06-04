@@ -27,7 +27,7 @@ struct PiAgentSessionSearchField: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: AppTheme.Chat.subCardCornerRadius, style: .continuous)
                 .fill(AppTheme.contentFill)
                 .stroke(AppTheme.contentStroke, lineWidth: 1)
         )
@@ -184,7 +184,7 @@ private struct PiAgentProjectPickerPopover: View {
                 Text("New Session")
                     .font(.headline)
                 Text("Choose a project for Pi Agent.")
-                    .font(.caption)
+                    .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
             }
             .padding(.horizontal, 12)
@@ -216,7 +216,7 @@ private struct PiAgentProjectPickerPopover: View {
                                         }
                                     }
                                     Text(project.path)
-                                        .font(.caption2)
+                                        .font(AppTheme.Font.caption2)
                                         .foregroundStyle(AppTheme.mutedText)
                                         .lineLimit(1)
                                         .truncationMode(.middle)
@@ -236,7 +236,7 @@ private struct PiAgentProjectPickerPopover: View {
             .frame(maxHeight: 300)
         }
         .frame(width: 340)
-        .appGlassPanel(cornerRadius: 14)
+        .appGlassPanel(cornerRadius: AppTheme.Chat.panelCornerRadius)
     }
 }
 
@@ -284,7 +284,7 @@ struct PiAgentSessionRow: View {
                         .truncationMode(.tail)
                         .minimumScaleFactor(0.8)
                 }
-                .font(.footnote)
+                .font(AppTheme.Font.footnote)
                 .foregroundStyle(AppTheme.mutedText)
             }
 
@@ -299,7 +299,7 @@ struct PiAgentSessionRow: View {
                     .truncationMode(.tail)
                     .minimumScaleFactor(0.8)
             }
-            .font(.footnote)
+            .font(AppTheme.Font.footnote)
             .foregroundStyle(AppTheme.mutedText)
 
             if let branch = session.branchName, !branch.isEmpty {
@@ -311,14 +311,14 @@ struct PiAgentSessionRow: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
-                .font(.footnote)
+                .font(AppTheme.Font.footnote)
                 .foregroundStyle(AppTheme.mutedText)
                 .help(branch)
             }
 
             HStack(spacing: 8) {
                 Text(session.updatedAt.formatted(date: .abbreviated, time: .shortened))
-                    .font(.caption)
+                    .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
@@ -631,7 +631,7 @@ struct PiAgentProjectIcon: View {
             }
         }
         .frame(width: 22, height: 22)
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Chat.chipCornerRadius, style: .continuous))
         // Route through the shared ProjectIconCache so scrolling the session
         // list doesn't re-decode the same PNG per row appear. Identity is the
         // file path; same key used by ProjectIconView for the project switcher.
@@ -655,7 +655,7 @@ struct PiAgentProjectIcon: View {
     }
 
     private var fallback: some View {
-        RoundedRectangle(cornerRadius: 6, style: .continuous)
+        RoundedRectangle(cornerRadius: AppTheme.Chat.chipCornerRadius, style: .continuous)
             .fill(AppTheme.contentSubtleFill)
             .overlay {
                 Image(session.kind == .issue ? "github" : "pi")

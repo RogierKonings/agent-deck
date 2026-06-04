@@ -65,8 +65,12 @@ enum AppTheme {
         static let cardHPadding: CGFloat = 12
         static let cardVPadding: CGFloat = 10
 
-        static let threadSpacing: CGFloat = 10
-        static let childSpacing: CGFloat = 8
+        // Vertical gaps between transcript rows. `rowSpacing` separates distinct
+        // bubbles/cards; `threadSpacing` is the tighter question↔reply gap inside
+        // one thread; `childSpacing` is the tightest gap between sibling children.
+        static let rowSpacing: CGFloat = 32
+        static let threadSpacing: CGFloat = 20
+        static let childSpacing: CGFloat = 24
     }
 
     // Brand accent and the assistant tint are theme-driven — see Theme.swift and

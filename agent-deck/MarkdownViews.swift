@@ -641,7 +641,7 @@ final class NativeMarkdownTextContainer: NSView {
                 font: .monospacedSystemFont(ofSize: 12, weight: .regular),
                 color: .secondaryLabelColor,
                 fill: AppTheme.nsCodeBlockFill,
-                cornerRadius: 6,
+                cornerRadius: AppTheme.Chat.chipCornerRadius,
                 padding: NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
             )
             stackView.addArrangedSubview(frontmatterView)
@@ -743,7 +743,7 @@ final class NativeMarkdownTextContainer: NSView {
                 color: .labelColor,
                 fill: AppTheme.nsCodeBlockFill,
                 border: AppTheme.nsCodeBlockBorder,
-                cornerRadius: 10,
+                cornerRadius: AppTheme.Chat.subCardCornerRadius,
                 padding: NSEdgeInsets(top: 10, left: 10, bottom: 10, right: 10)
             )
         }
