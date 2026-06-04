@@ -807,7 +807,7 @@ final class NativeMarkdownTextContainer: NSView {
         row.spacing = 9
 
         let bar = DynamicFillView(fill: AppTheme.nsQuoteBarFill)
-        bar.layer?.cornerRadius = 1
+        bar.layer?.cornerRadius = AppTheme.Chat.quoteBarCornerRadius
         bar.widthAnchor.constraint(equalToConstant: 3).isActive = true
 
         let body = textView(text, font: NSFont.preferredFont(forTextStyle: .body), color: .secondaryLabelColor)

@@ -299,6 +299,18 @@ class PiAgentNativeCardRowView: NSView, PiAgentNativeRowContent {
     }
 }
 
+// MARK: - Spacer row (bottom scroll anchor)
+
+/// A fixed-height, empty native row (the transcript's bottom scroll anchor).
+final class PiAgentNativeSpacerView: NSView, PiAgentNativeRowContent {
+    var onIntrinsicHeightChange: (() -> Void)?
+    var spacerHeight: CGFloat = 1
+    required init() { super.init(frame: .zero); wantsLayer = true }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override var isFlipped: Bool { true }
+    func measuredHeight(forWidth rowWidth: CGFloat) -> CGFloat { spacerHeight }
+}
+
 // MARK: - Status / error row (compact)
 
 /// Compact status / error row: icon + title + detail + timestamp, optional copy

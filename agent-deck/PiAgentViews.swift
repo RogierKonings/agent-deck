@@ -2548,18 +2548,16 @@ struct PiAgentScreen: View {
                     if let question = thread.question {
                         let blockID = "q-\(item.id)"
                         // Native fast path for plain-text questions (no attachment
-                        // chips). Chip-bearing questions still render hosted.
+                        // Chip-bearing questions use the dedicated chip-aware card;
+                        // plain questions use the lighter bubble.
                         let hasChips = PiAgentUserMessageContent.displayChipsNaturalWidth(
                             for: question, skills: skills, commandSlashNames: commandSlashNames) > 0
-                        let questionKind = hasChips ? nil : nativeQuestionKind(question, skills: skills, commandSlashNames: commandSlashNames)
+                        let questionKind = hasChips
+                            ? nativeChipQuestionKind(question, skills: skills, commandSlashNames: commandSlashNames)
+                            : nativeQuestionKind(question, skills: skills, commandSlashNames: commandSlashNames)
                         descriptors.append(PiAgentTranscriptBlockDescriptor(
                             id: blockID,
-                            view: questionKind == nil ? AnyView(threadBlockCard(
-                                thread: thread, visibility: visibility, skills: skills,
-                                commandSlashNames: commandSlashNames,
-                                projectPath: projectPath, subagentRuns: subagentRuns,
-                                renderMode: .question, blockID: blockID
-                            )) : nil,
+                            view: nil,
                             kind: questionKind,
                             baseRevision: appKitQuestionBlockRevision(question, contextRevision: contextRevision),
                             estimatedContentHeight: { Self.estimatedQuestionHeight(question, width: $0) },
@@ -2610,7 +2608,8 @@ struct PiAgentScreen: View {
         // Bottom anchor — a 1pt row scrollToBottom can always land on.
         descriptors.append(PiAgentTranscriptBlockDescriptor(
             id: "pi-agent-bottom-anchor",
-            view: AnyView(Color.clear.frame(height: 1)),
+            view: nil,
+            kind: .native(.of(PiAgentNativeSpacerView.self) { _, _ in }),
             baseRevision: 0,
             estimatedContentHeight: { _ in 1 },
             threadID: nil,
@@ -2692,13 +2691,8 @@ struct PiAgentScreen: View {
     /// Native payload for a plain-text user question (no attachment chips):
     /// hugged-width right-aligned bubble with leading copy + fork affordance.
     /// Instance method because the fork actions capture `viewModel`.
-    private func nativeQuestionKind(
-        _ question: PiAgentTranscriptEntry,
-        skills: [SkillRecord],
-        commandSlashNames: Set<String>
-    ) -> PiAgentTranscriptCellKind {
-        let text = PiAgentUserMessageContent.displayMessageText(
-            for: question, skills: skills, commandSlashNames: commandSlashNames)
+    /// The fork affordance for a user-question row (Pi session + per-agent chat).
+    private func questionForkModel(_ question: PiAgentTranscriptEntry) -> ForkModel {
         let agentOptions: [ForkAgentOption] = (forkAgentChoicesForSelectedSession ?? []).map { agent in
             ForkAgentOption(
                 title: agent.name,
@@ -2706,10 +2700,35 @@ struct PiAgentScreen: View {
                 action: { [viewModel] in viewModel.forkPiAgentSessionAsAgentChat(from: question, agent: agent) }
             )
         }
-        let fork = ForkModel(
+        return ForkModel(
             onForkSession: { [viewModel] in viewModel.forkPiAgentSession(from: question) },
             agentOptions: agentOptions
         )
+    }
+
+    /// Native render kind for a chip-bearing user question (skill/command/
+    /// attachment chips) — the dedicated chip-aware question card.
+    private func nativeChipQuestionKind(
+        _ question: PiAgentTranscriptEntry,
+        skills: [SkillRecord],
+        commandSlashNames: Set<String>
+    ) -> PiAgentTranscriptCellKind {
+        let payload = NativeQuestionPayload.make(
+            entry: question, skills: skills, commandSlashNames: commandSlashNames,
+            fork: questionForkModel(question))
+        return .native(.of(PiAgentNativeQuestionView.self) { view, width in
+            view.configure(payload: payload, width: width)
+        })
+    }
+
+    private func nativeQuestionKind(
+        _ question: PiAgentTranscriptEntry,
+        skills: [SkillRecord],
+        commandSlashNames: Set<String>
+    ) -> PiAgentTranscriptCellKind {
+        let text = PiAgentUserMessageContent.displayMessageText(
+            for: question, skills: skills, commandSlashNames: commandSlashNames)
+        let fork = questionForkModel(question)
         return .bubble(NativeBubblePayload(
             role: .user,
             headerTitle: "You",
@@ -2755,10 +2774,19 @@ struct PiAgentScreen: View {
         case .thinking:
             return Self.nativeReplyPayload(for: child).map { .bubble($0) }
         case .steering(let entry):
-            // Chip-bearing steering messages keep the hosted chip layout.
+            // Chip-bearing steering messages use the native chip-question card,
+            // re-labeled as "Steering".
             let hasChips = PiAgentUserMessageContent.displayChipsNaturalWidth(
                 for: entry, skills: skills, commandSlashNames: commandSlashNames) > 0
-            if hasChips { return nil }
+            if hasChips {
+                var payload = NativeQuestionPayload.make(
+                    entry: entry, skills: skills, commandSlashNames: commandSlashNames, fork: nil)
+                payload.headerTitle = "Steering"
+                payload.headerIcon = "arrowshape.turn.up.forward.circle"
+                return .native(.of(PiAgentNativeQuestionView.self) { view, width in
+                    view.configure(payload: payload, width: width)
+                })
+            }
             let text = PiAgentUserMessageContent.displayMessageText(
                 for: entry, skills: skills, commandSlashNames: commandSlashNames)
             return .bubble(NativeBubblePayload(

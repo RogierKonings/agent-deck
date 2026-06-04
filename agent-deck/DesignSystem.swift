@@ -63,6 +63,7 @@ enum AppTheme {
         static let suggestionCornerRadius: CGFloat = 12
         static let chipCornerRadius: CGFloat = 6
         static let glassPanelCornerRadius: CGFloat = 22
+        static let quoteBarCornerRadius: CGFloat = 1
 
         static let bubbleHPadding: CGFloat = 16
         static let bubbleVPadding: CGFloat = 12

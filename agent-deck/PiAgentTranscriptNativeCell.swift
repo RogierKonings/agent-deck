@@ -494,7 +494,7 @@ final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
 
     private func glassIcon(_ glass: NSGlassEffectView, _ icon: NSImageView, symbol: String, help: String, action: Selector) {
         glass.translatesAutoresizingMaskIntoConstraints = false
-        glass.cornerRadius = 14
+        glass.cornerRadius = AppTheme.Chat.panelCornerRadius
         icon.translatesAutoresizingMaskIntoConstraints = false
         icon.image = Self.symbolImage(symbol)
         icon.contentTintColor = .labelColor
