@@ -407,8 +407,10 @@ struct AppLoadingView: View {
 /// with half-populated views. Fades out (see the call site's `.animation`).
 struct AppInitialLoadOverlay: View {
     var message: String = "Loading workspace…"
-    /// Drives the looping "in flight" motion. Toggled on `.onAppear`.
-    @State private var inFlight = false
+    /// One-shot entrance (planes glide in along their flight path + fade).
+    @State private var entered = false
+    /// Barely-there idle float so the planes feel alive without jittering.
+    @State private var floating = false
 
     var body: some View {
         ZStack {
@@ -416,26 +418,70 @@ struct AppInitialLoadOverlay: View {
                 .fill(.regularMaterial)
                 .ignoresSafeArea()
 
-            VStack(spacing: 22) {
-                // The paper-plane swarm gently surges along its diagonal so the
-                // planes read as "in flight" — the motion itself is the loading
-                // cue, no separate spinner needed.
+            VStack(spacing: 26) {
                 Image("paperplanes")
                     .resizable()
                     .interpolation(.high)
                     .scaledToFit()
-                    .frame(width: 240)
-                    .scaleEffect(inFlight ? 1.03 : 0.99)
-                    .offset(x: inFlight ? 12 : -8, y: inFlight ? -10 : 6)
-                    .animation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true), value: inFlight)
-                    .shadow(color: AppTheme.brandAccent.opacity(0.25), radius: 18, y: 6)
+                    .frame(width: 250)
+                    .shadow(color: AppTheme.brandAccent.opacity(0.22), radius: 22, y: 8)
+                    // Idle: a slow, low-amplitude drift along the diagonal — reads as
+                    // a hover, not a bounce.
+                    .offset(x: floating ? 4 : -4, y: floating ? -4 : 3)
+                    .animation(.easeInOut(duration: 2.8).repeatForever(autoreverses: true), value: floating)
+                    // Entrance: glide up the flight path from lower-left + fade in.
+                    .offset(x: entered ? 0 : -34, y: entered ? 0 : 26)
+                    .opacity(entered ? 1 : 0)
 
-                Text(message)
-                    .font(AppTheme.Font.callout.weight(.semibold))
-                    .foregroundStyle(AppTheme.mutedText)
+                VStack(spacing: 14) {
+                    Text(message)
+                        .font(AppTheme.Font.callout.weight(.semibold))
+                        .foregroundStyle(AppTheme.mutedText)
+                    AppIndeterminateBar()
+                        .frame(width: 168)
+                }
+                .opacity(entered ? 1 : 0)
             }
         }
-        .onAppear { inFlight = true }
+        .onAppear {
+            withAnimation(.spring(response: 0.7, dampingFraction: 0.82)) { entered = true }
+            floating = true
+        }
+    }
+}
+
+/// Sleek indeterminate progress bar — an accent-gradient comet sweeps across a
+/// faint track, looping. Use as a calm "working…" cue where there's no measurable
+/// progress to show.
+struct AppIndeterminateBar: View {
+    var height: CGFloat = 3.5
+    @State private var animating = false
+
+    var body: some View {
+        GeometryReader { geo in
+            let trackWidth = geo.size.width
+            let pillWidth = trackWidth * 0.42
+            Capsule()
+                .fill(AppTheme.contentSubtleFill)
+                .overlay(alignment: .leading) {
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [AppTheme.brandAccent.opacity(0), AppTheme.brandAccent, AppTheme.brandAccent.opacity(0)],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: pillWidth)
+                        // Sweeps from fully off the left edge to fully off the right,
+                        // hidden at both ends so the loop reset is invisible.
+                        .offset(x: animating ? trackWidth : -pillWidth)
+                        .animation(.easeInOut(duration: 1.15).repeatForever(autoreverses: false), value: animating)
+                }
+                .clipShape(Capsule())
+        }
+        .frame(height: height)
+        .onAppear { animating = true }
     }
 }
 
