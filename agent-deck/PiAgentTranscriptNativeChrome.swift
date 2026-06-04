@@ -169,13 +169,12 @@ final class PiAgentNativeForkOriginCardView: NSView, PiAgentNativeRowContent {
         addSubview(surface)
 
         glyph.translatesAutoresizingMaskIntoConstraints = false
-        glyph.image = NSImage(systemSymbolName: "arrow.trianglehead.branch", accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: NativeTranscriptFont.bodySize, weight: .semibold))
+        glyph.image = NativeTranscriptFont.headerIcon("arrow.trianglehead.branch")
         glyph.contentTintColor = AppTheme.ns(AppTheme.brandAccent)
-        glyph.imageScaling = .scaleProportionallyUpOrDown
+        glyph.imageScaling = .scaleProportionallyDown
         glyph.setContentHuggingPriority(.required, for: .horizontal)
 
-        titleLabel.font = NativeTranscriptFont.body(.semibold)
+        titleLabel.font = NativeTranscriptFont.header
         titleLabel.textColor = .labelColor
         titleLabel.lineBreakMode = .byTruncatingMiddle
         titleLabel.maximumNumberOfLines = 1
@@ -216,8 +215,8 @@ final class PiAgentNativeForkOriginCardView: NSView, PiAgentNativeRowContent {
             surface.bottomAnchor.constraint(equalTo: bottomAnchor),
             surface.leadingAnchor.constraint(equalTo: leadingAnchor),
             surfaceWidthC,
-            glyph.widthAnchor.constraint(equalToConstant: 30),
-            glyph.heightAnchor.constraint(equalToConstant: 30),
+            glyph.widthAnchor.constraint(equalToConstant: NativeTranscriptFont.headerIconSize),
+            glyph.heightAnchor.constraint(equalToConstant: NativeTranscriptFont.headerIconSize),
             row.topAnchor.constraint(equalTo: surface.topAnchor, constant: ChromeLayout.vPad),
             row.leadingAnchor.constraint(equalTo: surface.leadingAnchor, constant: ChromeLayout.hPad),
             row.trailingAnchor.constraint(equalTo: surface.trailingAnchor, constant: -ChromeLayout.hPad),
@@ -644,12 +643,12 @@ final class PiAgentNativeStateCardView: NSView, PiAgentNativeRowContent {
         glyph.contentTintColor = AppTheme.ns(AppTheme.mutedText)
         glyph.setContentHuggingPriority(.required, for: .horizontal)
 
-        titleLabel.font = NativeTranscriptFont.body(.semibold)
+        titleLabel.font = NativeTranscriptFont.header
         titleLabel.textColor = .labelColor
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.maximumNumberOfLines = 1
 
-        subtitleLabel.font = NativeTranscriptFont.callout()
+        subtitleLabel.font = NativeTranscriptFont.footnote()
         subtitleLabel.textColor = AppTheme.ns(AppTheme.mutedText)
         subtitleLabel.lineBreakMode = .byTruncatingTail
         subtitleLabel.maximumNumberOfLines = 1
@@ -679,8 +678,8 @@ final class PiAgentNativeStateCardView: NSView, PiAgentNativeRowContent {
             surface.bottomAnchor.constraint(equalTo: bottomAnchor),
             surface.leadingAnchor.constraint(equalTo: leadingAnchor),
             surfaceWidthC,
-            glyph.widthAnchor.constraint(equalToConstant: 22),
-            glyph.heightAnchor.constraint(equalToConstant: 22),
+            glyph.widthAnchor.constraint(equalToConstant: NativeTranscriptFont.headerIconSize),
+            glyph.heightAnchor.constraint(equalToConstant: NativeTranscriptFont.headerIconSize),
             row.topAnchor.constraint(equalTo: surface.topAnchor, constant: ChromeLayout.vPad),
             row.leadingAnchor.constraint(equalTo: surface.leadingAnchor, constant: ChromeLayout.hPad),
             row.trailingAnchor.constraint(equalTo: surface.trailingAnchor, constant: -ChromeLayout.hPad),
@@ -699,8 +698,7 @@ final class PiAgentNativeStateCardView: NSView, PiAgentNativeRowContent {
             spinner.stopAnimation(nil)
             spinner.isHidden = true
             glyph.isHidden = false
-            glyph.image = NSImage(systemSymbolName: payload.icon, accessibilityDescription: nil)?
-                .withSymbolConfiguration(.init(pointSize: NativeTranscriptFont.bodySize + 2, weight: .regular))
+            glyph.image = NativeTranscriptFont.headerIcon(payload.icon, weight: .regular)
         }
         titleLabel.stringValue = payload.title
         subtitleLabel.stringValue = payload.subtitle

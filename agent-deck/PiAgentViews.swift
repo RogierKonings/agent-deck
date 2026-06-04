@@ -532,6 +532,15 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         scrollView.documentView = tableView
         scrollView.contentView.postsBoundsChangedNotifications = true
         scrollView.postsFrameChangedNotifications = true
+        // Inset the resting content just into the tail of the top edge fade so
+        // the first row — the shortcuts strip, or the earliest message — lands
+        // where the gradient has already gone (near-)opaque, instead of half-
+        // dissolved into it. A touch less than the full 28pt fade height keeps
+        // the row snug to the fade's end with no dead gap. Content still fades
+        // normally as it scrolls up under the toolbar; a top inset leaves the
+        // bottom-pinning math (documentHeight − clipHeight) untouched.
+        scrollView.automaticallyAdjustsContentInsets = false
+        scrollView.contentInsets = NSEdgeInsets(top: 18, left: 0, bottom: 0, right: 0)
 
         context.coordinator.scrollView = scrollView
         context.coordinator.tableView = tableView

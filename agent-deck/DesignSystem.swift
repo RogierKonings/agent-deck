@@ -11,6 +11,11 @@ enum AppTheme {
     static let toolbarIconFrame = CGSize(width: 26, height: 20)
     static let toolbarAssetIconSize = CGSize(width: 16, height: 16)
 
+    /// SF Symbol scale for the glyphs inside transcript cards & bubbles — one knob
+    /// so every header symbol renders at the same scale. The AppKit equivalent of
+    /// SwiftUI's `.imageScale(.large)`.
+    static let cardSymbolScale: NSImage.SymbolScale = .large
+
     // MARK: Typography
     //
     // Fixed-size font tokens for the chat / transcript UI. macOS semantic
