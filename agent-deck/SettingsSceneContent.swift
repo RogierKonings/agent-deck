@@ -33,6 +33,9 @@ struct SettingsSceneContent: View {
         }
         .frame(minWidth: 700, idealWidth: 780, minHeight: 560, idealHeight: 640)
         .background(AppTheme.windowBackground)
+        // Theme the Settings window itself (bg + transparent titlebar) so its
+        // titlebar matches, like the main window.
+        .background(WindowBackgroundApplier(color: AppTheme.windowBackground))
     }
 
     @ViewBuilder
@@ -130,7 +133,7 @@ private struct SettingsTabStrip<TabValue: Hashable & Identifiable>: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity)
-        .background(.bar) // Native Settings-toolbar material
+        .background(AppTheme.windowBackground) // Themed (was the system .bar material)
     }
 }
 

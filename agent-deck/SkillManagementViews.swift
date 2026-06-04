@@ -1,4 +1,5 @@
 import AppKit
+import OSLog
 import SwiftUI
 
 struct SkillsInfoPopover: View {
@@ -79,6 +80,7 @@ private enum SkillDetailSummaryState: Equatable {
 }
 
 struct SkillsScreen: View {
+    private static let layoutLog = Logger(subsystem: "streetcoding.agent-deck", category: "ResourceLayout")
     var viewModel: AppViewModel
     @Binding var searchText: String
     @State private var selectedSkillIDs: Set<SkillRecord.ID> = []
@@ -185,9 +187,11 @@ struct SkillsScreen: View {
             if viewModel.hasCompletedInitialRefresh {
                 skillLibraryContent
                     .frame(minWidth: 430, idealWidth: 520, maxWidth: 640)
+                    .appDebugLayout("Skills.libraryPane", logger: Self.layoutLog)
             } else {
                 AppLoadingView("Loading skills…")
                     .frame(minWidth: 430, idealWidth: 520, maxWidth: 640)
+                    .appDebugLayout("Skills.libraryLoading", logger: Self.layoutLog)
             }
 
             if viewModel.hasCompletedInitialRefresh {
@@ -197,11 +201,17 @@ struct SkillsScreen: View {
                 ) {
                     skillDetailContent
                 }
+                .appDebugLayout("Skills.detail selected=\(selectedSkill?.name ?? selectedWarning?.title ?? "nil")", logger: Self.layoutLog)
             } else {
                 AppLoadingView("Loading skill details…")
+                    .appDebugLayout("Skills.detailLoading", logger: Self.layoutLog)
             }
         }
+        .appDebugLayout("Skills.hsplit", logger: Self.layoutLog)
         .onAppear {
+            #if DEBUG
+            Self.layoutLog.debug("Skills.state event=appear selectedIDs=\(selectedSkillIDs.count, privacy: .public) selected=\(selectedSkill?.name ?? "nil", privacy: .public) project=\(viewModel.selectedDiscoveredProject?.name ?? "nil", privacy: .public)")
+            #endif
             cachedLayout = recomputeLayout()
             scheduleSelectionSynchronization()
         }

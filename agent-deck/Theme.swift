@@ -322,6 +322,63 @@ extension Theme {
         stroke: ThemeColor(69, 71, 90)
     )
 
+    static let vortex = Theme(
+        id: UUID(uuidString: "99999999-9999-9999-9999-999999999999")!,
+        name: "Vortex",
+        isBuiltIn: true,
+        accent: ThemeColor(0, 229, 255),
+        assistant: ThemeColor(255, 0, 212),
+        thinking: ThemeColor(114, 100, 255),
+        tool: ThemeColor(255, 200, 50),
+        error: ThemeColor(255, 70, 95),
+        stderr: ThemeColor(230, 120, 200),
+        diffAdded: ThemeColor(60, 245, 140),
+        sourceBuiltin: ThemeColor(255, 185, 55),
+        sourceLibrary: ThemeColor(200, 120, 255),
+        sourceProject: ThemeColor(50, 225, 195),
+        background: ThemeColor(8, 10, 24),
+        surface: ThemeColor(16, 20, 40),
+        stroke: ThemeColor(48, 56, 88)
+    )
+
+    static let crimson = Theme(
+        id: UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")!,
+        name: "Crimson",
+        isBuiltIn: true,
+        accent: ThemeColor(255, 85, 85),
+        assistant: ThemeColor(255, 125, 105),
+        thinking: ThemeColor(235, 130, 130),
+        tool: ThemeColor(235, 185, 75),
+        error: ThemeColor(240, 65, 70),
+        stderr: ThemeColor(230, 115, 150),
+        diffAdded: ThemeColor(115, 200, 135),
+        sourceBuiltin: ThemeColor(235, 175, 70),
+        sourceLibrary: ThemeColor(200, 135, 230),
+        sourceProject: ThemeColor(105, 205, 145),
+        background: ThemeColor(28, 18, 20),
+        surface: ThemeColor(40, 26, 30),
+        stroke: ThemeColor(108, 70, 76)
+    )
+
+    static let sunburst = Theme(
+        id: UUID(uuidString: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB")!,
+        name: "Sunburst",
+        isBuiltIn: true,
+        accent: ThemeColor(255, 210, 50),
+        assistant: ThemeColor(255, 155, 95),
+        thinking: ThemeColor(245, 185, 75),
+        tool: ThemeColor(205, 175, 85),
+        error: ThemeColor(238, 85, 80),
+        stderr: ThemeColor(232, 140, 135),
+        diffAdded: ThemeColor(150, 215, 105),
+        sourceBuiltin: ThemeColor(245, 195, 65),
+        sourceLibrary: ThemeColor(185, 140, 225),
+        sourceProject: ThemeColor(100, 210, 160),
+        background: ThemeColor(28, 24, 16),
+        surface: ThemeColor(42, 34, 22),
+        stroke: ThemeColor(102, 88, 66)
+    )
+
     /// Default first — the rest are presented as presets in Settings.
     static let builtInThemes: [Theme] = [
         defaultTheme,
@@ -331,7 +388,10 @@ extension Theme {
         monoSlate,
         tokyoNight,
         nord,
-        catppuccinMocha
+        catppuccinMocha,
+        vortex,
+        crimson,
+        sunburst
     ]
 
     // Gradient/depth shades derived from the accent. Tuned so the Default

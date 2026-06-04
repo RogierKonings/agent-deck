@@ -106,6 +106,10 @@ struct agent_deckApp: App {
                 .environment(viewModel)
                 .environmentObject(appDelegate.updater)
                 .preferredColorScheme(.dark)
+                // Themed tokens are static vars (invisible to SwiftUI's dependency
+                // graph), so re-key on the theme revision to repaint on a switch —
+                // same approach as the main window.
+                .id(themeManager.revision)
         }
         .commands {
             AgentDeckCommands()

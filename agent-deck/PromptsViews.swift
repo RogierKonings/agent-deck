@@ -1,7 +1,9 @@
 import AppKit
+import OSLog
 import SwiftUI
 
 struct PromptsScreen: View {
+    private static let layoutLog = Logger(subsystem: "streetcoding.agent-deck", category: "ResourceLayout")
     var viewModel: AppViewModel
     @Binding var searchText: String
     @State private var promptPendingRename: PromptTemplateRecord?
@@ -29,26 +31,30 @@ struct PromptsScreen: View {
     ) = ([], [])
 
     var body: some View {
-        HStack(spacing: 0) {
-            HSplitView {
-                if viewModel.hasCompletedInitialRefresh {
-                    promptLibraryPane
-                        .frame(minWidth: 430, idealWidth: 520, maxWidth: 640)
-                } else {
-                    AppLoadingView("Loading prompts…")
-                        .frame(minWidth: 430, idealWidth: 520, maxWidth: 640)
-                }
+        HSplitView {
+            if viewModel.hasCompletedInitialRefresh {
+                promptLibraryPane
+                    .frame(minWidth: 430, idealWidth: 520, maxWidth: 640)
+                    .appDebugLayout("Prompts.libraryPane", logger: Self.layoutLog)
+            } else {
+                AppLoadingView("Loading prompts…")
+                    .frame(minWidth: 430, idealWidth: 520, maxWidth: 640)
+                    .appDebugLayout("Prompts.libraryLoading", logger: Self.layoutLog)
+            }
 
-                if !viewModel.hasCompletedInitialRefresh {
-                    AppLoadingView("Loading prompt details…")
-                } else if let prompt = viewModel.selectedPromptTemplate {
-                    promptDetail(prompt)
-                } else {
-                    ContentUnavailableView("No Prompt Selected", systemImage: "doc.text")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
+            if !viewModel.hasCompletedInitialRefresh {
+                AppLoadingView("Loading prompt details…")
+                    .appDebugLayout("Prompts.detailLoading", logger: Self.layoutLog)
+            } else if let prompt = viewModel.selectedPromptTemplate {
+                promptDetail(prompt)
+                    .appDebugLayout("Prompts.detail selected=\(prompt.name) source=\(prompt.source.kind.rawValue)", logger: Self.layoutLog)
+            } else {
+                ContentUnavailableView("No Prompt Selected", systemImage: "doc.text")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .appDebugLayout("Prompts.detailEmpty", logger: Self.layoutLog)
             }
         }
+        .appDebugLayout("Prompts.hsplit", logger: Self.layoutLog)
         .sheet(item: $promptPendingRename) { prompt in
             RenameResourceSheet(
                 title: "Rename Prompt",
@@ -100,10 +106,14 @@ struct PromptsScreen: View {
             importPrompt()
         }
         .onAppear {
+            logPromptLayoutState("appear")
             cachedLayout = recomputeLayout()
             scheduleSelectionSynchronization()
         }
-        .onChange(of: viewModel.selectedCommandItemID) { _, _ in scheduleSelectionSynchronization() }
+        .onChange(of: viewModel.selectedCommandItemID) { _, _ in
+            logPromptLayoutState("selectedCommandItemID")
+            scheduleSelectionSynchronization()
+        }
         .onChange(of: viewModel.allVisiblePromptTemplateRecords) { _, _ in
             cachedLayout = recomputeLayout()
             scheduleSelectionSynchronization()
@@ -125,6 +135,13 @@ struct PromptsScreen: View {
             guard viewModel.selectedCommandItemID != id else { return }
             viewModel.selectedCommandItemID = id
         }
+    }
+
+    private func logPromptLayoutState(_ event: String) {
+        #if DEBUG
+        let prompt = viewModel.selectedPromptTemplate
+        Self.layoutLog.debug("Prompts.state event=\(event, privacy: .public) selectedID=\(selectedCommandItemID ?? "nil", privacy: .public) vmSelectedID=\(viewModel.selectedCommandItemID ?? "nil", privacy: .public) prompt=\(prompt?.name ?? "nil", privacy: .public) fileLength=\(prompt?.filePath.count ?? 0, privacy: .public) sections=\(cachedLayout.sections.count, privacy: .public) visible=\(cachedLayout.visiblePrompts.count, privacy: .public) project=\(viewModel.selectedDiscoveredProject?.name ?? "nil", privacy: .public)")
+        #endif
     }
 
     private var promptLibraryPane: some View {

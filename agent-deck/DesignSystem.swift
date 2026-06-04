@@ -1,4 +1,5 @@
 import AppKit
+import OSLog
 import SwiftUI
 
 enum AppTheme {
@@ -1234,6 +1235,7 @@ struct AppKeyValueList: View {
                         .textSelection(.enabled)
                         .lineLimit(3)
                         .truncationMode(.middle)
+                        .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if row.0 != rows.last?.0 {
@@ -1241,6 +1243,65 @@ struct AppKeyValueList: View {
                 }
             }
         }
+    }
+}
+
+#if DEBUG
+private struct AppLayoutDebugSnapshot: Equatable {
+    var minX: Double
+    var minY: Double
+    var width: Double
+    var height: Double
+
+    init(_ frame: CGRect) {
+        minX = Self.round(frame.minX)
+        minY = Self.round(frame.minY)
+        width = Self.round(frame.width)
+        height = Self.round(frame.height)
+    }
+
+    private static func round(_ value: CGFloat) -> Double {
+        (Double(value) * 10).rounded() / 10
+    }
+}
+
+private struct AppLayoutDebugModifier: ViewModifier {
+    let name: String
+    let logger: Logger
+    @State private var lastSnapshot: AppLayoutDebugSnapshot?
+
+    func body(content: Content) -> some View {
+        content
+            .overlay {
+                GeometryReader { proxy in
+                    Color.clear
+                        .onAppear {
+                            logSnapshot(AppLayoutDebugSnapshot(proxy.frame(in: .global)))
+                        }
+                        .onChange(of: AppLayoutDebugSnapshot(proxy.frame(in: .global))) { _, snapshot in
+                            logSnapshot(snapshot)
+                        }
+                }
+            }
+    }
+
+    private func logSnapshot(_ snapshot: AppLayoutDebugSnapshot) {
+        Task { @MainActor in
+            guard snapshot != lastSnapshot else { return }
+            lastSnapshot = snapshot
+            logger.debug("\(name, privacy: .public) frame x=\(snapshot.minX, privacy: .public) y=\(snapshot.minY, privacy: .public) w=\(snapshot.width, privacy: .public) h=\(snapshot.height, privacy: .public)")
+        }
+    }
+}
+#endif
+
+extension View {
+    func appDebugLayout(_ name: String, logger: Logger) -> some View {
+        #if DEBUG
+        modifier(AppLayoutDebugModifier(name: name, logger: logger))
+        #else
+        self
+        #endif
     }
 }
 

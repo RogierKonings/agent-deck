@@ -92,8 +92,10 @@ private final class HiddenScroller: NSScroller {
 /// Sets the host `NSWindow`'s background color so the theme's canvas shows through
 /// the app's transparent surfaces (the native transcript and the detail scroll
 /// views draw no background of their own). SwiftUI's `.background(Color)` only fills
-/// the view's own rect, not the window chrome/gaps — this reaches the window.
-private struct WindowBackgroundApplier: NSViewRepresentable {
+/// the view's own rect, not the window chrome/gaps — this reaches the window. Also
+/// makes the titlebar transparent so the unified toolbar shows the themed window
+/// background instead of the system's gray titlebar material.
+struct WindowBackgroundApplier: NSViewRepresentable {
     var color: Color
 
     func makeNSView(context: Context) -> NSView {
@@ -109,7 +111,11 @@ private struct WindowBackgroundApplier: NSViewRepresentable {
     private func apply(from view: NSView) {
         let nsColor = NSColor(color)
         DispatchQueue.main.async {
-            view.window?.backgroundColor = nsColor
+            guard let window = view.window else { return }
+            window.backgroundColor = nsColor
+            // The titlebar/toolbar draws its own material on top of the window bg;
+            // making it transparent lets the themed window color show there too.
+            window.titlebarAppearsTransparent = true
         }
     }
 }
