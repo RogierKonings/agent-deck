@@ -642,7 +642,11 @@ struct PiAgentProjectIcon: View {
     var body: some View {
         Group {
             if let image {
-                Image(nsImage: image).resizable().scaledToFill()
+                Image(nsImage: image)
+                    .interpolation(.high)
+                    .antialiased(true)
+                    .resizable()
+                    .scaledToFill()
             } else {
                 fallback
             }

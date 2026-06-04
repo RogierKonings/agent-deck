@@ -1774,7 +1774,7 @@ private struct SessionListContent: View, Equatable {
         else if lhs.workingSessionIDs != rhs.workingSessionIDs { diff = "workingSessionIDs" }
         else if lhs.generatingTitleIDs != rhs.generatingTitleIDs { diff = "generatingTitleIDs" }
         else if lhs.activityByID != rhs.activityByID { diff = "activityByID" }
-        else if lhs.projectsByID != rhs.projectsByID { diff = "projectsByID" }
+        else if !Self.projectsVisuallyEqual(lhs.projectsByID, rhs.projectsByID) { diff = "projectsByID" }
         else { diff = nil }
 #if DEBUG
         if let diff {
@@ -1782,6 +1782,25 @@ private struct SessionListContent: View, Equatable {
         }
 #endif
         return diff == nil
+    }
+
+    /// Compare the project map by ONLY what a row's icon actually shows — the
+    /// project identity (path) and its icon file — not the whole DiscoveredProject.
+    /// `viewModel.projectByPath` is reassigned wholesale on every project
+    /// re-discovery, which fires constantly while an agent writes files; the
+    /// re-derived projects differ in volatile fields (e.g. gitHubRemote resolving)
+    /// that the session row never displays. Comparing the full value made the list
+    /// re-evaluate ~30Hz (the dominant scroll-profile cost); this keeps it stable
+    /// while still reacting to a project being added/removed or its icon changing.
+    private static func projectsVisuallyEqual(_ lhs: [UUID: DiscoveredProject?], _ rhs: [UUID: DiscoveredProject?]) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        for (id, lProject) in lhs {
+            guard let rProject = rhs[id] else { return false }
+            if lProject?.id != rProject?.id || lProject?.iconFileURL != rProject?.iconFileURL {
+                return false
+            }
+        }
+        return true
     }
 
 #if DEBUG
