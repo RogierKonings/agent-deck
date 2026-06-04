@@ -408,6 +408,13 @@ struct AppLoadingView: View {
 struct AppInitialLoadOverlay: View {
     var message: String = "Loading workspace…"
 
+    /// The app icon the user currently has selected (Default vs Alternate), so the
+    /// splash matches their Dock icon. Falls back to the live application icon.
+    private var appIcon: NSImage? {
+        let choice = AppIconChoice.choice(forStoredName: AppSettingsStore.shared.settings.selectedAppIconName)
+        return NSImage(named: choice.assetName) ?? NSApplication.shared.applicationIconImage
+    }
+
     var body: some View {
         ZStack {
             Rectangle()
@@ -415,12 +422,13 @@ struct AppInitialLoadOverlay: View {
                 .ignoresSafeArea()
 
             VStack(spacing: 18) {
-                Image("pi")
-                    .renderingMode(.template)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 34, height: 34)
-                    .foregroundStyle(AppTheme.piLogo.gradient)
+                if let appIcon {
+                    Image(nsImage: appIcon)
+                        .resizable()
+                        .interpolation(.high)
+                        .scaledToFit()
+                        .frame(width: 60, height: 60)
+                }
 
                 AppSpinner()
 
