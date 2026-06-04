@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Version tag (e.g. v1.0)'
+        description: 'Version tag (e.g. v1.7 or v1.7.1)'
         required: true
 
 permissions:
@@ -254,15 +254,26 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Build the changelog from the actual commits between the previous
-          # version tag and this one. This is more reliable than GitHub's
-          # PR-centric --generate-notes for a repo where work lands as direct
-          # commits to main. The appcast step reads this release body and
-          # renders it (as HTML) in the Sparkle update dialog.
+          # Preferred source: release notes authored in the app, which ride in
+          # the annotated tag's message (the in-app Release sheet drafts them with
+          # the default model, lets you edit, then tags with that body). Fall back
+          # to listing the commits between the previous version tag and this one
+          # when the tag is lightweight or its message is just the tag name
+          # (manual scripts/release.sh, or the app's "no notes" path). The appcast
+          # step reads this release body and renders it (as HTML) in the Sparkle
+          # update dialog.
           git fetch --tags --force --quiet || true
           PREV_TAG=$(git tag --list 'v*.*' --sort=-v:refname | grep -vx "$TAG" | head -1 || true)
 
-          if [ -n "$PREV_TAG" ]; then
+          # Annotated tag message, minus any trailing signature block.
+          TAG_BODY=$(git for-each-ref "refs/tags/${TAG}" --format='%(contents)' \
+                     | sed '/-----BEGIN PGP SIGNATURE-----/,$d')
+          # Treat it as authored notes only when it's more than just the tag/version name.
+          TAG_BODY_TRIMMED=$(printf '%s' "$TAG_BODY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+
+          if [ -n "$TAG_BODY_TRIMMED" ] && [ "$TAG_BODY_TRIMMED" != "$TAG" ] && [ "$TAG_BODY_TRIMMED" != "$VERSION" ]; then
+            NOTES=$(printf '## What'\''s new in %s\n\n%s\n' "$VERSION" "$TAG_BODY_TRIMMED")
+          elif [ -n "$PREV_TAG" ]; then
             COMMITS=$(git log "${PREV_TAG}..${TAG}" --no-merges --pretty=format:'- %s' \
                       | grep -vE '^- (appcast|Initial commit)' || true)
             if [ -z "$COMMITS" ]; then
@@ -314,6 +325,9 @@ jobs:
           repo = os.environ["GITHUB_REPOSITORY"]
           min_os = os.environ["MIN_OS"]
           pubdate = os.environ["PUBDATE"]
+          version_parts = version.split(".")
+          is_major_release = len(version_parts) == 2 and version_parts[1] == "0"
+          should_phase_release = not is_major_release
 
           notes_md = subprocess.check_output(
               ["gh", "release", "view", tag, "--json", "body", "--jq", ".body"],
@@ -333,6 +347,12 @@ jobs:
               f"      <sparkle:version>{run}</sparkle:version>",
               f"      <sparkle:shortVersionString>{version}</sparkle:shortVersionString>",
               f"      <sparkle:minimumSystemVersion>{min_os}</sparkle:minimumSystemVersion>",
+          ]
+          if should_phase_release:
+              # Patch and minor releases are still visible immediately to manual checks,
+              # while scheduled checks roll out across Sparkle's seven groups.
+              lines.append("      <sparkle:phasedRolloutInterval>86400</sparkle:phasedRolloutInterval>")
+          lines += [
               f'      <enclosure url="{url}" type="application/octet-stream" {ed}/>',
               "      <description><![CDATA[",
               notes_html,

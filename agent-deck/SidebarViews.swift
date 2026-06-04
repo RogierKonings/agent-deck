@@ -321,7 +321,9 @@ struct SidebarProjectGitHubCard: View {
     private var avatarURL: URL? {
         guard let account = viewModel.currentGitHubAccount,
               account.host.caseInsensitiveCompare("github.com") == .orderedSame else { return nil }
-        return URL(string: "https://avatars.githubusercontent.com/\(account.login)")
+        // Request a server-resized avatar (~160px) instead of the full 460px source:
+        // crisper at 32pt and ~7x lighter to download.
+        return URL(string: "https://avatars.githubusercontent.com/\(account.login)?s=160")
     }
 
 }
@@ -450,6 +452,8 @@ struct SidebarGitHubAvatarView: View {
                     switch phase {
                     case let .success(image):
                         image
+                            .interpolation(.high)
+                            .antialiased(true)
                             .resizable()
                             .scaledToFill()
                     default:

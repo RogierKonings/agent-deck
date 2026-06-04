@@ -89,6 +89,219 @@ private final class HiddenScroller: NSScroller {
 /// SwiftUI does not make the scroll view a reachable ancestor — and swaps in
 /// `HiddenScroller`s. Once swapped, the scrollers stay hidden permanently
 /// regardless of how `List` re-renders, so there is no visible "fighting".
+/// Sets the host `NSWindow`'s background color so the theme's canvas shows through
+/// the app's transparent surfaces (the native transcript and the detail scroll
+/// views draw no background of their own). SwiftUI's `.background(Color)` only fills
+/// the view's own rect, not the window chrome/gaps — this reaches the window. Also
+/// makes the titlebar transparent so the unified toolbar shows the themed window
+/// background instead of the system's gray titlebar material.
+struct WindowBackgroundApplier: NSViewRepresentable {
+    var color: Color
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        apply(from: view)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        apply(from: nsView)
+    }
+
+    private func apply(from view: NSView) {
+        let nsColor = NSColor(color)
+        DispatchQueue.main.async {
+            guard let window = view.window else { return }
+            window.backgroundColor = nsColor
+            // The titlebar/toolbar draws its own material on top of the window bg;
+            // making it transparent lets the themed window color show there too.
+            window.titlebarAppearsTransparent = true
+        }
+    }
+}
+
+/// Covers the ENTIRE window — titlebar and toolbar included — with the launch
+/// splash, then fades it out once `isActive` flips false.
+///
+/// A normal SwiftUI `.overlay` only reaches the window's content region; the
+/// `NavigationSplitView` toolbar lives in the titlebar *above* that, so it would
+/// stay visible and clickable through the splash. We cover everything with a
+/// borderless **child window** ordered above the main window. (An earlier version
+/// parented the splash into the window's private `NSThemeFrame`, which worked but
+/// made AppKit log `_didAddUnknownSubview` every launch and is flagged "may break
+/// in the future." A child window is the supported way to overlay the
+/// titlebar/traffic-lights and swallow all interaction.)
+struct AppInitialLoadWindowCover: NSViewRepresentable {
+    /// Master switch for the launch splash. Flip to `false` to disable it — the
+    /// workspace usually loads fast enough that the splash isn't strictly needed.
+    static let isEnabled = true
+
+    var isActive: Bool
+
+    func makeNSView(context: Context) -> NSView {
+        let anchor = AnchorView()
+        anchor.coordinator = context.coordinator
+        anchor.active = isActive
+        return anchor
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        guard let anchor = nsView as? AnchorView else { return }
+        anchor.active = isActive
+        // Synchronous so the dismissal animation starts in the same frame the
+        // refresh completes — no async hop.
+        context.coordinator.sync(active: isActive, anchor: nsView)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    /// Installs the cover the instant it enters the window — before the window's
+    /// first paint — so the splash is the first thing on screen, never a flash of
+    /// the app followed by the overlay.
+    final class AnchorView: NSView {
+        weak var coordinator: Coordinator?
+        var active = false
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard window != nil else { return }
+            coordinator?.sync(active: active, anchor: self)
+        }
+    }
+
+    final class Coordinator {
+        /// Borderless child window that overlays the whole main window.
+        private var coverWindow: NSWindow?
+        /// Parent-window frame observers, removed on dismiss. Child windows track
+        /// the parent's *moves* automatically but not its *resizes*, so we mirror
+        /// the frame on both to stay aligned (matters if a restore/resize lands
+        /// while the splash is up).
+        private var frameObservers: [NSObjectProtocol] = []
+        /// When the cover became visible, so a too-fast launch still shows the
+        /// splash for at least `minimumOnScreen` before it fades.
+        private var shownAt: Date?
+        private let minimumOnScreen: TimeInterval = 1.0
+        /// Failsafe: the cover blocks the *entire* window — toolbar and the
+        /// traffic-light close/minimize buttons included. If the initial refresh
+        /// never reports complete (an unforeseen hang or error path that skips
+        /// `hasCompletedInitialRefresh`), force the splash away anyway so the user
+        /// is never locked out of their own window. A loading splash must never be
+        /// able to trap the UI.
+        private let maximumOnScreen: TimeInterval = 12.0
+
+        func sync(active: Bool, anchor: NSView, retries: Int = 12) {
+            guard let parent = anchor.window,
+                  parent.frame.width > 1, parent.frame.height > 1 else {
+                // The window may not exist yet on the very first launch pass.
+                if active && retries > 0 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak anchor] in
+                        guard let anchor else { return }
+                        self.sync(active: active, anchor: anchor, retries: retries - 1)
+                    }
+                }
+                return
+            }
+
+            if active {
+                guard coverWindow == nil else { return }
+                let host = NSHostingView(rootView: AppInitialLoadOverlay())
+                // A non-activating panel: it overlays and swallows clicks but never
+                // tries to become key/main. A plain borderless NSWindow declines
+                // `canBecomeKeyWindow`, and ordering it front made AppKit attempt
+                // `makeKeyWindow` anyway and log a warning; `.nonactivatingPanel`
+                // tells AppKit not to.
+                let window = NSPanel(
+                    contentRect: parent.frame,
+                    styleMask: [.borderless, .nonactivatingPanel],
+                    backing: .buffered,
+                    defer: false
+                )
+                window.isFloatingPanel = false
+                window.level = .normal
+                window.hidesOnDeactivate = false
+                window.isOpaque = false
+                window.backgroundColor = .clear
+                window.hasShadow = false
+                window.ignoresMouseEvents = false // swallow clicks so nothing leaks through
+                window.contentView = host
+                window.setFrame(parent.frame, display: true)
+                parent.addChildWindow(window, ordered: .above)
+                coverWindow = window
+                shownAt = Date()
+                installFrameSync(parent: parent, cover: window)
+                // Hard ceiling — dismiss no matter what `active` ever reports.
+                DispatchQueue.main.asyncAfter(deadline: .now() + maximumOnScreen) { [weak self] in
+                    self?.dismiss()
+                }
+            } else if coverWindow != nil {
+                // Keep the splash up for its minimum, then fade. Re-dispatch rather
+                // than dismiss now if the refresh beat the floor.
+                let elapsed = shownAt.map { Date().timeIntervalSince($0) } ?? minimumOnScreen
+                let remaining = minimumOnScreen - elapsed
+                if remaining > 0 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + remaining) { [weak anchor] in
+                        guard let anchor else { return }
+                        self.sync(active: false, anchor: anchor)
+                    }
+                    return
+                }
+                dismiss()
+            }
+        }
+
+        private func installFrameSync(parent: NSWindow, cover: NSWindow) {
+            let center = NotificationCenter.default
+            let mirror: (Notification) -> Void = { [weak parent, weak cover] _ in
+                MainActor.assumeIsolated {
+                    guard let parent, let cover else { return }
+                    cover.setFrame(parent.frame, display: false)
+                }
+            }
+            frameObservers = [
+                center.addObserver(forName: NSWindow.didResizeNotification, object: parent, queue: .main, using: mirror),
+                center.addObserver(forName: NSWindow.didMoveNotification, object: parent, queue: .main, using: mirror)
+            ]
+        }
+
+        private func removeFrameSync() {
+            let center = NotificationCenter.default
+            frameObservers.forEach(center.removeObserver)
+            frameObservers.removeAll()
+        }
+
+        private func dismiss() {
+            guard let window = coverWindow else { return }
+            coverWindow = nil
+            shownAt = nil
+            removeFrameSync()
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.3
+                ctx.allowsImplicitAnimation = true
+                window.animator().alphaValue = 0
+            } completionHandler: {
+                MainActor.assumeIsolated {
+                    window.parent?.removeChildWindow(window)
+                    window.orderOut(nil)
+                }
+            }
+        }
+    }
+}
+
+/// SwiftUI wrapper around `PiAgentNativeTextPopoverController` so the System Prompt
+/// toolbar button shows the exact same title + scrollable monospaced text popover the
+/// old transcript "Final System Prompt" card's "View" button used.
+private struct PiAgentTextPopover: NSViewControllerRepresentable {
+    let title: String
+    let text: String
+
+    func makeNSViewController(context: Context) -> PiAgentNativeTextPopoverController {
+        PiAgentNativeTextPopoverController(title: title, text: text)
+    }
+
+    func updateNSViewController(_ controller: PiAgentNativeTextPopoverController, context: Context) {}
+}
+
 final class ScrollerHidingProbe: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -194,6 +407,7 @@ struct ContentView: View {
     @State private var showingPiAgentDeleteAlert = false
     @State private var isPiAgentTranscriptOptionsPresented = false
     @State private var isPiAgentStartupResourcesPresented = false
+    @State private var isPiAgentSystemPromptPresented = false
     @State private var isPiAgentSubagentsPopoverPresented = false
     @State private var navigationColumnVisibility: NavigationSplitViewVisibility = .all
     @State private var agentModelQuickEditor: AgentModelQuickEditorContext?
@@ -214,6 +428,19 @@ struct ContentView: View {
 
     var body: some View {
         mainContent
+            // One calm loading state on launch instead of each pane (and the
+            // background project/agent/skill/gh refresh) flickering in piecemeal.
+            // Installed at the window level so it covers the whole window —
+            // titlebar and toolbar included — and blocks interaction underneath.
+            // Suppressed during first-run onboarding so a brand-new user lands
+            // straight on the welcome flow instead of watching the splash fade out
+            // behind it. `isOnboardingPresented` is driven by the persisted
+            // completion flag, so quitting mid-onboarding and relaunching keeps the
+            // splash skipped until onboarding is actually finished.
+            .background(AppInitialLoadWindowCover(
+                isActive: AppInitialLoadWindowCover.isEnabled
+                    && !isOnboardingPresented
+                    && !viewModel.hasCompletedInitialRefresh))
             .sheet(isPresented: $isOnboardingPresented, onDismiss: completeOnboarding) {
                 WelcomeOnboardingSheet(viewModel: viewModel) { target in
                     if let target {
@@ -297,11 +524,17 @@ struct ContentView: View {
             .frame(minWidth: 240)
             .background(Color.clear, ignoresSafeAreaEdges: .all)
             .navigationSplitViewColumnWidth(min: 240, ideal: 260, max: 320)
+            .perfScene("Sidebar")
         } detail: {
             detailSplitView
+                .perfScene("Detail")
         }
         .frame(minWidth: 1180, minHeight: 700)
         .navigationTitle(toolbarTitle)
+        // Theme the window canvas itself — the transcript and detail scroll views are
+        // transparent, so without this they'd show the system (gray) window background
+        // instead of the active theme's. Re-applies on theme switch via the root .id.
+        .background(WindowBackgroundApplier(color: AppTheme.windowBackground))
         .background(AgentDeckCommandsScope(context: commandContext).equatable())
         .onAppear(perform: updateCommandContext)
         // .task(id:) cancels and restarts asynchronously after body settles, so at most
@@ -528,6 +761,7 @@ struct ContentView: View {
         ctx.canCreateAgent = true
         ctx.canDeletePiAgentSession = selectedSession != nil
         ctx.canStopPiAgentSession = selectedSessionIsRunning
+        ctx.canNavigatePiAgentSessions = viewModel.canNavigatePiAgentSessions
         ctx.canOpenPiAgentInTerminal = viewModel.canOpenSelectedPiAgentSessionInTerminal
         ctx.canCommitGitHubChanges = hasGitProject && !commitMessage.isEmpty && !viewModel.githubIsCommitting
         ctx.canPushGitHubBranch = hasGitProject && !viewModel.githubIsPushing
@@ -553,6 +787,8 @@ struct ContentView: View {
         ctx.openSkills = { viewModel.selectedSidebarItem = .skills }
         ctx.openPrompts = { viewModel.selectedSidebarItem = .prompts }
         ctx.createPiAgentSession = { viewModel.createPiAgentDraftForSelectedProject() }
+        ctx.selectNextPiAgentSession = { viewModel.selectNextPiAgentSession() }
+        ctx.selectPreviousPiAgentSession = { viewModel.selectPreviousPiAgentSession() }
         ctx.createAgent = {
             editingAgent = nil
             agentDraft = viewModel.makeNewAgentDraft(scope: viewModel.selectedProjectPath == nil ? .library : .project)
@@ -1000,6 +1236,22 @@ struct ContentView: View {
                 .help("Choose what appears in the agent transcript")
                 .popover(isPresented: $isPiAgentTranscriptOptionsPresented, arrowEdge: .bottom) {
                     PiAgentTranscriptDisplayOptionsPopover(viewModel: viewModel)
+                }
+
+                Button {
+                    isPiAgentSystemPromptPresented.toggle()
+                } label: {
+                    Label("System Prompt", systemImage: "doc.text.magnifyingglass")
+                }
+                .toolbarNeutralChrome()
+                .help("View the final system prompt sent to the agent")
+                .disabled((viewModel.piAgentSessionStore.selectedSession?.finalSystemPrompt ?? "").isEmpty)
+                .popover(isPresented: $isPiAgentSystemPromptPresented, arrowEdge: .bottom) {
+                    if let prompt = viewModel.piAgentSessionStore.selectedSession?.finalSystemPrompt, !prompt.isEmpty {
+                        // Same text popover the old transcript card's "View" button used.
+                        PiAgentTextPopover(title: "Final System Prompt", text: prompt)
+                            .frame(width: 420, height: 300)
+                    }
                 }
             }
         }

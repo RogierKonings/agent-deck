@@ -1,9 +1,10 @@
 import Foundation
 
 /// Replicates `scripts/release.sh` for Agent Deck: preflight a clean, synced
-/// `main`, read the latest `vX.Y` tag, then `git tag -a` + `git push` a minor or
-/// major bump. The pushed tag fires `.github/workflows/release.yml`, which does
-/// the actual build/sign/notarize/publish — this service only tags and pushes.
+/// `main`, read the latest `vX.Y[.Z]` tag, then `git tag -a` + `git push` a
+/// patch, minor, or major bump. The pushed tag fires `.github/workflows/release.yml`,
+/// which does the actual build/sign/notarize/publish — this service only tags
+/// and pushes.
 struct ReleaseService {
     /// The one repo this whole flow is scoped to. The toolbar button only shows
     /// when the selected session's repo matches this.
@@ -12,6 +13,7 @@ struct ReleaseService {
     nonisolated static let mainBranch = "main"
 
     enum Bump: Hashable {
+        case patch
         case minor
         case major
     }
@@ -22,6 +24,7 @@ struct ReleaseService {
         let isClean: Bool
         let ahead: Int
         let behind: Int
+        let nextPatch: String
         let nextMinor: String
         let nextMajor: String
         /// Human-readable reason the repo can't be released right now, or nil.
@@ -31,6 +34,7 @@ struct ReleaseService {
 
         func tag(for bump: Bump) -> String {
             switch bump {
+            case .patch: return nextPatch
             case .minor: return nextMinor
             case .major: return nextMajor
             }
@@ -64,7 +68,7 @@ struct ReleaseService {
         let changes = try await gitRepositoryService.loadChanges(in: projectURL)
         let latestTag = try await gitRepositoryService.latestVersionTag(in: projectURL)
         let isClean = changes.totalChangeCount == 0
-        let (nextMinor, nextMajor) = Self.nextVersions(from: latestTag)
+        let (nextPatch, nextMinor, nextMajor) = Self.nextVersions(from: latestTag)
 
         return Preflight(
             latestTag: latestTag,
@@ -72,44 +76,65 @@ struct ReleaseService {
             isClean: isClean,
             ahead: changes.aheadCount,
             behind: changes.behindCount,
+            nextPatch: nextPatch,
             nextMinor: nextMinor,
             nextMajor: nextMajor,
             blocker: Self.blocker(branch: changes.branchName, isClean: isClean, ahead: changes.aheadCount, behind: changes.behindCount)
         )
     }
 
-    func tagAndPush(tag: String, projectURL: URL) async throws {
+    /// Tags and pushes. `notes`, when non-empty, becomes the annotated tag's
+    /// message — CI reads it as the release-notes body for the GitHub release and
+    /// the Sparkle update dialog. When empty (generation skipped/failed/cleared),
+    /// the message falls back to the tag name so CI lists commits instead.
+    func tagAndPush(tag: String, notes: String, projectURL: URL) async throws {
         if try await gitRepositoryService.localTagExists(tag, in: projectURL) {
             throw ReleaseError.tagExistsLocally(tag)
         }
         if try await gitRepositoryService.remoteTagExists(tag, remote: Self.remote, in: projectURL) {
             throw ReleaseError.tagExistsOnRemote(tag)
         }
-        try await gitRepositoryService.createAnnotatedTag(tag, message: tag, in: projectURL)
+        let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        let message = trimmedNotes.isEmpty ? tag : trimmedNotes
+        try await gitRepositoryService.createAnnotatedTag(tag, message: message, in: projectURL)
         try await gitRepositoryService.pushTag(tag, remote: Self.remote, in: projectURL)
     }
 
-    // MARK: - Version math (mirrors scripts/release.sh:53-71)
+    // MARK: - Version math
 
-    static func nextVersions(from latestTag: String?) -> (minor: String, major: String) {
+    nonisolated static func nextVersions(from latestTag: String?) -> (patch: String, minor: String, major: String) {
         let major: Int
         let minor: Int
+        let patch: Int
         if let latestTag, let parsed = parseVersion(latestTag) {
             major = parsed.major
             minor = parsed.minor
+            patch = parsed.patch
         } else {
             // No prior tag: propose v1.0 as the minor bump.
             major = 0
             minor = 9
+            patch = 0
         }
-        return ("v\(major).\(minor + 1)", "v\(major + 1).0")
+        return ("v\(major).\(minor).\(patch + 1)", "v\(major).\(minor + 1)", "v\(major + 1).0")
     }
 
-    static func parseVersion(_ tag: String) -> (major: Int, minor: Int)? {
+    nonisolated static func parseVersion(_ tag: String) -> (major: Int, minor: Int, patch: Int)? {
         let trimmed = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
         let parts = trimmed.split(separator: ".")
-        guard parts.count == 2, let major = Int(parts[0]), let minor = Int(parts[1]) else { return nil }
-        return (major, minor)
+        guard
+            (2...3).contains(parts.count),
+            let major = Int(parts[0]),
+            let minor = Int(parts[1])
+        else { return nil }
+        let patch: Int
+        if parts.count == 3 {
+            guard let parsedPatch = Int(parts[2]) else { return nil }
+            patch = parsedPatch
+        } else {
+            patch = 0
+        }
+        return (major, minor, patch)
     }
 
     // MARK: - Preflight gating (mirrors scripts/release.sh:31-49)

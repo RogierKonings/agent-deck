@@ -25,7 +25,7 @@ struct PiAgentReleaseToolbarButton: View {
     }
 }
 
-/// Replaces `scripts/release.sh`: preflights main, lets you pick a minor/major
+/// Replaces `scripts/release.sh`: preflights main, lets you pick a patch/minor/major
 /// bump, and tags + pushes. Follows the shared modal-sheet chrome.
 struct AgentDeckReleaseSheet: View {
     var viewModel: AppViewModel
@@ -39,11 +39,21 @@ struct AgentDeckReleaseSheet: View {
         case done
     }
 
+    private enum NotesState: Equatable {
+        case idle
+        case generating
+        case ready
+        case failed
+    }
+
     @State private var phase: Phase = .loading
     @State private var preflight: ReleaseService.Preflight?
     @State private var bump: ReleaseService.Bump = .minor
     @State private var pushedTag: String?
     @State private var errorMessage: String?
+    @State private var notesText: String = ""
+    @State private var notesState: NotesState = .idle
+    @State private var didStartNotes = false
 
     private var projectURL: URL? { viewModel.agentDeckReleaseProjectURL }
 
@@ -148,6 +158,7 @@ struct AgentDeckReleaseSheet: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(AppTheme.mutedText)
                     Picker("Bump", selection: $bump) {
+                        Text("Patch — \(preflight.nextPatch)").tag(ReleaseService.Bump.patch)
                         Text("Minor — \(preflight.nextMinor)").tag(ReleaseService.Bump.minor)
                         Text("Major — \(preflight.nextMajor)").tag(ReleaseService.Bump.major)
                     }
@@ -158,6 +169,8 @@ struct AgentDeckReleaseSheet: View {
                         .foregroundStyle(AppTheme.mutedText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+
+                releaseNotesSection
             }
 
             if let errorMessage {
@@ -166,6 +179,64 @@ struct AgentDeckReleaseSheet: View {
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var releaseNotesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("Release notes")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppTheme.mutedText)
+                Spacer()
+                Button {
+                    Task { await generateNotes() }
+                } label: {
+                    Label("Regenerate", systemImage: "sparkles")
+                        .labelStyle(.titleAndIcon)
+                }
+                .buttonStyle(.plain)
+                .font(.caption)
+                .foregroundStyle(AppTheme.brandAccent)
+                .disabled(notesState == .generating)
+            }
+
+            ZStack(alignment: .topLeading) {
+                TextEditor(text: $notesText)
+                    .font(.callout)
+                    .scrollContentBackground(.hidden)
+                    .padding(8)
+                    .frame(height: 150)
+                    .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(AppTheme.hairlineStroke))
+
+                if notesState == .generating {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Writing release notes…")
+                            .foregroundStyle(AppTheme.mutedText)
+                    }
+                    .font(.caption)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 14)
+                    .allowsHitTesting(false)
+                }
+            }
+
+            Text(notesCaption)
+                .font(.caption)
+                .foregroundStyle(notesState == .failed ? .orange : AppTheme.mutedText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var notesCaption: String {
+        switch notesState {
+        case .failed:
+            return "Couldn't draft notes — edit your own below, or leave it empty to let CI list the commits."
+        default:
+            return "AI-drafted from your commits. Edit freely; the heading and version are added automatically. Leave empty to let CI list the commits."
         }
     }
 
@@ -270,6 +341,28 @@ struct AgentDeckReleaseSheet: View {
             errorMessage = error.localizedDescription
         }
         phase = .ready
+        // Draft notes once the repo is releasable. Fire-and-forget so the ready
+        // UI renders immediately; the notes editor shows its own progress.
+        if let preflight, preflight.isReleasable, !didStartNotes {
+            didStartNotes = true
+            Task { await generateNotes() }
+        }
+    }
+
+    private func generateNotes() async {
+        guard let preflight else { return }
+        notesState = .generating
+        do {
+            let notes = try await viewModel.generateAgentDeckReleaseNotes(
+                version: preflight.tag(for: bump),
+                sinceTag: preflight.latestTag
+            )
+            notesText = notes
+            notesState = .ready
+        } catch {
+            // Leave whatever the user has typed; an empty body lets CI list commits.
+            notesState = .failed
+        }
     }
 
     private func confirm() async {
@@ -278,7 +371,7 @@ struct AgentDeckReleaseSheet: View {
         errorMessage = nil
         phase = .releasing
         do {
-            try await viewModel.agentDeckReleaseService.tagAndPush(tag: tag, projectURL: projectURL)
+            try await viewModel.agentDeckReleaseService.tagAndPush(tag: tag, notes: notesText, projectURL: projectURL)
             viewModel.recordAgentDeckReleaseSucceeded(tag: tag)
             pushedTag = tag
             phase = .done

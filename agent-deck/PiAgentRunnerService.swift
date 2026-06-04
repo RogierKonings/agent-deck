@@ -8,6 +8,7 @@ import os
 /// duplicate/empty assistant-entry questions are settled.
 @MainActor
 enum RPCDebugLog {
+#if DEBUG
     static let enabled = ProcessInfo.processInfo.environment["AGENTDECK_RPC_LOG"] != nil
     private static var handle: FileHandle? = {
         guard enabled else { return nil }
@@ -21,6 +22,9 @@ enum RPCDebugLog {
         FileHandle.standardError.write(Data("[rpc] \(out)".utf8))
         handle?.write(Data(out.utf8))
     }
+#else
+    static func log(_ line: String) {}
+#endif
 }
 
 enum PiParentAppendPromptResolver {
@@ -1087,6 +1091,7 @@ final class PiAgentRunnerService {
         RPCDebugLog.log("event type=\(event?.type ?? "unparsed") cmd=\(event?.command ?? "-")")
         // Within the window after a compaction completes, log the type of each inbound
         // event (never its content) so we can confirm whether Pi continues the turn.
+#if DEBUG
         if let remaining = postCompactionLogCountBySessionID[sessionID], remaining > 0 {
             let type = event?.type ?? "unparsed"
             Self.logger.info("Post-compaction inbound event type=\(type, privacy: .public)")
@@ -1096,6 +1101,7 @@ final class PiAgentRunnerService {
                 postCompactionLogCountBySessionID[sessionID] = remaining - 1
             }
         }
+#endif
         guard let event else {
             store.append(.init(sessionID: sessionID, role: .raw, title: "Raw Output", text: rawLine))
             return
@@ -1799,10 +1805,12 @@ final class PiAgentRunnerService {
         }
         store.upsert(.init(id: entryID, sessionID: sessionID, role: .status, title: "Compaction", text: text, rawJSON: rawLine))
         if event.type == "compaction_end" {
+#if DEBUG
             let willRetry = event.willRetry == true
             Self.logger.info("Compaction complete reason=\(reason, privacy: .public) willRetry=\(willRetry, privacy: .public)")
             // Open a short window so we can see whether Pi emits a continuation turn next.
             postCompactionLogCountBySessionID[sessionID] = 12
+#endif
             clientsBySessionID[sessionID]?.getState()
             clientsBySessionID[sessionID]?.getSessionStats()
         }

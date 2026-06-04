@@ -10,12 +10,37 @@ struct MarkdownDocumentView: View {
     @State private var resolvedSource: String?
 
     var body: some View {
-        MarkdownWebView(content: resolvedSource ?? source, contentHeight: $contentHeight)
-            .frame(height: max(minimumHeight, contentHeight))
-            .task(id: source) {
-                resolvedSource = nil
-                resolvedSource = await GitHubMarkdownAttachmentResolver.resolve(in: source)
-            }
+        // The TextKit-based native renderer sizes in microseconds and spawns no
+        // helper process. The WKWebView path, by contrast, launches a WebContent
+        // process and can block the main thread for hundreds of ms whenever a
+        // document appears. So only pay for the web view when the content uses
+        // something the native renderer can't draw — images, tables, or raw HTML.
+        // Plain markdown (skills, memory, most docs and issue bodies) goes native.
+        if MarkdownDocumentView.requiresRichRendering(source) {
+            MarkdownWebView(content: resolvedSource ?? source, contentHeight: $contentHeight)
+                .frame(height: max(minimumHeight, contentHeight))
+                .task(id: source) {
+                    resolvedSource = nil
+                    resolvedSource = await GitHubMarkdownAttachmentResolver.resolve(in: source)
+                }
+        } else {
+            MarkdownTextView(source: source)
+                .frame(maxWidth: .infinity, minHeight: minimumHeight, alignment: .topLeading)
+        }
+    }
+
+    /// True when `source` uses markdown the native renderer (headings, paragraphs,
+    /// lists, quotes, code) can't render — images, GFM tables, or raw HTML — and so
+    /// must go through the web view to look right.
+    static func requiresRichRendering(_ source: String) -> Bool {
+        if source.contains("![") || source.contains("<img") || source.contains("<table") || source.contains("</") {
+            return true
+        }
+        // GFM table: a header row immediately followed by a |---|---| separator row.
+        return source.range(
+            of: #"(?m)^\s*\|.*\|\s*\n\s*\|?[\s:|-]*-{2,}[\s:|-]*\|"#,
+            options: .regularExpression
+        ) != nil
     }
 }
 
@@ -26,20 +51,30 @@ private enum GitHubMarkdownAttachmentResolver {
     static func resolve(in markdown: String) async -> String {
         let urls = attachmentURLs(in: markdown)
         guard !urls.isEmpty else { return markdown }
+#if DEBUG
         logger.info("Resolving \(urls.count, privacy: .public) GitHub markdown attachment(s).")
+#endif
         guard let token = await githubToken() else {
+#if DEBUG
             logger.error("Cannot resolve GitHub markdown attachments: `gh auth token --hostname github.com` returned no token.")
+#endif
             return markdown
         }
 
         var resolved = markdown
         for urlString in urls {
+#if DEBUG
             logger.info("Fetching GitHub markdown attachment: \(urlString, privacy: .public)")
+#endif
             guard let dataURL = await dataURL(for: urlString, token: token) else {
+#if DEBUG
                 logger.error("Failed to resolve GitHub markdown attachment: \(urlString, privacy: .public)")
+#endif
                 continue
             }
+#if DEBUG
             logger.info("Resolved GitHub markdown attachment to data URL (\(dataURL.count, privacy: .public) characters).")
+#endif
             resolved = resolved.replacingOccurrences(of: urlString, with: dataURL)
         }
         return resolved
@@ -60,10 +95,14 @@ private enum GitHubMarkdownAttachmentResolver {
     private static func githubToken() async -> String? {
         await Task.detached(priority: .utility) {
             guard let ghURL = ghExecutableURL() else {
+#if DEBUG
                 logger.error("Cannot resolve GitHub markdown attachments: `gh` executable was not found in the app environment.")
+#endif
                 return nil
             }
+#if DEBUG
             logger.info("Using gh executable at \(ghURL.path, privacy: .public) for markdown attachment auth.")
+#endif
             let process = Process()
             process.executableURL = ghURL
             process.arguments = ["auth", "token", "--hostname", "github.com"]
@@ -74,19 +113,25 @@ private enum GitHubMarkdownAttachmentResolver {
                 try process.run()
                 process.waitUntilExit()
                 guard process.terminationStatus == 0 else {
+#if DEBUG
                     logger.error("gh auth token failed with exit code \(process.terminationStatus, privacy: .public).")
+#endif
                     return nil
                 }
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 let token = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+#if DEBUG
                 if token?.isEmpty == false {
                     logger.info("Loaded GitHub token from gh CLI for markdown attachment fetch.")
                 } else {
                     logger.error("gh auth token succeeded but stdout was empty.")
                 }
+#endif
                 return token?.isEmpty == false ? token : nil
             } catch {
+#if DEBUG
                 logger.error("Failed to run gh auth token: \(error.localizedDescription, privacy: .public)")
+#endif
                 return nil
             }
         }.value
@@ -110,22 +155,32 @@ private enum GitHubMarkdownAttachmentResolver {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else {
+#if DEBUG
                 logger.error("Attachment fetch returned a non-HTTP response for \(urlString, privacy: .public).")
+#endif
                 return nil
             }
             guard (200..<300).contains(http.statusCode) else {
+#if DEBUG
                 logger.error("Attachment fetch failed for \(urlString, privacy: .public): HTTP \(http.statusCode, privacy: .public).")
+#endif
                 return nil
             }
             guard !data.isEmpty else {
+#if DEBUG
                 logger.error("Attachment fetch returned empty data for \(urlString, privacy: .public).")
+#endif
                 return nil
             }
             let mimeType = http.mimeType ?? "image/png"
+#if DEBUG
             logger.info("Attachment fetch succeeded for \(urlString, privacy: .public): \(data.count, privacy: .public) bytes, mime \(mimeType, privacy: .public).")
+#endif
             return "data:\(mimeType);base64,\(data.base64EncodedString())"
         } catch {
+#if DEBUG
             logger.error("Attachment fetch threw for \(urlString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+#endif
             return nil
         }
     }
@@ -208,19 +263,8 @@ private struct NativeMarkdownRepresentable: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     final class Coordinator {
-        /// The balanced source whose parse is currently in flight (or last
-        /// applied async). Guards against re-spawning a parse for the same text
-        /// and against a stale async result overwriting a newer one.
-        var pendingSource: String?
-        var parseTask: Task<Void, Never>?
-        deinit { parseTask?.cancel() }
+        let applier = MarkdownSourceApplier()
     }
-
-    /// Above this many characters an uncached source is parsed off the main
-    /// thread. Below it, the line-based parse is cheap enough that a synchronous
-    /// pass costs less than a frame — and staying synchronous keeps the height
-    /// measurement (and the transcript's anti-wobble machinery) exact.
-    private static let asyncParseThreshold = 4_000
 
     // SwiftUI's sizing pass for an NSViewRepresentable goes through this method on
     // macOS 13+. Returning the TextKit-computed height for the proposed width is what
@@ -235,62 +279,12 @@ private struct NativeMarkdownRepresentable: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ nsView: NativeMarkdownTextContainer, coordinator: Coordinator) {
-        coordinator.parseTask?.cancel()
+        coordinator.applier.cancel()
         nsView.dismantle()
     }
 
     private func configure(view: NativeMarkdownTextContainer, coordinator: Coordinator) {
-        let displaySource = StreamingMarkdownBalancer.balance(source)
-
-        // Synchronous fast paths — no wobble, height stays exact this frame:
-        //  • cache hit (re-render, scroll-back, unchanged text), or
-        //  • small/medium source where a main-thread parse costs < one frame.
-        // This covers the overwhelming majority of flushes, including streaming
-        // of normal-length messages.
-        if let cached = MarkdownRenderCache.cachedDocument(for: displaySource) {
-            coordinator.parseTask?.cancel()
-            coordinator.pendingSource = nil
-            view.configure(document: cached)
-            return
-        }
-        if displaySource.count <= Self.asyncParseThreshold {
-            coordinator.parseTask?.cancel()
-            coordinator.pendingSource = nil
-            view.configure(document: MarkdownRenderCache.document(for: displaySource))
-            return
-        }
-
-        // First appearance of a large uncached block (e.g. session load, or
-        // scroll-back after cache eviction): parse synchronously so the row never
-        // flashes blank. Only a block already on screen and growing during
-        // streaming takes the async path below.
-        guard view.hasDocument else {
-            coordinator.parseTask?.cancel()
-            coordinator.pendingSource = nil
-            view.configure(document: MarkdownRenderCache.document(for: displaySource))
-            return
-        }
-
-        // Large, uncached source on an already-displayed block: parse off the main
-        // thread. Keep the previously applied document on screen until the parse
-        // lands (no blank/wobble) — for streaming it differs only by the newest
-        // tokens, and the table's height drift detector absorbs the eventual
-        // growth. Skip if this exact source is already being parsed.
-        if coordinator.pendingSource == displaySource { return }
-        coordinator.pendingSource = displaySource
-        coordinator.parseTask?.cancel()
-        coordinator.parseTask = Task { [weak coordinator, weak view] in
-            let document = await Task.detached(priority: .userInitiated) {
-                MarkdownRenderCache.parseDocument(for: displaySource)
-            }.value
-            guard !Task.isCancelled, let coordinator, let view else { return }
-            MarkdownRenderCache.store(document, for: displaySource)
-            // Only apply if this is still the latest requested source; a newer
-            // synchronous/async pass may have superseded it.
-            guard coordinator.pendingSource == displaySource else { return }
-            coordinator.pendingSource = nil
-            view.configure(document: document)
-        }
+        coordinator.applier.apply(source: source, to: view)
     }
 }
 
@@ -322,7 +316,77 @@ private struct NativeMarkdownTextView: NSViewRepresentable {
     }
 }
 
-private final class NativeMarkdownTextContainer: NSView {
+/// Applies a markdown *source string* to a `NativeMarkdownTextContainer`,
+/// owning the parse-policy state (sync fast path, off-main parse for large
+/// growing blocks, and the in-flight de-dup) that used to live inside the
+/// SwiftUI representable. Shared by the representable and the native cell so
+/// both render markdown identically — and streaming flushes keep hitting the
+/// container's in-place update rather than a full rebuild.
+final class MarkdownSourceApplier {
+    /// The balanced source whose parse is currently in flight (or last applied
+    /// async). Guards against re-spawning a parse for the same text and against
+    /// a stale async result overwriting a newer one.
+    private var pendingSource: String?
+    private var parseTask: Task<Void, Never>?
+
+    /// Above this many characters an uncached source is parsed off the main
+    /// thread. Below it, the line-based parse is cheap enough that a synchronous
+    /// pass costs less than a frame — and staying synchronous keeps the height
+    /// measurement (and the transcript's anti-wobble machinery) exact.
+    private static let asyncParseThreshold = 4_000
+
+    deinit { parseTask?.cancel() }
+
+    func cancel() { parseTask?.cancel() }
+
+    func apply(source: String, to view: NativeMarkdownTextContainer) {
+        let displaySource = StreamingMarkdownBalancer.balance(source)
+
+        // Synchronous fast paths — no wobble, height stays exact this frame:
+        //  • cache hit (re-render, scroll-back, unchanged text), or
+        //  • small/medium source where a main-thread parse costs < one frame.
+        if let cached = MarkdownRenderCache.cachedDocument(for: displaySource) {
+            parseTask?.cancel()
+            pendingSource = nil
+            view.configure(document: cached)
+            return
+        }
+        if displaySource.count <= Self.asyncParseThreshold {
+            parseTask?.cancel()
+            pendingSource = nil
+            view.configure(document: MarkdownRenderCache.document(for: displaySource))
+            return
+        }
+
+        // First appearance of a large uncached block: parse synchronously so the
+        // row never flashes blank. Only an already-displayed block growing during
+        // streaming takes the async path below.
+        guard view.hasDocument else {
+            parseTask?.cancel()
+            pendingSource = nil
+            view.configure(document: MarkdownRenderCache.document(for: displaySource))
+            return
+        }
+
+        // Large, uncached source on an already-displayed block: parse off the main
+        // thread, keeping the prior document on screen until the parse lands.
+        if pendingSource == displaySource { return }
+        pendingSource = displaySource
+        parseTask?.cancel()
+        parseTask = Task { [weak self, weak view] in
+            let document = await Task.detached(priority: .userInitiated) {
+                MarkdownRenderCache.parseDocument(for: displaySource)
+            }.value
+            guard !Task.isCancelled, let self, let view else { return }
+            MarkdownRenderCache.store(document, for: displaySource)
+            guard self.pendingSource == displaySource else { return }
+            self.pendingSource = nil
+            view.configure(document: document)
+        }
+    }
+}
+
+final class NativeMarkdownTextContainer: NSView {
     private let stackView = NSStackView()
     private var lastDocument: CachedMarkdownDocument?
     /// Whether a document has ever been applied. Lets the representable parse
@@ -334,15 +398,30 @@ private final class NativeMarkdownTextContainer: NSView {
     private var isDismantled = false
     private var lastMeasuredWidth: CGFloat = 0
     private var lastMeasuredHeight: CGFloat = 0
-    /// Memoized result of `measureHeight(forWidth:)`, keyed by width. Lives only
-    /// for the current runloop turn (see `scheduleHeightCacheInvalidation`): long
-    /// enough to collapse SwiftUI's burst of `sizeThatFits` probes into one
-    /// TextKit layout, short enough that a later pass always re-measures — so a
-    /// height taken before the content settled can never get frozen (that froze
-    /// too-short rows and cropped cards). Also wiped in `configure` on any
-    /// document change.
+    /// Memoized result of `measureHeight(forWidth:)`, keyed by width. Invalidated
+    /// only when the height can actually change: the document changes (wiped in
+    /// `configure`) or the width changes (the cache key carries width). A late
+    /// per-block intrinsic-size resolution after a rebuild is handled by the
+    /// settle loop (`settleMeasurementsRemaining`), not by dropping the cache.
+    /// It deliberately does NOT drop every runloop turn, and is NOT dropped in
+    /// `layout()` — a stable visible row keeps its measurement across scroll
+    /// frames instead of re-running a full TextKit layout on every `sizeThatFits`
+    /// probe (that per-frame re-measure was the transcript's 30fps scroll cap).
     private var heightCache: (width: CGFloat, height: CGFloat)?
-    private var heightCacheInvalidationScheduled = false
+    /// The width at which every block was last fully laid out (invalidate-all +
+    /// double pass). When a later measure comes in at this same width, the blocks are
+    /// already wrapped correctly and only the block(s) that changed need re-measuring
+    /// — so the streaming re-measure can take a single cheap pass. Reset on rebuild()
+    /// (fresh views need the full pass once) so it only fast-paths incremental edits.
+    private var lastFullLayoutWidth: CGFloat?
+    /// Budget of forced fresh re-measures after a content change, to self-heal a
+    /// too-short first measure (per-block TextKit views can report a stale
+    /// intrinsic size on the first pass after a rebuild). The debounced
+    /// `measureHeight()` decrements this and re-measures fresh until the height
+    /// stabilizes, then it returns to 0 — so steady scroll (no content change)
+    /// always hits the cache and never forces a TextKit layout.
+    private var settleMeasurementsRemaining = 0
+    private static let settleMeasurementBudget = 4
     var onHeightChange: ((CGFloat) -> Void)?
 
     override init(frame frameRect: NSRect) {
@@ -370,7 +449,7 @@ private final class NativeMarkdownTextContainer: NSView {
         ])
     }
 
-    func configure(document: CachedMarkdownDocument) {
+    fileprivate func configure(document: CachedMarkdownDocument) {
         isDismantled = false
         guard document != lastDocument else {
             scheduleHeightMeasurement()
@@ -379,8 +458,11 @@ private final class NativeMarkdownTextContainer: NSView {
         let previous = lastDocument
         lastDocument = document
         // The document changed (the unchanged case returned at the guard above),
-        // so any cached height is now stale. `measureHeight(forWidth:)` repopulates.
+        // so any cached height is now stale. `measureHeight(forWidth:)` repopulates,
+        // and the settle loop re-measures fresh for a few runloops until the new
+        // height stabilizes (covers a too-short first measure after a rebuild).
         heightCache = nil
+        settleMeasurementsRemaining = Self.settleMeasurementBudget
         // Try the cheap streaming-friendly path first: when only the last block's text
         // changed (and its kind stayed the same), update that block's text view in place
         // instead of rebuilding the whole NSStackView. This is the hot path for every
@@ -395,31 +477,66 @@ private final class NativeMarkdownTextContainer: NSView {
     }
 
     private func tryIncrementalUpdate(from previous: CachedMarkdownDocument, to next: CachedMarkdownDocument) -> Bool {
-        guard previous.frontmatter == next.frontmatter else { return false }
+        guard previous.frontmatter == next.frontmatter else { Self.logIncrementalBail("frontmatter"); return false }
         let oldBlocks = previous.blocks
         let newBlocks = next.blocks
-        guard oldBlocks.count == newBlocks.count, !oldBlocks.isEmpty else { return false }
-
-        // All blocks except (possibly) the last must match byte-for-byte.
-        let lastIndex = oldBlocks.count - 1
-        for i in 0..<lastIndex where oldBlocks[i] != newBlocks[i] {
+        // Only handle non-shrinking growth — the streaming case. A shorter document
+        // (rare: edit/merge) falls through to a full rebuild.
+        guard !oldBlocks.isEmpty, newBlocks.count >= oldBlocks.count else {
+            Self.logIncrementalBail(oldBlocks.isEmpty ? "emptyOld" : "shrink(\(oldBlocks.count)->\(newBlocks.count))")
             return false
         }
 
-        // Last block: same kind metadata, different text content allowed.
-        let oldLast = oldBlocks[lastIndex].kind
-        let newLast = newBlocks[lastIndex].kind
-        guard Self.sameKindShape(oldLast, newLast) else { return false }
+        // All old blocks except the last must match the new prefix byte-for-byte.
+        let lastIndex = oldBlocks.count - 1
+        for i in 0..<lastIndex where oldBlocks[i] != newBlocks[i] {
+            Self.logIncrementalBail("prefix@\(i)/\(oldBlocks.count)")
+            return false
+        }
 
         let viewOffset = next.frontmatter != nil ? 1 : 0
-        let viewIndex = viewOffset + lastIndex
-        guard viewIndex < stackView.arrangedSubviews.count else { return false }
-        let view = stackView.arrangedSubviews[viewIndex]
-        guard let textView = Self.firstTextView(in: view) else { return false }
+        // The arranged subviews must line up with the old block count, or our indices
+        // are wrong — bail to a full rebuild rather than corrupt the stack.
+        guard stackView.arrangedSubviews.count == viewOffset + oldBlocks.count else {
+            Self.logIncrementalBail("viewCount(\(stackView.arrangedSubviews.count)!=\(viewOffset + oldBlocks.count))")
+            return false
+        }
 
-        Self.updateTextView(textView, with: newLast)
+        // The old last block may have grown (more text streamed into the same block).
+        // Update it in place when only its text changed; a shape change forces rebuild.
+        if oldBlocks[lastIndex] != newBlocks[lastIndex] {
+            guard Self.sameKindShape(oldBlocks[lastIndex].kind, newBlocks[lastIndex].kind) else {
+                Self.logIncrementalBail("shape")
+                return false
+            }
+            let viewIndex = viewOffset + lastIndex
+            guard let textView = Self.firstTextView(in: stackView.arrangedSubviews[viewIndex]) else {
+                Self.logIncrementalBail("noTextView")
+                return false
+            }
+            Self.updateTextView(textView, with: newBlocks[lastIndex].kind)
+        }
+
+        // Append views for brand-new trailing blocks — a new paragraph / list item /
+        // code line appearing as the stream continues. This is what turns a long
+        // streaming message from O(N) view tear-down per new block into O(1): the
+        // existing block views are left untouched and only the new ones are built.
+        if newBlocks.count > oldBlocks.count {
+            for i in oldBlocks.count..<newBlocks.count {
+                stackView.addArrangedSubview(Self.view(for: newBlocks[i]))
+            }
+        }
         return true
     }
+
+#if DEBUG
+    private static let incrementalLog = Logger(subsystem: "streetcoding.agent-deck", category: "MarkdownIncremental")
+    private static func logIncrementalBail(_ reason: String) {
+        incrementalLog.error("markdown rebuild (incremental bail): \(reason, privacy: .public)")
+    }
+#else
+    private static func logIncrementalBail(_ reason: String) {}
+#endif
 
     // Two block kinds have the "same shape" if their layout chrome (paddedBlock, listRow
     // with marker, quote bar, code container) is identical and only the inner text
@@ -453,9 +570,18 @@ private final class NativeMarkdownTextContainer: NSView {
     }
 
     private static func updateTextView(_ textView: NSTextView, with kind: MarkdownBlock.Kind) {
-        let (font, color, parseInline) = textStyling(for: kind)
-        let body = bodyText(from: kind)
-        let attr = attributedString(body, font: font, color: color, parseInlineMarkdown: parseInline)
+        let attr: NSAttributedString
+        switch kind {
+        case let .bullet(text, indentLevel):
+            // List items carry their marker + hanging indent inside the same text
+            // view, so rebuild the full line (not just the body) on reuse/streaming.
+            attr = listAttributedString(marker: bulletMarker(for: indentLevel), text: text, indentLevel: indentLevel, markerWidth: 18)
+        case let .numbered(number, text, indentLevel):
+            attr = listAttributedString(marker: "\(number).", text: text, indentLevel: indentLevel, markerWidth: 22)
+        default:
+            let (font, color, parseInline) = textStyling(for: kind)
+            attr = attributedString(bodyText(from: kind), font: font, color: color, parseInlineMarkdown: parseInline)
+        }
         if let storage = textView.textStorage {
             storage.beginEditing()
             storage.setAttributedString(attr)
@@ -502,6 +628,12 @@ private final class NativeMarkdownTextContainer: NSView {
 
     override func layout() {
         super.layout()
+        // NOTE: do NOT invalidate `heightCache` here. `layout()` runs inside the
+        // cell's scroll layout pass, and SwiftUI calls `sizeThatFits` several
+        // times per pass; wiping the cache mid-pass forces repeated full TextKit
+        // layouts every frame (the scroll cap). The cache is invalidated only on
+        // a real content change (`configure`) or width change (cache key) — see
+        // `heightCache` and the settle loop in `measureHeight()`.
         scheduleHeightMeasurement()
     }
 
@@ -521,28 +653,53 @@ private final class NativeMarkdownTextContainer: NSView {
             return heightCache.height
         }
         configureWidthConstraint(to: width)
-        // Force layout so the per-block AutoSizingMarkdownTextView intrinsics resolve
-        // before we ask the stack for its fitting size — without this, freshly-rebuilt
-        // children may still report stale heights.
+        if let lastFullLayoutWidth, abs(lastFullLayoutWidth - width) < 0.5 {
+            // Streaming hot path: width is unchanged since the last full layout, so
+            // every block is already wrapped correctly. A block whose text grew
+            // self-invalidated its intrinsic (updateTextView → invalidate), and any
+            // freshly appended block starts dirty — a single pass re-measures just
+            // those and leaves the rest cached, instead of re-laying-out every block.
+            stackView.layoutSubtreeIfNeeded()
+            let height = ceil(stackView.fittingSize.height)
+            heightCache = (width, height)
+            return height
+        }
+        // Width changed (or first measure after a rebuild). A text view's
+        // intrinsicContentSize wraps at max(bounds.width, containerSize.width): on the
+        // FIRST pass bounds.width may still be stale-wide, so the text wraps to too few
+        // lines and the measured height comes back short — which then gets cached and
+        // leaves the last line crowding the card's bottom edge. The first pass assigns
+        // each block its real width; we then invalidate the per-block intrinsics and
+        // lay out again so they re-wrap at that width before we read the fitting size.
+        stackView.layoutSubtreeIfNeeded()
+        invalidateBlockIntrinsics(in: stackView)
         stackView.layoutSubtreeIfNeeded()
         let height = ceil(stackView.fittingSize.height)
         heightCache = (width, height)
-        scheduleHeightCacheInvalidation()
+        lastFullLayoutWidth = width
         return height
     }
 
-    /// Drop the height cache at the end of the current runloop turn. Keeping it
-    /// only that long means the within-pass `sizeThatFits` burst is deduped, but
-    /// every subsequent layout pass re-measures — preserving the self-healing
-    /// re-measurement the transcript table's drift detector relies on.
-    private func scheduleHeightCacheInvalidation() {
-        guard !heightCacheInvalidationScheduled else { return }
-        heightCacheInvalidationScheduled = true
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.heightCacheInvalidationScheduled = false
-            self.heightCache = nil
+    /// Recursively invalidate every `AutoSizingMarkdownTextView`'s cached
+    /// intrinsic size so the next layout pass re-measures it at its now-correct
+    /// width (text blocks can be nested inside list/quote row stacks).
+    private func invalidateBlockIntrinsics(in view: NSView) {
+        for sub in view.subviews {
+            if let tv = sub as? AutoSizingMarkdownTextView {
+                tv.invalidateIntrinsicContentSize()
+            } else {
+                invalidateBlockIntrinsics(in: sub)
+            }
         }
+    }
+
+    /// The true laid-out height of the rendered block stack at its current width
+    /// (re-measured, not cached) — used by callers to detect when the row was
+    /// sized shorter than the content actually needs (the bottom-crop bug).
+    var renderedContentHeight: CGFloat {
+        invalidateBlockIntrinsics(in: stackView)
+        stackView.layoutSubtreeIfNeeded()
+        return ceil(stackView.fittingSize.height)
     }
 
     // Must be side-effect-free: AppKit calls this during the window's update-constraints
@@ -578,6 +735,10 @@ private final class NativeMarkdownTextContainer: NSView {
     }
 
     private func rebuild(document: CachedMarkdownDocument) {
+        // Fresh views need the full invalidate-all + double pass on their first
+        // measure (they can report a stale-wide intrinsic), so drop the fast-path
+        // marker — only incremental edits at an unchanged width should skip it.
+        lastFullLayoutWidth = nil
         stackView.arrangedSubviews.forEach { view in
             stackView.removeArrangedSubview(view)
             view.removeFromSuperview()
@@ -591,7 +752,7 @@ private final class NativeMarkdownTextContainer: NSView {
                 font: .monospacedSystemFont(ofSize: 12, weight: .regular),
                 color: .secondaryLabelColor,
                 fill: AppTheme.nsCodeBlockFill,
-                cornerRadius: 6,
+                cornerRadius: AppTheme.Chat.chipCornerRadius,
                 padding: NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
             )
             stackView.addArrangedSubview(frontmatterView)
@@ -604,6 +765,15 @@ private final class NativeMarkdownTextContainer: NSView {
 
     private func scheduleHeightMeasurement() {
         guard !isDismantled else { return }
+        // The debounced measure → `onHeightChange` callback path is only used by
+        // the binding-based representable (`NativeMarkdownTextView`). The
+        // transcript (`MarkdownTextView`/`NativeMarkdownRepresentable`) sizes via
+        // `sizeThatFits` and reports height through the cell's intrinsic size, so
+        // it has no `onHeightChange` — running this here just re-measures TextKit
+        // on every `layout()` during scroll AND thrashes `heightCache` (it
+        // measures at `bounds.width`, while `sizeThatFits` uses the proposed
+        // width). Skip entirely when nobody consumes the result.
+        guard onHeightChange != nil else { return }
         guard !pendingHeightMeasurement else { return }
         pendingHeightMeasurement = true
         DispatchQueue.main.async { [weak self] in
@@ -625,10 +795,26 @@ private final class NativeMarkdownTextContainer: NSView {
         }
 
         guard abs(lastMeasuredWidth - width) > 0.5 || lastDocument != nil else { return }
-        // Route through the memoized path — when width and document are unchanged
-        // this is a cache hit and avoids a redundant TextKit layout per scroll pass.
+        // While settling after a content change, force a fresh measurement so a
+        // too-short first measure self-corrects; otherwise route through the
+        // memoized path so steady scroll is a cache hit (no TextKit layout).
+        if settleMeasurementsRemaining > 0 {
+            heightCache = nil
+        }
         let height = measureHeight(forWidth: width)
-        guard abs(lastMeasuredHeight - height) > 0.5 || abs(lastMeasuredWidth - width) > 0.5 else { return }
+        let changed = abs(lastMeasuredHeight - height) > 0.5 || abs(lastMeasuredWidth - width) > 0.5
+        if settleMeasurementsRemaining > 0 {
+            settleMeasurementsRemaining -= 1
+            // Keep re-measuring while the height is still moving and we have
+            // budget; the moment it stabilizes, stop forcing fresh measures so
+            // scroll returns to pure cache hits.
+            if changed && settleMeasurementsRemaining > 0 {
+                scheduleHeightMeasurement()
+            } else {
+                settleMeasurementsRemaining = 0
+            }
+        }
+        guard changed else { return }
         lastMeasuredWidth = width
         lastMeasuredHeight = height
         onHeightChange?(max(1, height))
@@ -668,41 +854,58 @@ private final class NativeMarkdownTextContainer: NSView {
                 color: .labelColor,
                 fill: AppTheme.nsCodeBlockFill,
                 border: AppTheme.nsCodeBlockBorder,
-                cornerRadius: 10,
+                cornerRadius: AppTheme.Chat.subCardCornerRadius,
                 padding: NSEdgeInsets(top: 10, left: 10, bottom: 10, right: 10)
             )
         }
     }
 
+    // Gap between the marker column and the text column, in points.
+    private static let listMarkerTextGap: CGFloat = 8
+    // Each nesting level shifts the whole item right by this much.
+    private static let listIndentPerLevel: CGFloat = 22
+
     private static func listRow(marker: String, text: String, indentLevel: Int, markerWidth: CGFloat) -> NSView {
-        let row = NSStackView()
-        row.translatesAutoresizingMaskIntoConstraints = false
-        row.orientation = .horizontal
-        row.alignment = .top
-        row.spacing = 8
-        row.edgeInsets = NSEdgeInsets(top: 0, left: CGFloat(max(indentLevel, 0)) * 22, bottom: 0, right: 0)
+        // A list item is a SINGLE text view: `marker` + tab + body in one attributed
+        // string with a hanging-indent paragraph style. Because the marker and the
+        // text are one text run on one line, they share a baseline structurally —
+        // there is no separate marker view to misalign. Wrapped lines align under the
+        // text (headIndent), not under the marker. This is the standard TextKit list
+        // layout and removes the baseline/constraint guesswork entirely.
+        let tv = textView("", font: NSFont.preferredFont(forTextStyle: .body), color: .labelColor)
+        tv.textStorage?.setAttributedString(
+            listAttributedString(marker: marker, text: text, indentLevel: indentLevel, markerWidth: markerWidth)
+        )
+        return tv
+    }
 
+    /// Build `marker` + tab + body as one attributed string with a hanging indent so
+    /// the marker sits at `indentLevel * listIndentPerLevel` and the text (and any
+    /// wrapped lines) align at `+ markerWidth + gap`.
+    private static func listAttributedString(marker: String, text: String, indentLevel: Int, markerWidth: CGFloat) -> NSAttributedString {
         let bodyFont = NSFont.preferredFont(forTextStyle: .body)
-        let markerView = NSTextField(labelWithString: marker)
-        markerView.translatesAutoresizingMaskIntoConstraints = false
         // Numbered lists use monospaced digits in SwiftUI (`.body.monospacedDigit().weight(.semibold)`).
-        // Detect "1.", "2.", … so the marker font matches.
         let isNumberedMarker = marker.last == "." && marker.dropLast().allSatisfy(\.isNumber)
-        if isNumberedMarker {
-            markerView.font = NSFont.monospacedDigitSystemFont(ofSize: bodyFont.pointSize, weight: .semibold)
-        } else {
-            markerView.font = NSFontManager.shared.convert(bodyFont, toHaveTrait: .boldFontMask)
-        }
-        markerView.textColor = .secondaryLabelColor
-        markerView.alignment = .right
-        markerView.setContentHuggingPriority(.required, for: .horizontal)
-        markerView.widthAnchor.constraint(greaterThanOrEqualToConstant: markerWidth).isActive = true
+        let markerFont = isNumberedMarker
+            ? NSFont.monospacedDigitSystemFont(ofSize: bodyFont.pointSize, weight: .semibold)
+            : NSFontManager.shared.convert(bodyFont, toHaveTrait: .boldFontMask)
 
-        let body = textView(text, font: bodyFont, color: .labelColor)
-        row.addArrangedSubview(markerView)
-        row.addArrangedSubview(body)
-        body.widthAnchor.constraint(greaterThanOrEqualToConstant: 20).isActive = true
-        return row
+        let result = NSMutableAttributedString(
+            string: marker,
+            attributes: [.font: markerFont, .foregroundColor: NSColor.secondaryLabelColor]
+        )
+        result.append(NSAttributedString(string: "\t", attributes: [.font: bodyFont]))
+        result.append(attributedString(text, font: bodyFont, color: .labelColor, parseInlineMarkdown: true))
+
+        let firstLineIndent = CGFloat(max(indentLevel, 0)) * listIndentPerLevel
+        let textColumn = firstLineIndent + markerWidth + listMarkerTextGap
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.firstLineHeadIndent = firstLineIndent          // marker starts here
+        paragraph.headIndent = textColumn                        // wrapped lines align with text
+        paragraph.tabStops = [NSTextTab(textAlignment: .left, location: textColumn, options: [:])]
+        paragraph.defaultTabInterval = textColumn
+        result.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: result.length))
+        return result
     }
 
     private static func quoteBlock(_ text: String) -> NSView {
@@ -715,7 +918,7 @@ private final class NativeMarkdownTextContainer: NSView {
         row.spacing = 9
 
         let bar = DynamicFillView(fill: AppTheme.nsQuoteBarFill)
-        bar.layer?.cornerRadius = 1
+        bar.layer?.cornerRadius = AppTheme.Chat.quoteBarCornerRadius
         bar.widthAnchor.constraint(equalToConstant: 3).isActive = true
 
         let body = textView(text, font: NSFont.preferredFont(forTextStyle: .body), color: .secondaryLabelColor)
@@ -798,7 +1001,7 @@ private final class NativeMarkdownTextContainer: NSView {
         textView.isEditable = false
         textView.isSelectable = true
         textView.drawsBackground = false
-        textView.textContainerInset = .zero
+        textView.textContainerInset = NSSize(width: 0, height: 2)
         textView.textContainer?.lineFragmentPadding = 0
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.heightTracksTextView = false
@@ -881,7 +1084,7 @@ private final class AutoSizingMarkdownTextView: NSTextView {
         let width = max(bounds.width, textContainer.containerSize.width, 1)
         textContainer.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
         layoutManager.ensureLayout(for: textContainer)
-        let height = ceil(layoutManager.usedRect(for: textContainer).height) + textContainerInset.height * 2 + 1
+        let height = ceil(layoutManager.usedRect(for: textContainer).height) + textContainerInset.height * 2
         return NSSize(width: NSView.noIntrinsicMetric, height: max(1, height))
     }
 

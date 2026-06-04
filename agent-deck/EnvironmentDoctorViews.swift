@@ -275,6 +275,7 @@ struct DoctorScreen: View {
             // still belong to the explicit refresh button to avoid spawning subprocesses
             // on every focus change.
             guard newPhase == .active else { return }
+            refreshWebFetchStatus()
             Task { await refreshPiRuntimeStatus() }
         }
         .sheet(item: $envDraft) { draft in
@@ -760,10 +761,15 @@ struct DoctorScreen: View {
     }
 
     private var webFetchFallbackRows: [(String, String)] {
-        [
+        var rows = [
             ("Status", webFetchStatus.isInstalled ? "Installed" : "Dependencies missing"),
-            ("Packages", WebFetchDependencyService.packages.joined(separator: ", "))
+            ("Packages", WebFetchDependencyService.packages.joined(separator: ", ")),
+            ("Install Path", webFetchStatus.installDirectory.path)
         ]
+        if !webFetchStatus.missingPackages.isEmpty {
+            rows.insert(("Missing", webFetchStatus.missingPackages.joined(separator: ", ")), at: 1)
+        }
+        return rows
     }
 
     private func refreshWebFetchStatus() {

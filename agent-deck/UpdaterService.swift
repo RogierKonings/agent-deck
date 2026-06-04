@@ -8,6 +8,20 @@ final class UpdaterService: NSObject, ObservableObject, SPUUpdaterDelegate {
     @Published private(set) var updateAvailable: Bool = false
     @Published private(set) var availableVersion: String? = nil
 
+    /// Sparkle is disabled in debug builds. The Sparkle Info.plist keys
+    /// (`SUFeedURL` / `SUPublicEDKey`) are injected only by the CI release build,
+    /// so a local debug build would start the updater with no feed and no EdDSA
+    /// key — which logs Sparkle's "Serving updates without an EdDSA key …
+    /// deprecated" warning plus the `sessionInProgress` noise, and can't update
+    /// anything anyway. Local builds don't self-update, so we never start it.
+    private static let isEnabled: Bool = {
+        #if DEBUG
+        return false
+        #else
+        return true
+        #endif
+    }()
+
     /// Lazy so it can reference `self` as the delegate.
     /// Sparkle 2.x binds delegates at construction time and exposes
     /// `SPUUpdater.delegate` as read-only.
@@ -20,7 +34,9 @@ final class UpdaterService: NSObject, ObservableObject, SPUUpdaterDelegate {
     override init() {
         super.init()
         // Touch the lazy controller so Sparkle's scheduled-check timer starts
-        // counting from launch, not from the first manual check.
+        // counting from launch, not from the first manual check. Skipped when
+        // disabled so the updater is never constructed in a debug build.
+        guard Self.isEnabled else { return }
         _ = controller
     }
 
@@ -32,6 +48,7 @@ final class UpdaterService: NSObject, ObservableObject, SPUUpdaterDelegate {
     /// `checkForUpdates(_:)` silently drops the call. Poll briefly for the
     /// in-flight session to settle before giving up.
     func checkForUpdates() {
+        guard Self.isEnabled else { return }
         if controller.updater.canCheckForUpdates {
             controller.checkForUpdates(nil)
             return
@@ -52,6 +69,7 @@ final class UpdaterService: NSObject, ObservableObject, SPUUpdaterDelegate {
     /// Silent background check. Sparkle surfaces a dialog only if a newer
     /// version is found. Safe to call from launch.
     func checkForUpdatesInBackground() {
+        guard Self.isEnabled else { return }
         controller.updater.checkForUpdatesInBackground()
     }
 
@@ -59,7 +77,9 @@ final class UpdaterService: NSObject, ObservableObject, SPUUpdaterDelegate {
 
     nonisolated func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
         let version = item.displayVersionString
+#if DEBUG
         NSLog("Sparkle: didFindValidUpdate version=%@", item.versionString)
+#endif
         Task { @MainActor [weak self] in
             self?.updateAvailable = true
             self?.availableVersion = version
@@ -77,6 +97,7 @@ final class UpdaterService: NSObject, ObservableObject, SPUUpdaterDelegate {
     /// enclosure URL, malformed appcast) show up in Console.app instead of
     /// failing silently.
     nonisolated func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
+#if DEBUG
         let nsErr = error as NSError
         NSLog(
             "Sparkle: didAbortWithError domain=%@ code=%ld desc=%@",
@@ -92,5 +113,6 @@ final class UpdaterService: NSObject, ObservableObject, SPUUpdaterDelegate {
                 underlying.localizedDescription
             )
         }
+#endif
     }
 }

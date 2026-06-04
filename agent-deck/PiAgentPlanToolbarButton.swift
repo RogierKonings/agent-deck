@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// First item of the Pi Agent toolbar: an icon button that opens the current plan in
-/// a popover. While the plan is in progress the `checklist` icon breathes and takes
-/// the brand-accent tint; once every item is done it settles to neutral chrome.
+/// a popover. While the plan is in progress the `checklist` icon takes the
+/// brand-accent tint; once every item is done it settles to neutral chrome.
 /// Disabled when the selected session has no plan.
 ///
 /// Structured as a single-level custom view — its `body` is the `Button` directly,
@@ -22,7 +22,6 @@ struct PiAgentPlanToolbarButton: View {
             isPopoverPresented.toggle()
         } label: {
             Label("Current plan", systemImage: "checklist")
-                .symbolEffect(.breathe, options: .repeating, isActive: isInProgress)
         }
         .symbolRenderingMode(.monochrome)
         .foregroundStyle(tint)

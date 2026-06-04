@@ -33,6 +33,9 @@ struct SettingsSceneContent: View {
         }
         .frame(minWidth: 700, idealWidth: 780, minHeight: 560, idealHeight: 640)
         .background(AppTheme.windowBackground)
+        // Theme the Settings window itself (bg + transparent titlebar) so its
+        // titlebar matches, like the main window.
+        .background(WindowBackgroundApplier(color: AppTheme.windowBackground))
     }
 
     @ViewBuilder
@@ -130,7 +133,7 @@ private struct SettingsTabStrip<TabValue: Hashable & Identifiable>: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity)
-        .background(.bar) // Native Settings-toolbar material
+        .background(AppTheme.windowBackground) // Themed (was the system .bar material)
     }
 }
 
@@ -651,6 +654,9 @@ private struct AppearanceSettingsTab: View {
                 AppTextField(text: nameBinding, placeholder: "Theme name")
                     .frame(width: 220)
             }
+            colorRow("Background", \.background, note: "The window and app canvas.")
+            colorRow("Surface", \.surface, note: "Panels, cards, sidebar, and list rows.")
+            colorRow("Border", \.stroke, note: "Separators and card outlines.")
             colorRow("Accent", \.accent, note: "Buttons, links, and selection highlights.")
             colorRow("You", \.assistant, note: "User-side transcript bubbles and secondary accents.")
             colorRow("Thinking", \.thinking)

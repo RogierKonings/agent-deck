@@ -220,20 +220,20 @@ struct PiAgentRetryCard: View {
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: icon)
-                .font(.callout.weight(.semibold))
+                .font(AppTheme.Font.callout.weight(.semibold))
                 .foregroundStyle(accent)
                 .frame(width: 18)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(headline)
-                    .font(.callout.weight(.semibold))
+                    .font(AppTheme.Font.callout.weight(.semibold))
                 Text(detail)
-                    .font(.caption)
+                    .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
                     .fixedSize(horizontal: false, vertical: true)
                 if let resetLine {
                     Text(resetLine)
-                        .font(.caption.weight(.medium))
+                        .font(AppTheme.Font.caption.weight(.medium))
                         .foregroundStyle(accent)
                 }
             }
@@ -241,13 +241,13 @@ struct PiAgentRetryCard: View {
             Spacer(minLength: 0)
 
             Text(timestamp.formatted(date: .omitted, time: .shortened))
-                .font(.caption2)
+                .font(AppTheme.Font.caption2)
                 .foregroundStyle(AppTheme.mutedText)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, AppTheme.Chat.cardHPadding)
+        .padding(.vertical, AppTheme.Chat.cardVPadding)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius, style: .continuous)
                 .fill(accent.opacity(AppTheme.roleFillOpacity))
                 .stroke(accent.opacity(AppTheme.roleStrokeOpacity), lineWidth: 1)
         )

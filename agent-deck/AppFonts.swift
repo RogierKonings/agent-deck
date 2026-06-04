@@ -32,7 +32,9 @@ enum AppFonts {
             ?? Bundle.main.url(forResource: name, withExtension: ext)
 
         guard let url else {
+#if DEBUG
             logger.warning("Bundled font \(name).\(ext) was not found.")
+#endif
             return
         }
 
@@ -43,7 +45,9 @@ enum AppFonts {
                 if CFErrorGetCode(cfError) == CTFontManagerError.alreadyRegistered.rawValue {
                     return
                 }
+#if DEBUG
                 logger.warning("Bundled font \(name).\(ext) could not be registered: \(String(describing: cfError))")
+#endif
             }
             return
         }

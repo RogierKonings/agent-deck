@@ -199,6 +199,11 @@ final class ProjectPreferencesStore {
     }
 
     func preference(for path: String) -> ProjectPreference {
+        // Fast path: callers in hot loops (`enabledProjects` & friends, re-run
+        // several times per render) pass paths that are already standardized and
+        // stored, so skip the per-call `URL` allocation + standardization when the
+        // raw path is already a key.
+        if let stored = preferencesByPath[path] { return stored }
         let standardizedPath = URL(fileURLWithPath: path).standardizedFileURL.path
         return preferencesByPath[standardizedPath] ?? .default(for: standardizedPath)
     }

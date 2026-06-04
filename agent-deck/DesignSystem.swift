@@ -1,4 +1,5 @@
 import AppKit
+import OSLog
 import SwiftUI
 
 enum AppTheme {
@@ -9,6 +10,77 @@ enum AppTheme {
     static let contentSpacing: CGFloat = 12
     static let toolbarIconFrame = CGSize(width: 26, height: 20)
     static let toolbarAssetIconSize = CGSize(width: 16, height: 16)
+
+    // MARK: Typography
+    //
+    // Fixed-size font tokens for the chat / transcript UI. macOS semantic
+    // styles (.body = 13pt, .caption = 10pt, .caption2 = 9pt) render too small
+    // for comfortable reading in a conversation thread. These tokens bump every
+    // tier up ~1pt so body text lands at 14pt, captions at 11–12pt — matching
+    // aligned with Apple HIG guidance to avoid
+    // sub-11pt readable text.
+    //
+    // Non-chat views (settings, management, sidebar) can keep using semantic
+    // styles directly — those contexts have native control sizing that already
+    // reads well.
+    enum Font {
+        static let titleSize: CGFloat = 20
+        static let headlineSize: CGFloat = 14
+        static let subheadlineSize: CGFloat = 13
+        static let bodySize: CGFloat = 14
+        static let calloutSize: CGFloat = 13
+        static let footnoteSize: CGFloat = 12
+        static let captionSize: CGFloat = 11
+        static let caption2Size: CGFloat = 10
+        static let codeSize: CGFloat = 13
+        static let smallLabelSize: CGFloat = 9
+
+        static let title = SwiftUI.Font.system(size: titleSize)
+        static let headline = SwiftUI.Font.system(size: headlineSize, weight: .semibold)
+        static let subheadline = SwiftUI.Font.system(size: subheadlineSize)
+        static let body = SwiftUI.Font.system(size: bodySize)
+        static let callout = SwiftUI.Font.system(size: calloutSize)
+        static let footnote = SwiftUI.Font.system(size: footnoteSize)
+        static let caption = SwiftUI.Font.system(size: captionSize)
+        static let caption2 = SwiftUI.Font.system(size: caption2Size)
+        static let code = SwiftUI.Font.system(size: codeSize, design: .monospaced)
+        static let smallLabel = SwiftUI.Font.system(size: smallLabelSize, weight: .bold, design: .monospaced)
+    }
+
+    // MARK: Component geometry
+    //
+    // Corner radii and padding for the transcript / chat component set. Keeps
+    // bubbles, tool cards, diff cards, and status rows visually consistent and
+    // avoids the scatter of 6/8/10/11/12/14/16 radii that crept in ad-hoc.
+    enum Chat {
+        static let bubbleCornerRadius: CGFloat = 12
+        static let cardCornerRadius: CGFloat = 12
+        static let codeCornerRadius: CGFloat = 8
+        static let inputCornerRadius: CGFloat = 8
+        static let panelCornerRadius: CGFloat = 14
+        static let subCardCornerRadius: CGFloat = 10
+        static let thumbnailCornerRadius: CGFloat = 14
+        static let composerCornerRadius: CGFloat = 20
+        static let suggestionCornerRadius: CGFloat = 12
+        static let chipCornerRadius: CGFloat = 6
+        static let glassPanelCornerRadius: CGFloat = 22
+        static let quoteBarCornerRadius: CGFloat = 1
+
+        static let bubbleHPadding: CGFloat = 16
+        static let bubbleVPadding: CGFloat = 12
+        static let bubbleChildHPadding: CGFloat = 14
+        static let bubbleChildVPadding: CGFloat = 10
+
+        static let cardHPadding: CGFloat = 12
+        static let cardVPadding: CGFloat = 10
+
+        // Vertical gaps between transcript rows. `rowSpacing` separates distinct
+        // bubbles/cards; `threadSpacing` is the tighter question↔reply gap inside
+        // one thread; `childSpacing` is the tightest gap between sibling children.
+        static let rowSpacing: CGFloat = 32
+        static let threadSpacing: CGFloat = 20
+        static let childSpacing: CGFloat = 24
+    }
 
     // Brand accent and the assistant tint are theme-driven — see Theme.swift and
     // ThemeManager. The macOS *global* accent still comes from the `AccentColor`
@@ -22,6 +94,13 @@ enum AppTheme {
     static var brandAccentDeep: Color { ThemeManager.shared.accentDeep.color }
     static var brandAccentShadow: Color { ThemeManager.shared.accentShadow.color }
     static var assistantAccent: Color { ThemeManager.shared.activeTheme.assistant.color }
+
+    /// Subtle theme tint for Liquid Glass *chrome* (composer chips, glass circles,
+    /// floating panels) so the glass picks up the active theme rather than reading as
+    /// a neutral system material. Kept low-opacity so it tints the glass rather than
+    /// coloring it — the button-role tints (primary accent, destructive red) are
+    /// separate and intentionally stronger.
+    static var glassTint: Color { brandAccent.opacity(0.55) }
 
     // Source-kind tags for library list rows / detail avatars. Each kind has a
     // distinct hue per theme so the avatar tint signals where an item came from.
@@ -71,13 +150,25 @@ enum AppTheme {
     // surface reads as a defined code panel rather than a flat highlight box.
     static let nsCodeBlockBorder = adaptiveNSColor(light: RGB(214, 214, 218), dark: RGB(56, 56, 60))
 
-    static let windowBackground = Color(nsColor: .windowBackgroundColor)
-    static let panelFill = Color(nsColor: .windowBackgroundColor)
-    static let contentFill = Color(nsColor: .windowBackgroundColor)
-    static let textContentFill = Color(nsColor: .textBackgroundColor)
-    static let contentStroke = Color(nsColor: .separatorColor).opacity(0.55)
-    static let hairlineStroke = Color(nsColor: .separatorColor).opacity(0.38)
-    static let contentSubtleFill = Color(nsColor: .controlColor).opacity(0.62)
+    /// AppKit `NSColor` from any AppTheme SwiftUI `Color`, for native
+    /// (CALayer / NSView) surfaces that must match the SwiftUI rendering. Theme
+    /// tints resolve to static RGB for the active theme (same as SwiftUI draws
+    /// them); system-derived colors stay dynamic across light/dark.
+    static func ns(_ color: Color) -> NSColor { NSColor(color) }
+
+    // Neutral surfaces are theme-driven (see Theme.background/surface/stroke) so the
+    // whole canvas takes on each theme's personality, not just the accents. These are
+    // computed `var`s — a theme switch repaints via `.id(themeManager.revision)` at the
+    // window root, and the values resolve from the now-active theme.
+    private static var activeTheme: Theme { ThemeManager.shared.activeTheme }
+
+    static var windowBackground: Color { activeTheme.background.color }
+    static var panelFill: Color { activeTheme.surface.color }
+    static var contentFill: Color { activeTheme.surface.color }
+    static var textContentFill: Color { activeTheme.background.color }
+    static var contentStroke: Color { activeTheme.stroke.color.opacity(0.55) }
+    static var hairlineStroke: Color { activeTheme.stroke.color.opacity(0.38) }
+    static var contentSubtleFill: Color { activeTheme.surface.lightened(by: 0.12).color }
     static let selectionFill = Color.primary.opacity(0.055)
     static var selectionStroke: Color { brandAccent.opacity(0.24) }
     static let selectionGlow = Color.clear
@@ -111,11 +202,11 @@ enum AppTheme {
     }
 
     @available(*, deprecated, message: "Use semantic content, panel, or control surface helpers based on role.")
-    static let cardFill = contentFill
+    static var cardFill: Color { contentFill }
     @available(*, deprecated, message: "Use contentStroke or selectionStroke based on role.")
-    static let cardStroke = contentStroke
+    static var cardStroke: Color { contentStroke }
     @available(*, deprecated, message: "Use contentSubtleFill or semantic surface helpers based on role.")
-    static let subtleFill = contentSubtleFill
+    static var subtleFill: Color { contentSubtleFill }
 }
 
 extension View {
@@ -125,18 +216,18 @@ extension View {
     /// the navigation/control layer — do NOT apply to content cells (transcript cards,
     /// list rows).
     func appGlassCapsule() -> some View {
-        glassEffect(.regular, in: Capsule(style: .continuous))
+        glassEffect(.regular.tint(AppTheme.glassTint), in: Capsule(style: .continuous))
     }
 
     /// Glass circle for icon-only chrome buttons (compact, attach, etc.).
     func appGlassCircle() -> some View {
-        glassEffect(.regular, in: Circle())
+        glassEffect(.regular.tint(AppTheme.glassTint), in: Circle())
     }
 
     /// Glass rounded rectangle for larger chrome surfaces — popovers, dropdowns,
     /// floating panels. Use for non-capsule, non-circle navigation-layer surfaces.
     func appGlassPanel(cornerRadius: CGFloat = 12) -> some View {
-        glassEffect(.regular, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        glassEffect(.regular.tint(AppTheme.glassTint), in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
 
     // MARK: - Button style modifiers
@@ -318,6 +409,111 @@ struct AppLoadingView: View {
                 .foregroundStyle(AppTheme.mutedText)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Full-window frosted overlay shown until the first workspace refresh
+/// (projects + agents + skills + GitHub) completes. On launch that refresh
+/// fans out background work — project discovery, `gh` calls, file scans — that
+/// makes the individual panes load piecemeal and feel janky. Covering the window
+/// with one calm loading state until `AppViewModel.hasCompletedInitialRefresh`
+/// flips presents a single intentional moment instead, and blocks interaction
+/// with half-populated views. Fades out (see the call site's `.animation`).
+struct AppInitialLoadOverlay: View {
+    var message: String = "Loading workspace…"
+    /// One-shot entrance (icon scales/fades in).
+    @State private var entered = false
+    /// Barely-there idle float so the splash feels alive without jittering.
+    @State private var floating = false
+
+    /// The app icon the user currently has selected (Default vs Alternate), so the
+    /// splash matches their Dock icon. Falls back to the live application icon.
+    private var appIcon: NSImage? {
+        let choice = AppIconChoice.choice(forStoredName: AppSettingsStore.shared.settings.selectedAppIconName)
+        return NSImage(named: choice.assetName) ?? NSApplication.shared.applicationIconImage
+    }
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(.regularMaterial)
+                .ignoresSafeArea()
+
+            // The paper-plane swarm, faint, blended into the background as a subtle
+            // decoration drifting behind the icon.
+            Image("paperplanes")
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .frame(width: 620)
+                .opacity(0.07)
+                .offset(x: floating ? 14 : -14, y: floating ? -10 : 10)
+                .animation(.easeInOut(duration: 6).repeatForever(autoreverses: true), value: floating)
+                .allowsHitTesting(false)
+
+            VStack(spacing: 22) {
+                if let appIcon {
+                    Image(nsImage: appIcon)
+                        .resizable()
+                        .interpolation(.high)
+                        .scaledToFit()
+                        .frame(width: 76, height: 76)
+                        .shadow(color: AppTheme.brandAccent.opacity(0.28), radius: 22, y: 8)
+                        .scaleEffect(entered ? 1 : 0.86)
+                        // Gentle idle float, separate from the entrance scale.
+                        .offset(y: floating ? -3 : 3)
+                        .animation(.easeInOut(duration: 2.8).repeatForever(autoreverses: true), value: floating)
+                }
+
+                VStack(spacing: 14) {
+                    Text(message)
+                        .font(AppTheme.Font.callout.weight(.semibold))
+                        .foregroundStyle(AppTheme.mutedText)
+                    AppIndeterminateBar()
+                        .frame(width: 168)
+                }
+            }
+            .opacity(entered ? 1 : 0)
+        }
+        .onAppear {
+            withAnimation(.spring(response: 0.6, dampingFraction: 0.82)) { entered = true }
+            floating = true
+        }
+    }
+}
+
+/// Sleek indeterminate progress bar — an accent-gradient comet sweeps across a
+/// faint track, looping. Use as a calm "working…" cue where there's no measurable
+/// progress to show.
+struct AppIndeterminateBar: View {
+    var height: CGFloat = 3.5
+    @State private var animating = false
+
+    var body: some View {
+        GeometryReader { geo in
+            let trackWidth = geo.size.width
+            let pillWidth = trackWidth * 0.42
+            Capsule()
+                .fill(AppTheme.contentSubtleFill)
+                .overlay(alignment: .leading) {
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [AppTheme.brandAccent.opacity(0), AppTheme.brandAccent, AppTheme.brandAccent.opacity(0)],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: pillWidth)
+                        // Sweeps from fully off the left edge to fully off the right,
+                        // hidden at both ends so the loop reset is invisible.
+                        .offset(x: animating ? trackWidth : -pillWidth)
+                        .animation(.easeInOut(duration: 1.15).repeatForever(autoreverses: false), value: animating)
+                }
+                .clipShape(Capsule())
+        }
+        .frame(height: height)
+        .onAppear { animating = true }
     }
 }
 
@@ -690,22 +886,42 @@ extension View {
 struct AppPage<Content: View>: View {
     let title: String
     let subtitle: String?
+    /// When true, sections render lazily as they scroll into view rather than all
+    /// at once. Use for pages whose lower sections are expensive to build (e.g. a
+    /// large markdown document) so navigating to the page doesn't pay that cost up
+    /// front. Defaults to false so every existing page is byte-for-byte unchanged.
+    let lazy: Bool
     @ViewBuilder let content: Content
 
-    init(_ title: String, subtitle: String? = nil, @ViewBuilder content: () -> Content) {
+    init(_ title: String, subtitle: String? = nil, lazy: Bool = false, @ViewBuilder content: () -> Content) {
         self.title = title
         self.subtitle = subtitle
+        self.lazy = lazy
         self.content = content()
     }
 
     var body: some View {
-        ScrollView(showsIndicators: false) {
-            VStack(alignment: .leading, spacing: AppTheme.sectionSpacing) {
-                content
+        ScrollView {
+            if lazy {
+                LazyVStack(alignment: .leading, spacing: AppTheme.sectionSpacing) {
+                    content
+                }
+                .padding(AppTheme.pagePadding)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                VStack(alignment: .leading, spacing: AppTheme.sectionSpacing) {
+                    content
+                }
+                .padding(AppTheme.pagePadding)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(AppTheme.pagePadding)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // `.never`, not the deprecated `showsIndicators: false` (≈ `.hidden`):
+        // `.hidden` still lets AppKit briefly *flash* the overlay scroller when the
+        // content size changes — which a tall page (e.g. a skill's markdown body)
+        // hits as its lazy content grows the height on appear. Short pages that
+        // don't overflow never showed it, which is why only some pages flashed.
+        .scrollIndicators(.never)
     }
 }
 
@@ -1041,6 +1257,9 @@ struct AppKeyValueList: View {
                         .foregroundStyle(AppTheme.mutedText)
                     Text(row.1)
                         .textSelection(.enabled)
+                        .lineLimit(3)
+                        .truncationMode(.middle)
+                        .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if row.0 != rows.last?.0 {
@@ -1048,6 +1267,65 @@ struct AppKeyValueList: View {
                 }
             }
         }
+    }
+}
+
+#if DEBUG
+private struct AppLayoutDebugSnapshot: Equatable {
+    var minX: Double
+    var minY: Double
+    var width: Double
+    var height: Double
+
+    init(_ frame: CGRect) {
+        minX = Self.round(frame.minX)
+        minY = Self.round(frame.minY)
+        width = Self.round(frame.width)
+        height = Self.round(frame.height)
+    }
+
+    private static func round(_ value: CGFloat) -> Double {
+        (Double(value) * 10).rounded() / 10
+    }
+}
+
+private struct AppLayoutDebugModifier: ViewModifier {
+    let name: String
+    let logger: Logger
+    @State private var lastSnapshot: AppLayoutDebugSnapshot?
+
+    func body(content: Content) -> some View {
+        content
+            .overlay {
+                GeometryReader { proxy in
+                    Color.clear
+                        .onAppear {
+                            logSnapshot(AppLayoutDebugSnapshot(proxy.frame(in: .global)))
+                        }
+                        .onChange(of: AppLayoutDebugSnapshot(proxy.frame(in: .global))) { _, snapshot in
+                            logSnapshot(snapshot)
+                        }
+                }
+            }
+    }
+
+    private func logSnapshot(_ snapshot: AppLayoutDebugSnapshot) {
+        Task { @MainActor in
+            guard snapshot != lastSnapshot else { return }
+            lastSnapshot = snapshot
+            logger.debug("\(name, privacy: .public) frame x=\(snapshot.minX, privacy: .public) y=\(snapshot.minY, privacy: .public) w=\(snapshot.width, privacy: .public) h=\(snapshot.height, privacy: .public)")
+        }
+    }
+}
+#endif
+
+extension View {
+    func appDebugLayout(_ name: String, logger: Logger) -> some View {
+        #if DEBUG
+        modifier(AppLayoutDebugModifier(name: name, logger: logger))
+        #else
+        self
+        #endif
     }
 }
 

@@ -116,6 +116,8 @@ struct GitHubAvatarView: View {
         Group {
             if let image {
                 Image(nsImage: image)
+                    .interpolation(.high)
+                    .antialiased(true)
                     .resizable()
                     .scaledToFill()
             } else {
@@ -172,10 +174,12 @@ actor GitHubAvatarCache {
 enum GitHubAvatarResolver {
     static func url(login: String, host: String?) -> URL? {
         let normalizedHost = host?.trimmingCharacters(in: .whitespacesAndNewlines)
+        // `?size=` asks GitHub to resize server-side — crisp at our small avatar
+        // sizes and far lighter than the full ~460px source.
         if let normalizedHost, !normalizedHost.isEmpty, normalizedHost.caseInsensitiveCompare("github.com") != .orderedSame {
-            return URL(string: "https://\(normalizedHost)/\(login).png")
+            return URL(string: "https://\(normalizedHost)/\(login).png?size=160")
         }
-        return URL(string: "https://github.com/\(login).png")
+        return URL(string: "https://github.com/\(login).png?size=160")
     }
 }
 

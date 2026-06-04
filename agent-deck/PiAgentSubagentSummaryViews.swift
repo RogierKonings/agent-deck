@@ -102,10 +102,10 @@ struct PiAgentSubagentTranscriptView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
                 Label("Deck agent run", systemImage: "person.2.wave.2")
-                    .font(.headline)
+                    .font(AppTheme.Font.headline)
                     .foregroundStyle(.cyan)
                 Text(title)
-                    .font(.headline.weight(.semibold))
+                    .font(AppTheme.Font.headline.weight(.semibold))
                 Spacer()
                 if summary.running > 0 {
                     AppSpinner()
@@ -119,39 +119,39 @@ struct PiAgentSubagentTranscriptView: View {
                 if summary.failed > 0 { metric("\(summary.failed) failed", color: .red) }
             }
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: AppTheme.Chat.childSpacing) {
                 ForEach(summary.agents) { agent in
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: icon(for: agent.status))
-                            .font(.system(size: 13, weight: .bold))
+                            .font(AppTheme.Font.callout.weight(.bold))
                             .foregroundStyle(color(for: agent.status))
                             .frame(width: 18)
                         VStack(alignment: .leading, spacing: 4) {
                             HStack(spacing: 6) {
                                 Text(agent.name)
-                                    .font(.callout.weight(.semibold))
+                                    .font(AppTheme.Font.callout.weight(.semibold))
                                 Text(agentMeta(agent))
-                                    .font(.caption.monospaced())
+                                    .font(AppTheme.Font.caption.monospaced())
                                     .foregroundStyle(AppTheme.mutedText)
                             }
                             if let output = agent.outputPath ?? agent.sessionFile {
                                 Text(output)
-                                    .font(.caption.monospaced())
+                                    .font(AppTheme.Font.caption.monospaced())
                                     .foregroundStyle(AppTheme.mutedText)
                                     .lineLimit(1)
                                     .truncationMode(.middle)
                                     .textSelection(.enabled)
                             } else if let task = agent.task, !task.isEmpty {
                                 Text(task)
-                                    .font(.caption)
+                                    .font(AppTheme.Font.caption)
                                     .foregroundStyle(AppTheme.mutedText)
                                     .lineLimit(2)
                             }
                         }
                         Spacer(minLength: 0)
                     }
-                    .padding(10)
-                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.65)))
+                    .padding(AppTheme.Chat.cardVPadding)
+                    .background(RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.65)))
                 }
             }
         }
@@ -164,7 +164,7 @@ struct PiAgentSubagentTranscriptView: View {
 
     private func metric(_ text: String, color: Color) -> some View {
         Text(text)
-            .font(.caption.weight(.semibold))
+            .font(AppTheme.Font.caption.weight(.semibold))
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(Capsule(style: .continuous).fill(color.opacity(0.12)))

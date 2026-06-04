@@ -1,5 +1,6 @@
 import AppKit
 import ImagePlayground
+import OSLog
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -51,6 +52,7 @@ struct AgentsFilterPopover: View {
 }
 
 struct AgentsScreen: View {
+    private static let layoutLog = Logger(subsystem: "streetcoding.agent-deck", category: "ResourceLayout")
     var viewModel: AppViewModel
     @Binding var searchText: String
     @State private var agentBeingEdited: AgentEditPresentation?
@@ -67,13 +69,17 @@ struct AgentsScreen: View {
                         }
                     )
                     .frame(minWidth: 430, idealWidth: 520, maxWidth: 640)
+                    .appDebugLayout("Agents.libraryPane", logger: Self.layoutLog)
                 } else {
                     AppLoadingView("Loading agents…")
                         .frame(minWidth: 430, idealWidth: 520, maxWidth: 640)
+                        .appDebugLayout("Agents.libraryLoading", logger: Self.layoutLog)
                 }
 
                 if !viewModel.hasCompletedInitialRefresh {
                     AppLoadingView("Loading agent details…")
+                        .frame(minWidth: 480, idealWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
+                        .appDebugLayout("Agents.detailLoading", logger: Self.layoutLog)
                 } else if let agent = viewModel.selectedAgent {
                     AgentDetailView(
                         agent: agent,
@@ -119,11 +125,25 @@ struct AgentsScreen: View {
                         autoGenerateAvatarPrompts: viewModel.appSettings.autoGenerateAgentAvatarPrompts,
                         generateAvatarPrompt: { try await viewModel.generateAgentAvatarPrompt(for: $0) }
                     )
+                    // idealWidth pins the HSplitView divider seed so it resolves in one
+                    // pass instead of hunting (a ScrollView reports its content's variable
+                    // ideal width); AgentDetailView's AppPage uses lazy:true to bound the
+                    // build cost. See SkillsScreen for the full rationale.
+                    .frame(minWidth: 480, idealWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
+                    .appDebugLayout("Agents.detail selected=\(agent.name)", logger: Self.layoutLog)
                 } else {
                     ContentUnavailableView("No Agent Selected", systemImage: "sparkles.rectangle.stack")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .appDebugLayout("Agents.detailEmpty", logger: Self.layoutLog)
                 }
             }
+            .appDebugLayout("Agents.hsplit", logger: Self.layoutLog)
+        }
+        .appDebugLayout("Agents.rootHStack", logger: Self.layoutLog)
+        .onAppear {
+            #if DEBUG
+            Self.layoutLog.debug("Agents.state event=appear selected=\(viewModel.selectedAgent?.name ?? "nil", privacy: .public) project=\(viewModel.selectedDiscoveredProject?.name ?? "nil", privacy: .public)")
+            #endif
         }
         .sheet(item: $agentBeingEdited) { presentation in
             let agent = presentation.agent
@@ -201,6 +221,8 @@ struct AgentAvatarView: View {
 
             if let nsImage = AgentImageLoader.image(at: imageURL) {
                 Image(nsImage: nsImage)
+                    .interpolation(.high)
+                    .antialiased(true)
                     .resizable()
                     .scaledToFill()
                     .clipShape(Circle())
@@ -1000,7 +1022,7 @@ private struct AgentDetailView: View {
     @State private var deleteErrorMessage: String?
 
     var body: some View {
-        AppPage(agent.name, subtitle: agent.resolved.description.isEmpty ? nil : agent.resolved.description) {
+        AppPage(agent.name, subtitle: agent.resolved.description.isEmpty ? nil : agent.resolved.description, lazy: true) {
             summaryTab
             promptTab
             toolsTab

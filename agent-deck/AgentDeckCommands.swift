@@ -9,6 +9,8 @@ enum AgentDeckShortcutAction: String, CaseIterable, Identifiable {
     case openSkills
     case openPrompts
     case newSession
+    case nextSession
+    case previousSession
     case newAgent
     case refresh
     case stopSession
@@ -64,6 +66,8 @@ extension AgentDeckShortcutSection {
         ]),
         AgentDeckShortcutSection(title: "Session", items: [
             .init(.newSession, "New Session", key: "n", modifiers: [.command], description: "Create a new Pi Agent session for the current project."),
+            .init(.nextSession, "Next Session", key: "]", modifiers: [.command], description: "Select the next session in the current project."),
+            .init(.previousSession, "Previous Session", key: "[", modifiers: [.command], description: "Select the previous session in the current project."),
             .init(.stopSession, "Stop Session", key: ".", modifiers: [.command], description: "Stop the currently running session."),
             .init(.deleteSession, "Delete Session", key: "delete", modifiers: [.command], description: "Delete the selected session."),
             .init(.resumeInTerminal, "Resume in Terminal", key: "t", modifiers: [.command, .option], description: "Resume the selected session in your configured terminal."),
@@ -122,6 +126,7 @@ final class AgentDeckCommandContext {
     var canCreateAgent = false
     var canDeletePiAgentSession = false
     var canStopPiAgentSession = false
+    var canNavigatePiAgentSessions = false
     var canOpenPiAgentInTerminal = false
     var canCommitGitHubChanges = false
     var canPushGitHubBranch = false
@@ -147,6 +152,8 @@ final class AgentDeckCommandContext {
     var openSkills: () -> Void = {}
     var openPrompts: () -> Void = {}
     var createPiAgentSession: () -> Void = {}
+    var selectNextPiAgentSession: () -> Void = {}
+    var selectPreviousPiAgentSession: () -> Void = {}
     var createAgent: () -> Void = {}
     var deletePiAgentSession: () -> Void = {}
     var stopPiAgentSession: () -> Void = {}
@@ -293,6 +300,20 @@ struct AgentDeckCommands: Commands {
             }
             .agentDeckShortcut(.openPrompts)
             .disabled(context == nil)
+
+            Divider()
+
+            Button("Next Session") {
+                context?.selectNextPiAgentSession()
+            }
+            .agentDeckShortcut(.nextSession)
+            .disabled(context?.canNavigatePiAgentSessions != true)
+
+            Button("Previous Session") {
+                context?.selectPreviousPiAgentSession()
+            }
+            .agentDeckShortcut(.previousSession)
+            .disabled(context?.canNavigatePiAgentSessions != true)
 
             Divider()
 

@@ -27,7 +27,7 @@ struct PiAgentSessionSearchField: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: AppTheme.Chat.subCardCornerRadius, style: .continuous)
                 .fill(AppTheme.contentFill)
                 .stroke(AppTheme.contentStroke, lineWidth: 1)
         )
@@ -182,9 +182,9 @@ private struct PiAgentProjectPickerPopover: View {
         VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("New Session")
-                    .font(.headline)
+                    .font(AppTheme.Font.headline)
                 Text("Choose a project for Pi Agent.")
-                    .font(.caption)
+                    .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
             }
             .padding(.horizontal, 12)
@@ -203,12 +203,12 @@ private struct PiAgentProjectPickerPopover: View {
                                 VStack(alignment: .leading, spacing: 1) {
                                     HStack(spacing: 6) {
                                         Text(project.repositoryDisplayName)
-                                            .font(.callout.weight(.semibold))
+                                            .font(AppTheme.Font.callout.weight(.semibold))
                                             .foregroundStyle(.primary)
                                             .lineLimit(1)
                                         if project.id == selectedProject?.id {
                                             Text("Current")
-                                                .font(.caption2.weight(.semibold))
+                                                .font(AppTheme.Font.caption2.weight(.semibold))
                                                 .foregroundStyle(AppTheme.brandAccent)
                                                 .padding(.horizontal, 5)
                                                 .padding(.vertical, 2)
@@ -216,7 +216,7 @@ private struct PiAgentProjectPickerPopover: View {
                                         }
                                     }
                                     Text(project.path)
-                                        .font(.caption2)
+                                        .font(AppTheme.Font.caption2)
                                         .foregroundStyle(AppTheme.mutedText)
                                         .lineLimit(1)
                                         .truncationMode(.middle)
@@ -236,11 +236,11 @@ private struct PiAgentProjectPickerPopover: View {
             .frame(maxHeight: 300)
         }
         .frame(width: 340)
-        .appGlassPanel(cornerRadius: 14)
+        .appGlassPanel(cornerRadius: AppTheme.Chat.panelCornerRadius)
     }
 }
 
-struct PiAgentSessionRow: View {
+struct PiAgentSessionRow: View, Equatable {
     let session: PiAgentSessionRecord
     let project: DiscoveredProject?
     let isSelected: Bool
@@ -254,6 +254,23 @@ struct PiAgentSessionRow: View {
     let onRename: (String) -> Void
     let onTogglePinned: () -> Void
     let onDelete: () -> Void
+
+    // Equatable so `.equatable()` can short-circuit re-evaluation: the session list
+    // lives inside a body that re-runs at the streaming cadence (the transcript cache
+    // is an ObservableObject, so any of its published changes invalidates the whole
+    // body). Comparing the value inputs lets SwiftUI skip re-laying-out every row on
+    // those pulses, refreshing a row only when something it actually shows changes.
+    // Closures are intentionally excluded: when the value inputs match, the retained
+    // instance's closures captured the same session, so they stay correct.
+    static func == (lhs: PiAgentSessionRow, rhs: PiAgentSessionRow) -> Bool {
+        lhs.session == rhs.session
+            && lhs.project == rhs.project
+            && lhs.isSelected == rhs.isSelected
+            && lhs.isRunning == rhs.isRunning
+            && lhs.isRenaming == rhs.isRenaming
+            && lhs.isGeneratingTitle == rhs.isGeneratingTitle
+            && lhs.gitActivity == rhs.gitActivity
+    }
 
     @State private var draftTitle = ""
     @State private var isTitleHovered = false
@@ -277,14 +294,14 @@ struct PiAgentSessionRow: View {
             if session.isAgentBound, let agentName = session.agentName, !agentName.isEmpty {
                 HStack(spacing: 6) {
                     Image(systemName: "paperplane")
-                        .font(.caption2.weight(.semibold))
+                        .font(AppTheme.Font.caption2.weight(.semibold))
                         .frame(width: 11, alignment: .center)
                     Text(agentName)
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .minimumScaleFactor(0.8)
                 }
-                .font(.footnote)
+                .font(AppTheme.Font.footnote)
                 .foregroundStyle(AppTheme.mutedText)
             }
 
@@ -299,26 +316,26 @@ struct PiAgentSessionRow: View {
                     .truncationMode(.tail)
                     .minimumScaleFactor(0.8)
             }
-            .font(.footnote)
+            .font(AppTheme.Font.footnote)
             .foregroundStyle(AppTheme.mutedText)
 
             if let branch = session.branchName, !branch.isEmpty {
                 HStack(spacing: 6) {
                     Image("branch")
-                        .font(.caption2.weight(.semibold))
+                        .font(AppTheme.Font.caption2.weight(.semibold))
                         .frame(width: 11, alignment: .center)
                     Text(piAgentSessionDisplayBranchName(branch))
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
-                .font(.footnote)
+                .font(AppTheme.Font.footnote)
                 .foregroundStyle(AppTheme.mutedText)
                 .help(branch)
             }
 
             HStack(spacing: 8) {
                 Text(session.updatedAt.formatted(date: .abbreviated, time: .shortened))
-                    .font(.caption)
+                    .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
@@ -399,7 +416,7 @@ struct PiAgentSessionRow: View {
 
     private var activeStatusLabel: some View {
         Text("ACTIVE")
-            .font(.system(size: 7, weight: .bold, design: .monospaced))
+            .font(AppTheme.Font.smallLabel)
             .tracking(1.2)
             .foregroundStyle(AppTheme.brandAccent.opacity(0.72))
             .padding(.horizontal, 5)
@@ -410,7 +427,7 @@ struct PiAgentSessionRow: View {
 
     private var needsAttentionBell: some View {
         Image(systemName: "bell.fill")
-            .font(.system(size: 11, weight: .semibold))
+            .font(AppTheme.Font.caption.weight(.semibold))
             .foregroundStyle(AppTheme.brandAccent)
             .help("Pi Agent finished and needs review")
             .accessibilityLabel("Needs review")
@@ -419,7 +436,7 @@ struct PiAgentSessionRow: View {
     private var deleteButton: some View {
         Button(action: onDelete) {
             Image(systemName: "trash")
-                .font(.caption.weight(.semibold))
+                .font(AppTheme.Font.caption.weight(.semibold))
         }
         .appSmallSecondaryButton()
         .help("Delete session")
@@ -443,7 +460,7 @@ struct PiAgentSessionRow: View {
         if isRenaming {
             TextField("Session name", text: $draftTitle)
                 .textFieldStyle(.plain)
-                .font(.system(size: 11, weight: .semibold))
+                .font(AppTheme.Font.footnote.weight(.semibold))
                 .fontWidth(.expanded)
                 .lineLimit(1)
                 .frame(height: 22, alignment: .center)
@@ -469,11 +486,11 @@ struct PiAgentSessionRow: View {
                     .opacity(isGeneratingTitle ? 0.62 : 1)
                     .animation(isGeneratingTitle ? .easeInOut(duration: 0.85).repeatForever(autoreverses: true) : .default, value: isGeneratingTitle)
                 Image(systemName: "pencil")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(AppTheme.Font.caption2.weight(.semibold))
                     .foregroundStyle(AppTheme.mutedText)
                     .opacity(isTitleHovered ? 0.8 : 0)
             }
-            .font(.system(size: 11, weight: .semibold))
+            .font(AppTheme.Font.footnote.weight(.semibold))
             .fontWidth(.expanded)
             .foregroundStyle(.primary)
             .padding(.horizontal, 5)
@@ -549,7 +566,7 @@ private struct SessionGitActivityStrip: View {
     private func pip(kind: PiAgentGitEventKind, date: Date?, verb: String) -> some View {
         if let date {
             icon(for: kind)
-                .font(.caption2.weight(.semibold))
+                .font(AppTheme.Font.caption2.weight(.semibold))
                 .foregroundStyle(isSelected ? AppTheme.brandAccent : AppTheme.mutedText)
                 .help("Last \(verb) at \(date.formatted(date: .omitted, time: .shortened))")
         }
@@ -587,7 +604,7 @@ private struct PiAgentSessionTelemetryStrip: View {
             }
             Spacer(minLength: 0)
             Text("ACTIVE")
-                .font(.system(size: 7, weight: .bold, design: .monospaced))
+                .font(AppTheme.Font.smallLabel)
                 .tracking(1.2)
                 .foregroundStyle(AppTheme.brandAccent.opacity(0.72))
         }
@@ -625,13 +642,17 @@ struct PiAgentProjectIcon: View {
     var body: some View {
         Group {
             if let image {
-                Image(nsImage: image).resizable().scaledToFill()
+                Image(nsImage: image)
+                    .interpolation(.high)
+                    .antialiased(true)
+                    .resizable()
+                    .scaledToFill()
             } else {
                 fallback
             }
         }
         .frame(width: 22, height: 22)
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Chat.chipCornerRadius, style: .continuous))
         // Route through the shared ProjectIconCache so scrolling the session
         // list doesn't re-decode the same PNG per row appear. Identity is the
         // file path; same key used by ProjectIconView for the project switcher.
@@ -655,7 +676,7 @@ struct PiAgentProjectIcon: View {
     }
 
     private var fallback: some View {
-        RoundedRectangle(cornerRadius: 6, style: .continuous)
+        RoundedRectangle(cornerRadius: AppTheme.Chat.chipCornerRadius, style: .continuous)
             .fill(AppTheme.contentSubtleFill)
             .overlay {
                 Image(session.kind == .issue ? "github" : "pi")
@@ -681,7 +702,7 @@ struct PiAgentProcessingIndicatorBar: View {
                     .foregroundStyle(AppTheme.piLogo.gradient)
                     .frame(width: 14, height: 14)
                 Text(message)
-                    .font(.callout.weight(.semibold))
+                    .font(AppTheme.Font.callout.weight(.semibold))
                     .foregroundStyle(AppTheme.mutedText)
                     .lineLimit(1)
                     .truncationMode(.tail)

@@ -92,6 +92,13 @@ struct Theme: Codable, Hashable, Identifiable {
     var sourceBuiltin: ThemeColor   // bundled / package-shipped
     var sourceLibrary: ThemeColor   // user's library (cross-project)
     var sourceProject: ThemeColor   // project-scoped / assigned
+    // Canvas tokens — the theme drives the neutral surfaces, not just accents, so
+    // each theme has its own background personality instead of one shared gray-black.
+    // These are dark-family values (the app forces a dark appearance, so foreground
+    // text/icons stay light); a full light theme would also need themed foregrounds.
+    var background: ThemeColor      // window / app canvas
+    var surface: ThemeColor         // panels, cards, sidebar, list rows
+    var stroke: ThemeColor          // borders / separators (opacity applied by AppTheme)
 
     init(
         id: UUID = UUID(),
@@ -106,7 +113,10 @@ struct Theme: Codable, Hashable, Identifiable {
         diffAdded: ThemeColor,
         sourceBuiltin: ThemeColor,
         sourceLibrary: ThemeColor,
-        sourceProject: ThemeColor
+        sourceProject: ThemeColor,
+        background: ThemeColor = ThemeColor(30, 30, 32),
+        surface: ThemeColor = ThemeColor(40, 40, 43),
+        stroke: ThemeColor = ThemeColor(92, 92, 99)
     ) {
         self.id = id
         self.name = name
@@ -121,11 +131,15 @@ struct Theme: Codable, Hashable, Identifiable {
         self.sourceBuiltin = sourceBuiltin
         self.sourceLibrary = sourceLibrary
         self.sourceProject = sourceProject
+        self.background = background
+        self.surface = surface
+        self.stroke = stroke
     }
 
     enum CodingKeys: String, CodingKey {
         case id, name, isBuiltIn, accent, assistant, thinking, tool, error, stderr, diffAdded
         case sourceBuiltin, sourceLibrary, sourceProject
+        case background, surface, stroke
     }
 
     /// Per-field decode-if-present so a custom theme stored by an older build
@@ -146,6 +160,9 @@ struct Theme: Codable, Hashable, Identifiable {
         sourceBuiltin = try container.decodeIfPresent(ThemeColor.self, forKey: .sourceBuiltin) ?? fallback.sourceBuiltin
         sourceLibrary = try container.decodeIfPresent(ThemeColor.self, forKey: .sourceLibrary) ?? fallback.sourceLibrary
         sourceProject = try container.decodeIfPresent(ThemeColor.self, forKey: .sourceProject) ?? fallback.sourceProject
+        background = try container.decodeIfPresent(ThemeColor.self, forKey: .background) ?? fallback.background
+        surface = try container.decodeIfPresent(ThemeColor.self, forKey: .surface) ?? fallback.surface
+        stroke = try container.decodeIfPresent(ThemeColor.self, forKey: .stroke) ?? fallback.stroke
     }
 }
 
@@ -166,7 +183,10 @@ extension Theme {
         diffAdded: ThemeColor(86, 201, 138),
         sourceBuiltin: ThemeColor(240, 165, 90),
         sourceLibrary: ThemeColor(190, 130, 235),
-        sourceProject: ThemeColor(100, 200, 130)
+        sourceProject: ThemeColor(100, 200, 130),
+        background: ThemeColor(30, 30, 32),
+        surface: ThemeColor(40, 40, 43),
+        stroke: ThemeColor(92, 92, 99)
     )
 
     static let ember = Theme(
@@ -182,7 +202,10 @@ extension Theme {
         diffAdded: ThemeColor(120, 198, 128),
         sourceBuiltin: ThemeColor(240, 160, 80),
         sourceLibrary: ThemeColor(190, 140, 220),
-        sourceProject: ThemeColor(130, 195, 130)
+        sourceProject: ThemeColor(130, 195, 130),
+        background: ThemeColor(33, 29, 27),
+        surface: ThemeColor(45, 39, 36),
+        stroke: ThemeColor(106, 94, 86)
     )
 
     static let forest = Theme(
@@ -198,7 +221,10 @@ extension Theme {
         diffAdded: ThemeColor(96, 205, 130),
         sourceBuiltin: ThemeColor(220, 175, 95),
         sourceLibrary: ThemeColor(175, 145, 220),
-        sourceProject: ThemeColor(100, 205, 135)
+        sourceProject: ThemeColor(100, 205, 135),
+        background: ThemeColor(25, 32, 28),
+        surface: ThemeColor(35, 44, 39),
+        stroke: ThemeColor(86, 104, 92)
     )
 
     static let violet = Theme(
@@ -214,7 +240,10 @@ extension Theme {
         diffAdded: ThemeColor(110, 200, 150),
         sourceBuiltin: ThemeColor(225, 165, 95),
         sourceLibrary: ThemeColor(190, 130, 240),
-        sourceProject: ThemeColor(115, 200, 145)
+        sourceProject: ThemeColor(115, 200, 145),
+        background: ThemeColor(30, 26, 37),
+        surface: ThemeColor(41, 35, 51),
+        stroke: ThemeColor(102, 90, 120)
     )
 
     static let monoSlate = Theme(
@@ -230,7 +259,10 @@ extension Theme {
         diffAdded: ThemeColor(140, 180, 150),
         sourceBuiltin: ThemeColor(195, 165, 130),
         sourceLibrary: ThemeColor(165, 145, 180),
-        sourceProject: ThemeColor(145, 180, 150)
+        sourceProject: ThemeColor(145, 180, 150),
+        background: ThemeColor(29, 31, 34),
+        surface: ThemeColor(40, 43, 48),
+        stroke: ThemeColor(98, 103, 112)
     )
 
     static let tokyoNight = Theme(
@@ -246,7 +278,10 @@ extension Theme {
         diffAdded: ThemeColor(115, 218, 202),
         sourceBuiltin: ThemeColor(224, 175, 104),
         sourceLibrary: ThemeColor(187, 154, 247),
-        sourceProject: ThemeColor(115, 218, 202)
+        sourceProject: ThemeColor(115, 218, 202),
+        background: ThemeColor(26, 27, 38),
+        surface: ThemeColor(36, 40, 59),
+        stroke: ThemeColor(65, 72, 104)
     )
 
     static let nord = Theme(
@@ -262,7 +297,10 @@ extension Theme {
         diffAdded: ThemeColor(163, 190, 140),
         sourceBuiltin: ThemeColor(235, 203, 139),
         sourceLibrary: ThemeColor(180, 142, 173),
-        sourceProject: ThemeColor(163, 190, 140)
+        sourceProject: ThemeColor(163, 190, 140),
+        background: ThemeColor(46, 52, 64),
+        surface: ThemeColor(59, 66, 82),
+        stroke: ThemeColor(76, 86, 106)
     )
 
     static let catppuccinMocha = Theme(
@@ -278,7 +316,143 @@ extension Theme {
         diffAdded: ThemeColor(166, 227, 161),
         sourceBuiltin: ThemeColor(249, 226, 175),
         sourceLibrary: ThemeColor(203, 166, 247),
-        sourceProject: ThemeColor(166, 227, 161)
+        sourceProject: ThemeColor(166, 227, 161),
+        background: ThemeColor(30, 30, 46),
+        surface: ThemeColor(49, 50, 68),
+        stroke: ThemeColor(69, 71, 90)
+    )
+
+    static let vortex = Theme(
+        id: UUID(uuidString: "99999999-9999-9999-9999-999999999999")!,
+        name: "Vortex",
+        isBuiltIn: true,
+        accent: ThemeColor(0, 229, 255),
+        assistant: ThemeColor(255, 0, 212),
+        thinking: ThemeColor(114, 100, 255),
+        tool: ThemeColor(255, 200, 50),
+        error: ThemeColor(255, 70, 95),
+        stderr: ThemeColor(230, 120, 200),
+        diffAdded: ThemeColor(60, 245, 140),
+        sourceBuiltin: ThemeColor(255, 185, 55),
+        sourceLibrary: ThemeColor(200, 120, 255),
+        sourceProject: ThemeColor(50, 225, 195),
+        background: ThemeColor(8, 10, 24),
+        surface: ThemeColor(16, 20, 40),
+        stroke: ThemeColor(48, 56, 88)
+    )
+
+    static let crimson = Theme(
+        id: UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")!,
+        name: "Crimson",
+        isBuiltIn: true,
+        accent: ThemeColor(255, 85, 85),
+        assistant: ThemeColor(255, 125, 105),
+        thinking: ThemeColor(235, 130, 130),
+        tool: ThemeColor(235, 185, 75),
+        error: ThemeColor(240, 65, 70),
+        stderr: ThemeColor(230, 115, 150),
+        diffAdded: ThemeColor(115, 200, 135),
+        sourceBuiltin: ThemeColor(235, 175, 70),
+        sourceLibrary: ThemeColor(200, 135, 230),
+        sourceProject: ThemeColor(105, 205, 145),
+        background: ThemeColor(28, 18, 20),
+        surface: ThemeColor(40, 26, 30),
+        stroke: ThemeColor(108, 70, 76)
+    )
+
+    static let sunburst = Theme(
+        id: UUID(uuidString: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB")!,
+        name: "Sunburst",
+        isBuiltIn: true,
+        accent: ThemeColor(255, 210, 50),
+        assistant: ThemeColor(255, 155, 95),
+        thinking: ThemeColor(245, 185, 75),
+        tool: ThemeColor(205, 175, 85),
+        error: ThemeColor(238, 85, 80),
+        stderr: ThemeColor(232, 140, 135),
+        diffAdded: ThemeColor(150, 215, 105),
+        sourceBuiltin: ThemeColor(245, 195, 65),
+        sourceLibrary: ThemeColor(185, 140, 225),
+        sourceProject: ThemeColor(100, 210, 160),
+        background: ThemeColor(28, 24, 16),
+        surface: ThemeColor(42, 34, 22),
+        stroke: ThemeColor(102, 88, 66)
+    )
+
+    static let harleq = Theme(
+        id: UUID(uuidString: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC")!,
+        name: "Harleq",
+        isBuiltIn: true,
+        accent: ThemeColor(65, 150, 255),
+        assistant: ThemeColor(230, 50, 200),
+        thinking: ThemeColor(160, 80, 255),
+        tool: ThemeColor(255, 195, 0),
+        error: ThemeColor(255, 65, 75),
+        stderr: ThemeColor(255, 140, 80),
+        diffAdded: ThemeColor(45, 220, 110),
+        sourceBuiltin: ThemeColor(255, 175, 45),
+        sourceLibrary: ThemeColor(185, 110, 245),
+        sourceProject: ThemeColor(45, 210, 190),
+        background: ThemeColor(18, 16, 24),
+        surface: ThemeColor(28, 24, 38),
+        stroke: ThemeColor(70, 60, 95)
+    )
+
+    static let fiery = Theme(
+        id: UUID(uuidString: "EEEEEEEE-EEEE-EEEE-EEEE-EEEEEEEEEEEE")!,
+        name: "Fiery",
+        isBuiltIn: true,
+        accent: ThemeColor(193, 18, 31),
+        assistant: ThemeColor(102, 155, 188),
+        thinking: ThemeColor(230, 145, 60),
+        tool: ThemeColor(253, 240, 213),
+        error: ThemeColor(120, 0, 0),
+        stderr: ThemeColor(215, 55, 50),
+        diffAdded: ThemeColor(90, 195, 115),
+        sourceBuiltin: ThemeColor(240, 175, 50),
+        sourceLibrary: ThemeColor(102, 155, 188),
+        sourceProject: ThemeColor(85, 195, 155),
+        background: ThemeColor(0, 48, 73),
+        surface: ThemeColor(12, 60, 88),
+        stroke: ThemeColor(65, 110, 140)
+    )
+
+    static let purpleRaindrops = Theme(
+        id: UUID(uuidString: "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF")!,
+        name: "Purple Raindrops",
+        isBuiltIn: true,
+        accent: ThemeColor(67, 97, 238),
+        assistant: ThemeColor(247, 37, 133),
+        thinking: ThemeColor(63, 55, 201),
+        tool: ThemeColor(76, 201, 240),
+        error: ThemeColor(181, 23, 158),
+        stderr: ThemeColor(114, 9, 183),
+        diffAdded: ThemeColor(80, 215, 170),
+        sourceBuiltin: ThemeColor(72, 149, 239),
+        sourceLibrary: ThemeColor(58, 12, 163),
+        sourceProject: ThemeColor(86, 11, 173),
+        background: ThemeColor(16, 8, 28),
+        surface: ThemeColor(26, 16, 42),
+        stroke: ThemeColor(72, 12, 168)
+    )
+
+    static let neonJungle = Theme(
+        id: UUID(uuidString: "10101010-1010-1010-1010-101010101010")!,
+        name: "Neon Jungle",
+        isBuiltIn: true,
+        accent: ThemeColor(65, 234, 212),
+        assistant: ThemeColor(255, 32, 110),
+        thinking: ThemeColor(155, 65, 235),
+        tool: ThemeColor(251, 255, 18),
+        error: ThemeColor(255, 55, 80),
+        stderr: ThemeColor(225, 40, 145),
+        diffAdded: ThemeColor(125, 240, 65),
+        sourceBuiltin: ThemeColor(245, 205, 30),
+        sourceLibrary: ThemeColor(65, 234, 212),
+        sourceProject: ThemeColor(75, 235, 65),
+        background: ThemeColor(12, 15, 10),
+        surface: ThemeColor(20, 24, 16),
+        stroke: ThemeColor(50, 65, 50)
     )
 
     /// Default first — the rest are presented as presets in Settings.
@@ -290,7 +464,14 @@ extension Theme {
         monoSlate,
         tokyoNight,
         nord,
-        catppuccinMocha
+        catppuccinMocha,
+        vortex,
+        crimson,
+        sunburst,
+        harleq,
+        fiery,
+        purpleRaindrops,
+        neonJungle
     ]
 
     // Gradient/depth shades derived from the accent. Tuned so the Default

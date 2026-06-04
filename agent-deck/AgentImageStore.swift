@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Foundation
+import ImageIO
 
 @MainActor
 final class AgentImageStore: ObservableObject {
@@ -145,7 +146,7 @@ struct AgentImageLoader {
         for url in urls {
             let key = url as NSURL
             guard cache.object(forKey: key) == nil else { continue }
-            if let image = NSImage(contentsOf: url) {
+            if let image = downsampledImage(at: url) {
                 cache.setObject(image, forKey: key)
             }
         }
@@ -154,10 +155,33 @@ struct AgentImageLoader {
     static func image(at url: URL?) -> NSImage? {
         guard let url else { return nil }
         if let cached = cache.object(forKey: url as NSURL) { return cached }
-        if let image = NSImage(contentsOf: url) {
+        if let image = downsampledImage(at: url) {
             cache.setObject(image, forKey: url as NSURL)
             return image
         }
         return nil
+    }
+
+    /// Avatars render at most ~64pt; decode a 192px thumbnail rather than caching the
+    /// full-resolution source (often 512-1024px). Scrolling the agent list re-renders
+    /// each avatar, and downscaling a huge cached image per row was the list's main
+    /// scroll cost — a small thumbnail is crisp at every avatar size and far lighter.
+    nonisolated private static let maxPixelSize = 192
+
+    nonisolated private static func downsampledImage(at url: URL) -> NSImage? {
+        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else {
+            return NSImage(contentsOf: url)
+        }
+        let thumbnailOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions as CFDictionary) else {
+            return NSImage(contentsOf: url)
+        }
+        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
     }
 }

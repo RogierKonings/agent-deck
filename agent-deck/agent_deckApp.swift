@@ -20,6 +20,13 @@ final class AgentDeckAppDelegate: NSObject, NSApplicationDelegate, UNUserNotific
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Crash-proof hang detector: when the main thread freezes (janky scroll),
+        // it auto-captures the hung backtrace via the external `sample` tool to
+        // /tmp/agentdeck-hang-<n>.txt. Disable with HangWatchdogEnabled=NO.
+        HangWatchdog.shared.start()
+        // Debug: render sample native transcript bubbles for visual verification
+        // without loading a real session. Off unless NativeBubblePreview=YES.
+        NativeBubblePreviewDebug.showIfEnabled()
         // Agent Deck is a dark-only app — force the appearance at the AppKit
         // layer so menus, file panels, and the Sparkle updater are dark too
         // (SwiftUI's `.preferredColorScheme` does not reach those surfaces).
@@ -99,6 +106,10 @@ struct agent_deckApp: App {
                 .environment(viewModel)
                 .environmentObject(appDelegate.updater)
                 .preferredColorScheme(.dark)
+                // Themed tokens are static vars (invisible to SwiftUI's dependency
+                // graph), so re-key on the theme revision to repaint on a switch —
+                // same approach as the main window.
+                .id(themeManager.revision)
         }
         .commands {
             AgentDeckCommands()

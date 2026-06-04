@@ -106,16 +106,16 @@ struct PiAgentActivityPanel: View {
     private var activityHeader: some View {
         HStack(alignment: .center, spacing: 10) {
             Image(systemName: "wrench.and.screwdriver")
-                .font(.system(size: 15, weight: .semibold))
+                .font(AppTheme.Font.body.weight(.semibold))
                 .foregroundStyle(AppTheme.mutedText)
                 .frame(width: 28, height: 28)
                 .background(Circle().fill(AppTheme.contentFill).stroke(AppTheme.contentStroke, lineWidth: 1))
             VStack(alignment: .leading, spacing: 2) {
                 Text("Activity")
-                    .font(.headline.weight(.semibold))
+                    .font(AppTheme.Font.headline.weight(.semibold))
                 if let subtitle {
                     Text(subtitle)
-                        .font(.caption)
+                        .font(AppTheme.Font.caption)
                         .foregroundStyle(AppTheme.mutedText)
                 }
             }
@@ -124,7 +124,7 @@ struct PiAgentActivityPanel: View {
                 isPresented = false
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(AppTheme.Font.footnote.weight(.semibold))
                     .frame(width: 28, height: 28)
             }
             .buttonStyle(.plain)
@@ -207,18 +207,18 @@ struct PiAgentActivityPanel: View {
     private func compactEmptyState(title: String, message: String, icon: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Image(systemName: icon)
-                .font(.system(size: 20, weight: .semibold))
+                .font(AppTheme.Font.title.weight(.semibold))
                 .foregroundStyle(AppTheme.mutedText)
             Text(title)
-                .font(.headline.weight(.semibold))
+                .font(AppTheme.Font.headline.weight(.semibold))
             Text(message)
-                .font(.callout)
+                .font(AppTheme.Font.callout)
                 .foregroundStyle(AppTheme.mutedText)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(AppTheme.contentFill).stroke(AppTheme.contentStroke, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: AppTheme.Chat.panelCornerRadius, style: .continuous).fill(AppTheme.contentFill).stroke(AppTheme.contentStroke, lineWidth: 1))
     }
 }
 
@@ -251,7 +251,7 @@ struct PiAgentCurrentPlanCard: View {
         if showsSurface {
             content
                 .padding(12)
-                .appContentSurface(cornerRadius: 14)
+                .appContentSurface(cornerRadius: AppTheme.Chat.panelCornerRadius)
         } else {
             content
         }
@@ -262,16 +262,16 @@ struct PiAgentCurrentPlanCard: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 9) {
                 Image(systemName: "checklist")
-                    .font(.caption.weight(.semibold))
+                    .font(AppTheme.Font.caption.weight(.semibold))
                     .foregroundStyle(AppTheme.brandAccent)
                     .frame(width: 22, height: 22)
                     .background(Circle().fill(AppTheme.brandAccent.opacity(0.13)))
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(title)
-                        .font(.callout.weight(.semibold))
+                        .font(AppTheme.Font.callout.weight(.semibold))
                         .foregroundStyle(.primary)
                     Text(subtitle)
-                        .font(isSubtitleIdentifier ? .system(size: 10, weight: .medium, design: .monospaced) : .caption2.weight(.medium))
+                        .font(isSubtitleIdentifier ? AppTheme.Font.code.weight(.medium) : AppTheme.Font.caption2.weight(.medium))
                         .foregroundStyle(AppTheme.mutedText)
                         .padding(.horizontal, isSubtitleIdentifier ? 5 : 0)
                         .padding(.vertical, isSubtitleIdentifier ? 2 : 0)
@@ -288,7 +288,7 @@ struct PiAgentCurrentPlanCard: View {
 
             if items.isEmpty {
                 Text("No active plan items")
-                    .font(.callout)
+                    .font(AppTheme.Font.callout)
                     .foregroundStyle(AppTheme.mutedText)
             } else {
                 VStack(alignment: .leading, spacing: 0) {
@@ -300,11 +300,11 @@ struct PiAgentCurrentPlanCard: View {
                                 .fill(color(for: item.status).opacity(item.status == .todo ? 0.08 : 0.14))
                                 .frame(width: 20, height: 20)
                             Image(systemName: icon(for: item.status))
-                                .font(.caption2.weight(.bold))
+                                .font(AppTheme.Font.caption2.weight(.bold))
                                 .foregroundStyle(color(for: item.status))
                         }
                         Text(item.title)
-                            .font(.callout)
+                            .font(AppTheme.Font.callout)
                             .foregroundStyle(item.status == .done || item.status == .skipped ? AppTheme.mutedText : .primary)
                             .strikethrough(item.status == .done || item.status == .skipped, color: AppTheme.mutedText)
                             .lineLimit(3)
@@ -333,7 +333,7 @@ struct PiAgentCurrentPlanCard: View {
             }
             .frame(width: 13, height: 13)
             Text(progressText)
-                .font(.caption2.monospacedDigit().weight(.semibold))
+                .font(AppTheme.Font.caption2.monospacedDigit().weight(.semibold))
                 .foregroundStyle(progressColor)
                 .contentTransition(.numericText())
         }
@@ -389,10 +389,10 @@ private struct PiAgentActivitySubagentsCard: View {
                 Image(systemName: "paperplane")
                     .foregroundStyle(AppTheme.mutedText)
                 Text("Deck Agents")
-                    .font(.caption.weight(.semibold))
+                    .font(AppTheme.Font.caption.weight(.semibold))
                 Spacer(minLength: 0)
                 Text("\(runs.count)")
-                    .font(.caption2.monospacedDigit())
+                    .font(AppTheme.Font.caption2.monospacedDigit())
                     .foregroundStyle(AppTheme.mutedText)
             }
             VStack(alignment: .leading, spacing: 7) {
@@ -403,7 +403,7 @@ private struct PiAgentActivitySubagentsCard: View {
             }
         }
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.82)).stroke(AppTheme.contentStroke, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.82)).stroke(AppTheme.contentStroke, lineWidth: 1))
     }
 }
 
@@ -417,19 +417,19 @@ private struct PiAgentActivitySubagentRow: View {
                     .fill(color(for: run.status))
                     .frame(width: 7, height: 7)
                 Text(run.agentName)
-                    .font(.caption.weight(.semibold))
+                    .font(AppTheme.Font.caption.weight(.semibold))
                     .lineLimit(1)
                 PiSubagentStatusText(status: run.status, color: color(for: run.status), font: .caption2.weight(.semibold))
                 Spacer(minLength: 0)
                 if run.isWorktreeIsolated == true {
                     Image(systemName: "point.3.connected.trianglepath.dotted")
-                        .font(.caption2)
+                        .font(AppTheme.Font.caption2)
                         .foregroundStyle(AppTheme.mutedText)
                         .help("Isolated worktree")
                 }
             }
             Text(run.task)
-                .font(.caption2)
+                .font(AppTheme.Font.caption2)
                 .foregroundStyle(AppTheme.mutedText)
                 .lineLimit(2)
             if let children = run.children, !children.isEmpty {
@@ -438,7 +438,7 @@ private struct PiAgentActivitySubagentRow: View {
                         HStack(spacing: 5) {
                             Circle().fill(color(for: child.status)).frame(width: 5, height: 5)
                             Text("\(child.index + 1). \(child.agentName)")
-                                .font(.caption2.weight(.semibold))
+                                .font(AppTheme.Font.caption2.weight(.semibold))
                                 .lineLimit(1)
                             PiSubagentStatusText(status: child.status, color: color(for: child.status), font: .caption2)
                             Spacer(minLength: 0)
@@ -847,23 +847,23 @@ private struct PiAgentActivityRow: View {
             Button(action: onSelect) {
                 HStack(alignment: .top, spacing: 9) {
                     Image(systemName: item.kind.icon)
-                        .font(.caption.weight(.semibold))
+                        .font(AppTheme.Font.caption.weight(.semibold))
                         .foregroundStyle(item.status == .failed ? .red : AppTheme.mutedText)
                         .frame(width: 18, height: 18)
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 6) {
                             Text(item.title)
-                                .font(.caption.weight(.semibold))
+                                .font(AppTheme.Font.caption.weight(.semibold))
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                             Spacer(minLength: 0)
                             Text(item.entry.timestamp.formatted(date: .omitted, time: .shortened))
-                                .font(.caption2.monospacedDigit())
+                                .font(AppTheme.Font.caption2.monospacedDigit())
                                 .foregroundStyle(AppTheme.mutedText)
                         }
                         HStack(spacing: 6) {
                             Text(item.subtitle)
-                                .font(.caption2)
+                                .font(AppTheme.Font.caption2)
                                 .foregroundStyle(AppTheme.mutedText)
                                 .lineLimit(1)
                             Circle()
@@ -882,7 +882,7 @@ private struct PiAgentActivityRow: View {
             }
         }
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(isSelected ? AppTheme.selectionFill : AppTheme.contentSubtleFill.opacity(0.55)).stroke(isSelected ? AppTheme.selectionStroke : AppTheme.contentStroke, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius, style: .continuous).fill(isSelected ? AppTheme.selectionFill : AppTheme.contentSubtleFill.opacity(0.55)).stroke(isSelected ? AppTheme.selectionStroke : AppTheme.contentStroke, lineWidth: 1))
     }
 }
 
@@ -927,22 +927,22 @@ private struct PiAgentActivityDetail: View {
     private func fileActions(path: String) -> some View {
         HStack(spacing: 8) {
             Text(path)
-                .font(.caption2.monospaced())
+                .font(AppTheme.Font.caption2.monospaced())
                 .foregroundStyle(AppTheme.mutedText)
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 0)
             Button("Open") { if let url = resolvedURL(for: path) { NSWorkspace.shared.open(url) } }
-                .font(.caption.weight(.semibold))
+                .font(AppTheme.Font.caption.weight(.semibold))
                 .buttonStyle(.plain)
                 .disabled(resolvedURL(for: path) == nil)
             Button("Reveal") { if let url = resolvedURL(for: path) { NSWorkspace.shared.activateFileViewerSelecting([url]) } }
-                .font(.caption.weight(.semibold))
+                .font(AppTheme.Font.caption.weight(.semibold))
                 .buttonStyle(.plain)
                 .disabled(resolvedURL(for: path) == nil)
             if let diff = item.diff {
                 AppCopyTextButton(title: "Copy Diff", text: diff)
-                    .font(.caption.weight(.semibold))
+                    .font(AppTheme.Font.caption.weight(.semibold))
                     .buttonStyle(.plain)
             }
         }
@@ -950,12 +950,12 @@ private struct PiAgentActivityDetail: View {
 
     private func quietNote(_ text: String) -> some View {
         Text(text)
-            .font(.caption)
+            .font(AppTheme.Font.caption)
             .foregroundStyle(AppTheme.mutedText)
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(9)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.6)))
+            .background(RoundedRectangle(cornerRadius: AppTheme.Chat.subCardCornerRadius, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.6)))
     }
 
     private func resolvedURL(for path: String) -> URL? {
@@ -974,7 +974,7 @@ private struct PiAgentWebActivitySnippet: View {
             PiAgentWebActivitySummaryView(activities: [activity])
         } else {
             Text("Web activity details are unavailable for this event.")
-                .font(.caption)
+                .font(AppTheme.Font.caption)
                 .foregroundStyle(AppTheme.mutedText)
         }
     }
@@ -999,19 +999,19 @@ private struct PiAgentCodePreview: View {
         VStack(alignment: .leading, spacing: 6) {
             if let title {
                 Text(title)
-                    .font(.caption2.weight(.semibold))
+                    .font(AppTheme.Font.caption2.weight(.semibold))
                     .foregroundStyle(AppTheme.mutedText)
             }
             ScrollView([.horizontal, .vertical], showsIndicators: false) {
                 Text(cachedDisplayText.isEmpty ? displayText : cachedDisplayText)
-                    .font(.caption.monospaced())
+                    .font(AppTheme.Font.code)
                     .foregroundStyle(.primary.opacity(0.82))
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(9)
             }
             .frame(maxHeight: maxHeight)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(AppTheme.textContentFill))
+            .background(RoundedRectangle(cornerRadius: AppTheme.Chat.subCardCornerRadius, style: .continuous).fill(AppTheme.textContentFill))
         }
         .onAppear(perform: rebuildDisplayText)
         .onChange(of: text) { _, _ in rebuildDisplayText() }
@@ -1094,7 +1094,7 @@ private struct PiAgentDiffView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Diff")
-                .font(.caption2.weight(.semibold))
+                .font(AppTheme.Font.caption2.weight(.semibold))
                 .foregroundStyle(AppTheme.mutedText)
             ScrollView([.horizontal, .vertical], showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: 0) {
@@ -1103,7 +1103,7 @@ private struct PiAgentDiffView: View {
                             AppSpinner()
                                 .controlSize(.small)
                             Text("Preparing diff...")
-                                .font(.caption.monospaced())
+                                .font(AppTheme.Font.code)
                                 .foregroundStyle(AppTheme.mutedText)
                         }
                         .frame(minWidth: 620, alignment: .leading)
@@ -1113,11 +1113,11 @@ private struct PiAgentDiffView: View {
                             let line = lines[index]
                             HStack(alignment: .top, spacing: 8) {
                                 Text(line.gutter)
-                                    .font(.caption.monospaced())
+                                    .font(AppTheme.Font.code)
                                     .foregroundStyle(line.gutterColor)
                                     .frame(width: 52, alignment: .trailing)
                                 Text(line.content.isEmpty ? " " : line.content)
-                                    .font(.caption.monospaced())
+                                    .font(AppTheme.Font.code)
                                     .foregroundStyle(line.textColor)
                                     .textSelection(.enabled)
                                 Spacer(minLength: 0)
@@ -1129,7 +1129,7 @@ private struct PiAgentDiffView: View {
                         }
                         if omittedLineCount > 0 {
                             Text("... \(omittedLineCount) more diff lines hidden for performance. Use Copy Diff for the full diff.")
-                                .font(.caption.monospaced())
+                                .font(AppTheme.Font.code)
                                 .foregroundStyle(AppTheme.mutedText)
                                 .padding(8)
                         }
@@ -1138,7 +1138,7 @@ private struct PiAgentDiffView: View {
                 .padding(.vertical, 6)
             }
             .frame(maxHeight: 320)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(AppTheme.textContentFill))
+            .background(RoundedRectangle(cornerRadius: AppTheme.Chat.subCardCornerRadius, style: .continuous).fill(AppTheme.textContentFill))
         }
         .task(id: diffText) {
             isLoading = true

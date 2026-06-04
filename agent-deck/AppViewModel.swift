@@ -186,8 +186,17 @@ final class AppViewModel: NSObject {
     var githubLastError: String?
     var githubLastStatusCheckAt: Date?
     var appSettings: AppSettings = AppSettings() {
-        didSet { rebuildAutomationModelCaches() }
+        didSet {
+            rebuildAutomationModelCaches()
+            rebuildExternalSkillPathCache()
+        }
     }
+    /// Standardized `externalSkillPaths` as a set. `isImportedSkill` is called
+    /// per skill row during layout and otherwise re-allocates + standardizes
+    /// every external path for every skill (O(skills × paths) `URL` churn — a
+    /// measured Skills-tab hang hotspot). Derived from `appSettings`, so it is
+    /// observation-ignored and rebuilt in the `didSet` above.
+    @ObservationIgnored private var cachedStandardizedExternalSkillPaths: Set<String> = []
     private(set) var hasCompletedInitialRefresh = false
     private(set) var cachedHasAgentWarnings = false
     private(set) var cachedHasSkillWarnings = false
@@ -257,6 +266,7 @@ final class AppViewModel: NSObject {
     var agentDeckReleaseService: ReleaseService { ReleaseService(gitRepositoryService: gitRepositoryService) }
     private let agentAvatarPromptService = AgentAvatarPromptGenerationService()
     private let skillDescriptionService = SkillDescriptionGenerationService()
+    private let releaseNotesGenerator = ReleaseNotesGenerationService()
     private let subagentWorktreeService = PiSubagentWorktreeService()
     private let sessionWorktreeService = PiAgentSessionWorktreeService()
     @ObservationIgnored private lazy var piAgentRunner = PiAgentRunnerService(store: piAgentSessionStore)
@@ -2328,6 +2338,34 @@ final class AppViewModel: NSObject {
         acknowledgePiAgentSession(id)
     }
 
+    /// Sessions for the active project, in the store's stable order (pinned +
+    /// recency) — the base order the sidebar shows before any search filter.
+    /// Drives next/previous session navigation and the scroll benchmark.
+    func scopedPiAgentSessionsInOrder() -> [PiAgentSessionRecord] {
+        guard let path = selectedProjectPath else { return piAgentSessionStore.sessions }
+        return piAgentSessionStore.sessions.filter { $0.projectPath == path }
+    }
+
+    /// Move selection by `offset` within the scoped session list, wrapping at
+    /// both ends. No-op when there are no sessions. Used by the ⌘] / ⌘[
+    /// shortcuts and reused as the scroll benchmark's "advance" mechanism.
+    func selectAdjacentPiAgentSession(offset: Int) {
+        let sessions = scopedPiAgentSessionsInOrder()
+        guard !sessions.isEmpty else { return }
+        let currentID = piAgentSessionStore.selectedSessionID
+        let currentIndex = sessions.firstIndex { $0.id == currentID } ?? 0
+        let count = sessions.count
+        let nextIndex = ((currentIndex + offset) % count + count) % count
+        selectPiAgentSession(sessions[nextIndex].id)
+    }
+
+    func selectNextPiAgentSession() { selectAdjacentPiAgentSession(offset: 1) }
+    func selectPreviousPiAgentSession() { selectAdjacentPiAgentSession(offset: -1) }
+
+    var canNavigatePiAgentSessions: Bool {
+        scopedPiAgentSessionsInOrder().count > 1
+    }
+
     func acknowledgeVisibleSelectedPiAgentSession() {
         guard let sessionID = piAgentSessionStore.selectedSession?.id,
               isPiAgentSessionActuallyVisible(sessionID) else { return }
@@ -2524,7 +2562,9 @@ final class AppViewModel: NSObject {
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
             openTerminalScript(scriptURL, for: operationID)
         } catch {
+#if DEBUG
             NSLog("Failed to create Pi update terminal script: \(error.localizedDescription)")
+#endif
         }
     }
 
@@ -2550,7 +2590,9 @@ final class AppViewModel: NSObject {
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
             openTerminalScript(scriptURL, for: operationID)
         } catch {
+#if DEBUG
             NSLog("Failed to create Pi install terminal script: \(error.localizedDescription)")
+#endif
         }
     }
 
@@ -3386,6 +3428,29 @@ final class AppViewModel: NSObject {
     var agentDeckReleaseProjectURL: URL? {
         guard let session = piAgentSessionStore.selectedSession else { return nil }
         return URL(fileURLWithPath: session.projectPath, isDirectory: true)
+    }
+
+    /// Draft friendly release notes for the pending Agent Deck release using the
+    /// default model (thinking off), from the commits since `sinceTag`. The
+    /// returned markdown body is shown — and editable — in the release sheet, then
+    /// rides the annotated tag into CI. Throws if no default model/project is
+    /// available; the sheet treats that as "fall back to CI commit listing".
+    func generateAgentDeckReleaseNotes(version: String, sinceTag: String?) async throws -> String {
+        guard let model = defaultPiAgentModel() else {
+            throw ReleaseNotesGenerationService.GenerationError.rpc("No default model is configured.")
+        }
+        guard let projectURL = agentDeckReleaseProjectURL else {
+            throw ReleaseNotesGenerationService.GenerationError.rpc("No project is selected.")
+        }
+        let commits = try await gitRepositoryService.commitSubjects(sinceTag: sinceTag, in: projectURL)
+        let environment = EnvRuntimeEnvironment().environment(projectRoot: projectURL)
+        return try await releaseNotesGenerator.generate(
+            version: version,
+            commitSubjects: commits,
+            model: model,
+            projectURL: projectURL,
+            environment: environment
+        )
     }
 
     /// Record a successful release in the selected session's transcript.
@@ -6508,26 +6573,17 @@ final class AppViewModel: NSObject {
         enabledProjects.filter { self.agent(agent, isEnabledFor: $0) }
     }
 
+    /// Read-only accessor for the per-agent skill-visibility cache. The full map
+    /// is computed by `buildSkillVisibilityIssuesByAgentID()` at refresh
+    /// boundaries (alongside the other warning caches), so this must NEVER
+    /// recompute or touch disk — it is called from view bodies for every agent
+    /// on every layout pass. Agents without issues are intentionally absent from
+    /// the cache, so a miss means "no issues", not "needs recompute". The old
+    /// recompute-on-miss path fell through to a synchronous `PiScanner().scan()`
+    /// per healthy agent, producing multi-hundred-ms main-thread hangs on tab
+    /// switches.
     func explicitSkillVisibilityIssues(for agent: EffectiveAgentRecord) -> [AgentSkillVisibilityIssue] {
-        if let cached = cachedSkillVisibilityIssuesByAgentID[agent.id] {
-            return cached
-        }
-        guard !agent.resolved.skills.isEmpty else { return [] }
-        let explicitSkills = agent.resolved.skills
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        guard !explicitSkills.isEmpty else { return [] }
-
-        let managedRecord = snapshot.libraryAgents.first { $0.name == agent.name }
-            ?? agent.globalCustom
-            ?? agent.projectCustom
-        guard let managedRecord else { return [] }
-
-        return assignedProjects(for: managedRecord).compactMap { project in
-            let missingSkills = explicitSkills.filter { !skillNamed($0, isRuntimeVisibleIn: project) }
-            guard !missingSkills.isEmpty else { return nil }
-            return AgentSkillVisibilityIssue(project: project, missingSkills: missingSkills)
-        }
+        cachedSkillVisibilityIssuesByAgentID[agent.id] ?? []
     }
 
     private func skillNamed(_ skillName: String, isRuntimeVisibleIn project: DiscoveredProject) -> Bool {
@@ -6571,6 +6627,12 @@ final class AppViewModel: NSObject {
         }
         cachedFoundationAutomationModel = foundation
         cachedAutomationAvailableModels = models
+    }
+
+    private func rebuildExternalSkillPathCache() {
+        cachedStandardizedExternalSkillPaths = Set(
+            appSettings.externalSkillPaths.map { URL(fileURLWithPath: $0).standardizedFileURL.path }
+        )
     }
 
     private func rebuildWarningCaches() {
@@ -6910,12 +6972,12 @@ final class AppViewModel: NSObject {
     /// True when `skill` was imported — its root path is tracked in
     /// `externalSkillPaths` (a local-folder import or a Git-synced repo skill).
     func isImportedSkill(_ skill: SkillRecord) -> Bool {
-        let fileURL = URL(fileURLWithPath: skill.filePath).standardizedFileURL
+        let paths = cachedStandardizedExternalSkillPaths
+        guard !paths.isEmpty else { return false }
+        let filePath = URL(fileURLWithPath: skill.filePath).standardizedFileURL.path
+        if paths.contains(filePath) { return true }
         let rootPath = skillDeletionTargetURL(for: skill).standardizedFileURL.path
-        return appSettings.externalSkillPaths.contains { rawPath in
-            let path = URL(fileURLWithPath: rawPath).standardizedFileURL.path
-            return path == rootPath || path == fileURL.path
-        }
+        return paths.contains(rootPath)
     }
 
     /// Filesystem + state mutations for un-importing one skill, WITHOUT
@@ -7009,7 +7071,9 @@ final class AppViewModel: NSObject {
             do {
                 try await skillRepositorySyncService.setSparseCheckout(directories, inCloneAt: cloneURL)
             } catch {
+#if DEBUG
                 NSLog("Failed to reconcile sparse checkout for imported skill repository %@: %@", repository.displayName, String(describing: error))
+#endif
             }
         }
     }

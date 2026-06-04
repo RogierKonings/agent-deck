@@ -116,8 +116,8 @@ struct AppList<Item: Identifiable & Hashable, RowContent: View>: View {
 
     var body: some View {
         // Perf-critical notes:
-        //   - No `.hideNativeScrollers()`: that probe is for native `List`
-        //     and schedules deferred window-tree scans we don't need.
+        //   - `.hideNativeScrollers()` keeps AppList chrome consistent when
+        //     macOS is configured to always show scroll bars.
         //   - Focus + arrow-key handlers attach ONLY when the caller opts
         //     into `keyboardNavigation`.
         //   - Selection state is snapshotted ONCE per body eval into a
@@ -161,6 +161,7 @@ struct AppList<Item: Identifiable & Hashable, RowContent: View>: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollIndicators(.hidden)
+        .hideNativeScrollers()
         .modifier(AppListKeyboardNavigation(
             enabled: keyboardNavigation,
             isFocused: $isFocused,

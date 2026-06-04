@@ -42,10 +42,79 @@ struct PiNativeSubagentBridgeExtensions {
     }
 
     static func extensionDirectoryURL(fileManager: FileManager = .default) -> URL {
+        if let migratedDirectory = migrateLegacyExtensionDirectoryIfNeeded(fileManager: fileManager) {
+            return migratedDirectory
+        }
+        return stableExtensionDirectoryURL()
+    }
+
+    private static func stableExtensionDirectoryURL() -> URL {
         let appSupport = URL.applicationSupportDirectory
         return appSupport
-            .appendingPathComponent("\(AppBrand.displayName)", isDirectory: true)
+            .appendingPathComponent("Agent Deck", isDirectory: true)
             .appendingPathComponent("Deck Agent Extensions", isDirectory: true)
+    }
+
+    private static func legacyExtensionDirectoryURLs() -> [URL] {
+        let appSupport = URL.applicationSupportDirectory
+        return [
+            AppBrand.displayName,
+            "agent-deck"
+        ]
+        .filter { $0 != "Agent Deck" }
+        .map {
+            appSupport
+                .appendingPathComponent($0, isDirectory: true)
+                .appendingPathComponent("Deck Agent Extensions", isDirectory: true)
+        }
+    }
+
+    private static func migrateLegacyExtensionDirectoryIfNeeded(fileManager: FileManager) -> URL? {
+        let stableDirectory = stableExtensionDirectoryURL()
+        if fileManager.fileExists(atPath: stableDirectory.path) {
+            migrateLegacyDependencyArtifacts(to: stableDirectory, fileManager: fileManager)
+            return stableDirectory
+        }
+
+        for legacyDirectory in legacyExtensionDirectoryURLs() where fileManager.fileExists(atPath: legacyDirectory.path) {
+            do {
+                try fileManager.createDirectory(at: stableDirectory.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try fileManager.moveItem(at: legacyDirectory, to: stableDirectory)
+                return stableDirectory
+            } catch {
+#if DEBUG
+                NSLog("Failed to migrate Agent Deck extension directory from %@ to %@: %@", legacyDirectory.path, stableDirectory.path, String(describing: error))
+#endif
+                return legacyDirectory
+            }
+        }
+        return nil
+    }
+
+    private static func migrateLegacyDependencyArtifacts(to stableDirectory: URL, fileManager: FileManager) {
+        for legacyDirectory in legacyExtensionDirectoryURLs() where fileManager.fileExists(atPath: legacyDirectory.path) {
+            copyItemIfMissing("package.json", from: legacyDirectory, to: stableDirectory, fileManager: fileManager)
+            copyItemIfMissing("package-lock.json", from: legacyDirectory, to: stableDirectory, fileManager: fileManager)
+            for package in WebFetchDependencyService.packages {
+                copyItemIfMissing("node_modules/\(package)", from: legacyDirectory, to: stableDirectory, fileManager: fileManager)
+            }
+        }
+    }
+
+    private static func copyItemIfMissing(_ relativePath: String, from sourceDirectory: URL, to destinationDirectory: URL, fileManager: FileManager) {
+        let source = sourceDirectory.appendingPathComponent(relativePath)
+        let destination = destinationDirectory.appendingPathComponent(relativePath)
+        guard fileManager.fileExists(atPath: source.path),
+              !fileManager.fileExists(atPath: destination.path) else { return }
+
+        do {
+            try fileManager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fileManager.copyItem(at: source, to: destination)
+        } catch {
+#if DEBUG
+            NSLog("Failed to migrate Agent Deck dependency artifact from %@ to %@: %@", source.path, destination.path, String(describing: error))
+#endif
+        }
     }
 
     static func writeExtension(named fileName: String, content: String, fileManager: FileManager) throws -> URL {

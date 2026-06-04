@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import os
 import QuartzCore
 import SwiftUI
 import UniformTypeIdentifiers
@@ -328,9 +329,25 @@ private struct PiAgentTranscriptTimelineSnapshot {
     let recentWindowArchive: (hiddenCount: Int, limit: Int)?
 }
 
+/// How a transcript row is rendered. Every row is now fully native AppKit (no
+/// per-row SwiftUI / `NSHostingView`); the spec knows how to build/configure/
+/// measure the concrete view.
+enum PiAgentTranscriptCellKind {
+    case native(NativeRowSpec)
+}
+
+extension PiAgentTranscriptCellKind {
+    /// Convenience for a native message bubble.
+    static func bubble(_ payload: NativeBubblePayload) -> PiAgentTranscriptCellKind {
+        .native(.of(PiAgentNativeBubbleView.self) { view, width in
+            view.configure(payload: payload, width: width)
+        })
+    }
+}
+
 private struct PiAgentAppKitTranscriptItem {
     let id: String
-    let view: AnyView
+    let kind: PiAgentTranscriptCellKind
     let contentRevision: Int
     /// Vertical spacing baked into the row, applied as padding inside the cell.
     /// `NSTableView.intercellSpacing` is uniform, but the transcript needs
@@ -347,14 +364,14 @@ private struct PiAgentAppKitTranscriptItem {
 
     init(
         id: String,
-        view: AnyView,
+        kind: PiAgentTranscriptCellKind,
         contentRevision: Int = 0,
         topInset: CGFloat = 0,
         bottomInset: CGFloat = 0,
         estimatedHeight: @escaping (CGFloat) -> CGFloat = { _ in 120 }
     ) {
         self.id = id
-        self.view = view
+        self.kind = kind
         self.contentRevision = contentRevision
         self.topInset = topInset
         self.bottomInset = bottomInset
@@ -376,7 +393,7 @@ private struct JumpToLatestPill: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: "chevron.down")
-                .font(.system(size: 12, weight: .bold))
+                .font(AppTheme.Font.footnote.weight(.bold))
                 .offset(x: 0.5, y: 0.5)
         }
         .foregroundStyle(AppTheme.brandAccent)
@@ -402,7 +419,10 @@ private struct JumpToLatestPill: View {
 /// final `PiAgentAppKitTranscriptItem` (`contentRevision` + `estimatedHeight`).
 private struct PiAgentTranscriptBlockDescriptor {
     let id: String
-    let view: AnyView
+    /// Legacy SwiftUI content for hosted rows. `nil` when `kind` is native.
+    let view: AnyView?
+    /// Native render kind; `nil` falls back to hosting `view`.
+    var kind: PiAgentTranscriptCellKind? = nil
     /// Content hash WITHOUT insets — insets are folded in at materialize time.
     let baseRevision: Int
     /// Height estimate for the block content alone (insets added separately).
@@ -415,6 +435,40 @@ private struct PiAgentTranscriptBlockDescriptor {
     var bottomInset: CGFloat = 0
 }
 
+/// The transcript-rendering unit, deliberately split out from `PiAgentScreen` so
+/// that it — and only it — observes `PiAgentTranscriptRenderCache`. The render
+/// cache pulses `streamingRevision` ~30Hz during streaming; isolating the
+/// subscription here keeps that pulse from re-evaluating the screen's session
+/// list and composer (see the `@State transcriptCache` note in `PiAgentScreen`).
+///
+/// `makeItems` is supplied by the parent and re-run on every pulse. It reads the
+/// live cache (`threads`) and parent references (`store`/`viewModel`), so the
+/// rebuilt items reflect the latest streamed content even though the parent view
+/// struct captured in the closure isn't itself re-evaluated between pulses.
+private struct PiAgentTranscriptHost: View {
+    @ObservedObject var cache: PiAgentTranscriptRenderCache
+    let sessionID: UUID?
+    let bottomScrollRequest: Int
+    let makeItems: () -> [PiAgentAppKitTranscriptItem]
+    let onPinnedToBottomChange: (Bool) -> Void
+    let onBenchAdvanceSession: () -> Void
+    let benchSessionCount: () -> Int
+
+    var body: some View {
+        PiAgentAppKitTranscriptView(
+            items: makeItems(),
+            sessionID: sessionID,
+            renderRevision: cache.renderRevision,
+            streamingRevision: cache.streamingRevision,
+            autoScrollTurnRevision: cache.autoScrollTurnRevision,
+            bottomScrollRequest: bottomScrollRequest,
+            onPinnedToBottomChange: onPinnedToBottomChange,
+            onBenchAdvanceSession: onBenchAdvanceSession,
+            benchSessionCount: benchSessionCount
+        )
+    }
+}
+
 private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
     let items: [PiAgentAppKitTranscriptItem]
     let sessionID: UUID?
@@ -423,6 +477,10 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
     let autoScrollTurnRevision: Int
     let bottomScrollRequest: Int
     let onPinnedToBottomChange: (Bool) -> Void
+    /// Advance selection to the next session (the ⌘] action). Used only by the
+    /// scroll benchmark to sweep multiple chats; nil disables multi-session.
+    var onBenchAdvanceSession: (() -> Void)?
+    var benchSessionCount: (() -> Int)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(onPinnedToBottomChange: onPinnedToBottomChange)
@@ -444,6 +502,12 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         tableView.intercellSpacing = NSSize(width: 0, height: 0)
         tableView.rowHeight = 120
         tableView.usesAutomaticRowHeights = false
+        // The default `.automatic` style resolves to `.inset`, which adds a
+        // system horizontal margin (~16pt) to every cell. That pushed all rows
+        // inboard of the composer (which lives outside the table). `.plain`
+        // removes the inset so a cell pinned at x=0 lines up with the composer's
+        // container edge. Row-internal padding is handled per-block instead.
+        tableView.style = .plain
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("TranscriptColumn"))
         column.resizingMask = .autoresizingMask
@@ -471,6 +535,8 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
 
         context.coordinator.scrollView = scrollView
         context.coordinator.tableView = tableView
+        context.coordinator.onBenchAdvanceSession = onBenchAdvanceSession
+        context.coordinator.benchSessionCount = benchSessionCount
         context.coordinator.setupDataSource(for: tableView)
         context.coordinator.setupScrollObservation(scrollView)
         context.coordinator.updateColumnWidthIfNeeded()
@@ -486,17 +552,21 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        let coordinator = context.coordinator
-        coordinator.onPinnedToBottomChange = onPinnedToBottomChange
-        coordinator.updateColumnWidthIfNeeded()
-        coordinator.apply(
-            items: items,
-            sessionID: sessionID,
-            renderRevision: renderRevision,
-            streamingRevision: streamingRevision,
-            autoScrollTurnRevision: autoScrollTurnRevision,
-            bottomScrollRequest: bottomScrollRequest
-        )
+        TranscriptScrollProfiler.measureBody("updateNSView") {
+            let coordinator = context.coordinator
+            coordinator.onPinnedToBottomChange = onPinnedToBottomChange
+            coordinator.onBenchAdvanceSession = onBenchAdvanceSession
+            coordinator.benchSessionCount = benchSessionCount
+            coordinator.updateColumnWidthIfNeeded()
+            coordinator.apply(
+                items: items,
+                sessionID: sessionID,
+                renderRevision: renderRevision,
+                streamingRevision: streamingRevision,
+                autoScrollTurnRevision: autoScrollTurnRevision,
+                bottomScrollRequest: bottomScrollRequest
+            )
+        }
     }
 
     static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
@@ -508,6 +578,55 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         weak var scrollView: NSScrollView?
         weak var tableView: NSTableView?
         private var dataSource: NSTableViewDiffableDataSource<PiAgentTranscriptTableSection, String>?
+
+        let profiler = TranscriptScrollProfiler()
+
+        // MARK: Scroll benchmark (autonomous, multi-session validation)
+        // Gated by `defaults write streetcoding.agent-deck ScrollBenchEnabled -bool YES`.
+        // When on, it sweeps several content-bearing chats in turn — for each it
+        // runs a SHORT scroll burst (local up/down) then a LONG full top↔bottom
+        // sweep, then advances to the next session via the same path as the ⌘]
+        // shortcut. Each pass is bracketed as a profiler "gesture" tagged with the
+        // session + phase, so one run produces a comparable per-session report you
+        // can diff across builds to see when the jank fix actually lands. Programmatic
+        // scrolls exercise the real cell-vend + sizeThatFits + layout path (synthetic
+        // OS scroll events are blocked by TCC).
+        private var benchTimer: Timer?
+        private var benchStart: CFTimeInterval = 0
+        private var benchDir: CGFloat = -1
+        private let benchStepPoints: CGFloat = 36
+
+        /// Switch selection to the next session (wired by the screen to
+        /// `viewModel.selectNextPiAgentSession()` — the ⌘] action). Returns
+        /// selection control to SwiftUI, which re-vends the transcript and lands
+        /// back in `apply()`, where the bench state machine resumes.
+        var onBenchAdvanceSession: (() -> Void)?
+        /// Total sessions in the current project's scope — sizes the run.
+        var benchSessionCount: (() -> Int)?
+
+        private enum BenchPhase { case idle, settling, shortScroll, longScroll, advancing }
+        private var benchActive = false
+        private var benchStarted = false
+        private var benchPhase: BenchPhase = .idle
+        private var benchTargetSessions = 0
+        private var benchScopedCount = 0
+        private var benchSessionsTested = 0
+        private var benchVisitedSessionIDs: Set<UUID> = []
+        /// Every session the sweep has landed on (tested or skipped) — lets the
+        /// run stop after one full lap of the list even if some are empty drafts.
+        private var benchSeenIDs: Set<UUID> = []
+        /// Hard stop on advances so a project with fewer content-bearing sessions
+        /// than the target can never loop forever wrapping the list.
+        private var benchAdvanceBudget = 0
+        private let benchMaxSessions = 6
+        private let benchShortDuration: CFTimeInterval = 2.5
+        private let benchLongDuration: CFTimeInterval = 7
+        /// Long full-sweeps run back-to-back per session: repeated traversals are
+        /// far more likely to surface a hang/hitch than a single pass (the first
+        /// pass warms caches; a stall that survives into passes 2–3 is the real
+        /// jank). Each pass is its own profiler gesture, so each gets a summary
+        /// and can trip the hitch backtrace independently.
+        private let benchLongRepeats = 3
 
         var sessionID: UUID?
         var lastRenderRevision = -1
@@ -643,11 +762,13 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             ) { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self, let scrollView = self.scrollView else { return }
+                    self.profiler.measureBoundsCallback {
                     if !self.isProgrammaticScroll {
                         // Authoritative user-scroll timestamp — covers mouse
                         // wheels and scroller drags that post no live-scroll
                         // notification at all.
                         self.lastUserScrollTime = CACurrentMediaTime()
+                        self.profiler.userScrollTick()
                         // A genuine user-driven bounds change ends the auto-follow
                         // glide immediately (the glide's own scrolls set the
                         // programmatic flag, so they don't reach here).
@@ -669,6 +790,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                     // when the inspector slides in or the window resizes.
                     self.updateColumnWidthIfNeeded()
                     self.publishPinnedState(self.isAutoFollowing)
+                    }
                 }
             }
 
@@ -694,6 +816,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 MainActor.assumeIsolated {
                     guard let self else { return }
                     self.isLiveScrolling = true
+                    self.profiler.gestureStart()
                     self.stopFollowGlide()
                     // The user grabbed the scroll — drop follow intent until they
                     // either land back at the bottom or jump to latest.
@@ -709,6 +832,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                 MainActor.assumeIsolated {
                     guard let self else { return }
                     self.isLiveScrolling = false
+                    self.profiler.gestureEnd()
                     // Start the grace window from gesture end so a streaming
                     // update arriving right after release can't snap the view.
                     self.lastUserScrollTime = CACurrentMediaTime()
@@ -823,7 +947,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                     // wobble. Measuring now and routing through the existing
                     // noteHeightsChanged keeps the follow/anchor behaviour intact;
                     // the later async report sees no height change and no-ops.
-                    let retileIDs = measureChangedCellsSynchronously(Set(changedIDs))
+                    let retileIDs = profiler.measureForced { measureChangedCellsSynchronously(Set(changedIDs)) }
                     if !retileIDs.isEmpty {
                         flushPendingHeightWorkSynchronously()
                         noteHeightsChanged(forIDs: retileIDs)
@@ -840,6 +964,158 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             lastAutoScrollTurnRevision = autoScrollTurnRevision
             lastBottomScrollRequest = bottomScrollRequest
             tableView.sizeLastColumnToFit()
+            maybeStartScrollBenchmark()
+        }
+
+        // MARK: - Scroll benchmark (multi-session)
+
+        /// Entry point, called at the end of every `apply()`. Arms the run the
+        /// first time a content-bearing transcript appears, and — once armed —
+        /// drives the per-session continuation after each programmatic advance.
+        private func maybeStartScrollBenchmark() {
+#if DEBUG
+            guard UserDefaults.standard.bool(forKey: "ScrollBenchEnabled") else { return }
+            guard let tableView else { return }
+
+            if !benchStarted {
+                guard tableView.numberOfRows > 5 else { return }   // wait for real content
+                benchStarted = true
+                benchActive = true
+                // Target the scoped session list (not just already-loaded ones —
+                // selecting a session lazy-loads its transcript). Empty drafts are
+                // skipped at runtime via the row-count guard below; `benchScopedCount`
+                // + the advance budget guarantee the sweep terminates after one lap.
+                benchScopedCount = benchSessionCount?() ?? 1
+                benchTargetSessions = min(benchMaxSessions, max(1, benchScopedCount))
+                benchAdvanceBudget = benchScopedCount + benchMaxSessions + 4
+                if let id = sessionID { benchSeenIDs.insert(id) }
+                TranscriptScrollProfiler.logger.info("SCROLLBENCH armed — sweeping up to \(self.benchTargetSessions) of \(self.benchScopedCount) session(s)")
+                scheduleSessionRoutine()
+                return
+            }
+
+            // Continuation: we just advanced and a new transcript settled in.
+            guard benchActive, benchPhase == .advancing else { return }
+            if let sessionID = self.sessionID { benchSeenIDs.insert(sessionID) }
+            if let sessionID = self.sessionID,
+               tableView.numberOfRows > 5,
+               !benchVisitedSessionIDs.contains(sessionID) {
+                scheduleSessionRoutine()
+            } else {
+                // Empty/draft or already-tested session — skip straight on.
+                advanceOrFinish()
+            }
+#endif
+        }
+
+        /// Let the freshly-shown transcript settle (initial auto-scroll + first
+        /// measures), then run its short+long routine.
+        private func scheduleSessionRoutine() {
+            benchPhase = .settling
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                self?.runSessionRoutine()
+            }
+        }
+
+        private func runSessionRoutine() {
+            guard benchActive, let sessionID = self.sessionID, let tableView else { return }
+            benchVisitedSessionIDs.insert(sessionID)
+            benchSessionsTested += 1
+            let label = "S\(benchSessionsTested)/\(benchTargetSessions):\(sessionID.uuidString.prefix(8))"
+            updateBenchFingerprint()
+            TranscriptScrollProfiler.logger.info("SCROLLBENCH \(label, privacy: .public) rows=\(tableView.numberOfRows)")
+
+            // Short burst: small local oscillation near current position.
+            benchPhase = .shortScroll
+            profiler.setBenchTag("\(label) short")
+            runScrollPass(duration: benchShortDuration, step: 22) { [weak self] in
+                guard let self, self.benchActive else { return }
+                // Then several full top↔bottom sweeps back-to-back.
+                self.benchPhase = .longScroll
+                self.runLongPasses(label: label, remaining: self.benchLongRepeats) { [weak self] in
+                    self?.profiler.setBenchTag(nil)
+                    self?.advanceOrFinish()
+                }
+            }
+        }
+
+        /// Run `remaining` full top↔bottom sweeps back-to-back, each its own
+        /// profiler gesture, then call `completion`.
+        private func runLongPasses(label: String, remaining: Int, completion: @escaping @MainActor () -> Void) {
+            guard benchActive, remaining > 0 else { completion(); return }
+            let idx = benchLongRepeats - remaining + 1
+            profiler.setBenchTag("\(label) long \(idx)/\(benchLongRepeats)")
+            runScrollPass(duration: benchLongDuration, step: 48) { [weak self] in
+                guard let self else { return }
+                self.runLongPasses(label: label, remaining: remaining - 1, completion: completion)
+            }
+        }
+
+        private func advanceOrFinish() {
+            benchAdvanceBudget -= 1
+            let sweptWholeList = benchSeenIDs.count >= benchScopedCount && benchScopedCount > 0
+            if benchSessionsTested >= benchTargetSessions || sweptWholeList || benchAdvanceBudget <= 0 {
+                benchActive = false
+                benchPhase = .idle
+                TranscriptScrollProfiler.logger.info("SCROLLBENCH COMPLETE — tested \(self.benchSessionsTested) session(s); see per-gesture summaries above")
+                return
+            }
+            benchPhase = .advancing
+            // Hand off to SwiftUI; the next session's transcript settles into
+            // `apply()`, where `maybeStartScrollBenchmark` resumes the machine.
+            onBenchAdvanceSession?()
+        }
+
+        /// Drive a programmatic scroll for `duration`, stepping `step` points per
+        /// frame at ~120Hz and bouncing at the ends, then call `completion`. The
+        /// whole pass is bracketed as one profiler gesture (its bounds changes are
+        /// non-programmatic here, so they tick the profiler exactly like a real
+        /// scroll, and a full SwiftUI cell layout is forced each frame).
+        private func runScrollPass(duration: CFTimeInterval, step: CGFloat, completion: @escaping @MainActor () -> Void) {
+            guard let scrollView, scrollView.documentView != nil else { completion(); return }
+            benchTimer?.invalidate()
+            benchStart = CACurrentMediaTime()
+            benchDir = -1
+            profiler.gestureStart()
+            let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let sv = self.scrollView, let dv = sv.documentView else { return }
+                    let now = CACurrentMediaTime()
+                    let clip = sv.contentView
+                    let maxY = max(0, dv.bounds.height - clip.bounds.height)
+                    var y = clip.bounds.origin.y + self.benchDir * step
+                    if y <= 0 { y = 0; self.benchDir = 1 }
+                    else if y >= maxY { y = maxY; self.benchDir = -1 }
+                    clip.scroll(to: NSPoint(x: 0, y: y))
+                    sv.reflectScrolledClipView(clip)
+                    // Live scroll re-lays-out visible cells each frame; emulate that
+                    // so the per-frame measure path is exercised, not just a reposition.
+                    self.tableView?.layoutSubtreeIfNeeded()
+                    if now - self.benchStart > duration {
+                        self.benchTimer?.invalidate()
+                        self.benchTimer = nil
+                        self.profiler.gestureEnd()
+                        completion()
+                    }
+                }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            benchTimer = timer
+        }
+
+        /// Feed the profiler a coarse content fingerprint for the current session
+        /// so each gesture summary records what was on screen (row count + how many
+        /// rows are tall markdown/code) — the "why is *this* chat slow" signal.
+        private func updateBenchFingerprint() {
+            let width = currentViewportWidth()
+            var tall = 0
+            var totalEst: CGFloat = 0
+            for item in items {
+                let h = item.estimatedHeight(width)
+                totalEst += h
+                if h > 200 { tall += 1 }
+            }
+            profiler.setContentFingerprint(rows: items.count, tallRows: tall, totalEstHeight: totalEst)
         }
 
         private func applySnapshot(ids: [String], completion: @escaping () -> Void) {
@@ -850,8 +1126,8 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         }
 
         func updateColumnWidthIfNeeded() {
-            guard let scrollView, let tableView else { return }
-            let width = max(200, scrollView.contentView.bounds.width)
+            guard let tableView else { return }
+            let width = currentViewportWidth()
             guard abs(width - contentWidth) > 0.5 else { return }
             contentWidth = width
             tableView.tableColumns.first?.width = width
@@ -952,15 +1228,35 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         }
 
         private func configure(_ cell: TranscriptTableCellView, with item: PiAgentAppKitTranscriptItem, row: Int) {
-            let width = max(contentWidth, tableView?.tableColumns.first?.width ?? 200)
+            let width = currentViewportWidth()
             // Each cell owns its own NSHostingView for its lifetime. Recycling
             // a cell for a new item just swaps the host's rootView — never
             // detaches the host. That's what keeps multiple visible cells from
             // ever contending for a single shared host (the bug fixed here).
-            cell.installRootView(item: item, width: width)
+            profiler.noteConfigure()
+            cell.installRootView(item: item, width: width, profiler: profiler)
             // No measurement here — the cell reports its real height via
             // `onMeasuredHeight` once it lays out. Until then `heightOfRow`
             // serves the char-count estimate (or a cached real height).
+        }
+
+        private func currentViewportWidth() -> CGFloat {
+            let viewportCandidates = [
+                scrollView?.bounds.width,
+                scrollView?.contentView.bounds.width,
+                tableView?.enclosingScrollView?.bounds.width,
+                tableView?.enclosingScrollView?.contentView.bounds.width
+            ].compactMap { $0 }.filter { $0.isFinite && $0 > 1 }
+            if let width = viewportCandidates.max() {
+                return max(200, width)
+            }
+
+            let tableCandidates = [
+                tableView?.visibleRect.width,
+                tableView?.bounds.width,
+                tableView?.tableColumns.first?.width
+            ].compactMap { $0 }.filter { $0.isFinite && $0 > 1 }
+            return max(200, tableCandidates.max() ?? contentWidth)
         }
 
         /// Called by a live cell once it has laid out, with the SwiftUI
@@ -1038,6 +1334,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             let willAutoFollow = wasFollowing && !isUserScrollingRecently
             let preserveAnchor = !willAutoFollow
             let anchor = preserveAnchor ? captureScrollAnchor() : nil
+            profiler.measureRetile(rows: rows.count) {
             NSAnimationContext.beginGrouping()
             NSAnimationContext.current.duration = 0
             // Suppress implicit Core Animation actions so a streaming row's
@@ -1063,6 +1360,7 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
             isProgrammaticScroll = wasProgrammatic
             CATransaction.commit()
             NSAnimationContext.endGrouping()
+            }
             if willAutoFollow {
                 scrollToBottom(settle: false)
             }
@@ -1314,11 +1612,22 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
 
     final class TranscriptTableCellView: NSTableCellView {
         static let reuseIdentifier = NSUserInterfaceItemIdentifier("PiAgentTranscriptTableCell")
-        fileprivate var hostingView: NSHostingView<AnyView>?
+        // Native render path (no SwiftUI / NSHostingView). `nativeRow` is the
+        // concrete view; `nativeRowTypeID`/`nativeRowSpec` track which kind it is
+        // so a recycled cell reuses a same-typed view and reads the row height
+        // through the spec's measure closure.
+        fileprivate var nativeRow: NSView?
+        private var nativeRowTypeID: ObjectIdentifier?
+        private var nativeRowSpec: NativeRowSpec?
+        private var nativeTopC: NSLayoutConstraint?
+        private var nativeBottomC: NSLayoutConstraint?
+        private var configuredTopInset: CGFloat = 0
+        private var configuredBottomInset: CGFloat = 0
         fileprivate var configuredItemID: String?
         private var configuredRevision: Int?
         fileprivate var configuredWidth: CGFloat = 0
         fileprivate var lastIntrinsicHeight: CGFloat = -1
+        fileprivate weak var profiler: TranscriptScrollProfiler?
 
         /// Wired by the coordinator at cell-vend time. Reports this row's true
         /// height — the hosted SwiftUI content's intrinsic size — whenever it
@@ -1334,94 +1643,137 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
 
         required init?(coder: NSCoder) { fatalError() }
 
-        /// Builds the SwiftUI root for an item at a width. Row spacing is baked
-        /// in as padding here — the card view itself stays byte-identical, and
-        /// `fittingSize` picks the inset up so `heightOfRow` stays consistent.
-        /// Shared by the live host cache and the offscreen measurement path.
-        static func makeRoot(item: PiAgentAppKitTranscriptItem, width: CGFloat) -> AnyView {
-            AnyView(
-                item.view
-                    .frame(width: width, alignment: .topLeading)
-                    .padding(.top, item.topInset)
-                    .padding(.bottom, item.bottomInset)
-                    .environment(\.transcriptContentWidth, width)
-            )
+        /// Configure the cell for an item. Every row is native; the spec's view is
+        /// built/reused and pinned to the cell with the row insets.
+        func installRootView(item: PiAgentAppKitTranscriptItem, width: CGFloat, profiler: TranscriptScrollProfiler? = nil) {
+            self.profiler = profiler
+            guard case .native(let spec) = item.kind else { return }
+            installNativeRow(spec: spec, item: item, width: width)
         }
 
-        private func pinToEdges(_ host: NSHostingView<AnyView>) {
-            host.translatesAutoresizingMaskIntoConstraints = false
-            host.setContentHuggingPriority(.defaultLow, for: .horizontal)
-            host.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            addSubview(host)
-            NSLayoutConstraint.activate([
-                host.leadingAnchor.constraint(equalTo: leadingAnchor),
-                host.trailingAnchor.constraint(equalTo: trailingAnchor),
-                host.topAnchor.constraint(equalTo: topAnchor),
-                host.bottomAnchor.constraint(equalTo: bottomAnchor)
-            ])
+        /// Tear down the native row view (when a recycled cell switches to a
+        /// different native view type).
+        private func teardownNativeRow() {
+            guard let row = nativeRow else { return }
+            nativeRowSpec?.reset(row)
+            row.removeFromSuperview()
+            nativeRow = nil
+            nativeRowTypeID = nil
+            nativeRowSpec = nil
+            nativeTopC = nil
+            nativeBottomC = nil
+            lastIntrinsicHeight = -1
         }
 
-        /// Per-cell host ownership. Each cell creates an NSHostingView the
-        /// first time it's configured and keeps that same host for its entire
-        /// lifetime; recycling for a new item just swaps the host's rootView.
-        /// No host is ever shared across cells, so two visible cells can't
-        /// contend for it (the previous shared-host LRU left a stolen-from
-        /// cell visibly empty — the transparent-block bug).
-        func installRootView(item: PiAgentAppKitTranscriptItem, width: CGFloat) {
-            let newRoot = TranscriptTableCellView.makeRoot(item: item, width: width)
-            if let host = hostingView {
-                let revisionChanged = configuredItemID != item.id || configuredRevision != item.contentRevision
-                let widthChanged = abs(configuredWidth - width) > 0.5
-                if revisionChanged || widthChanged {
-                    host.rootView = newRoot
-                    lastIntrinsicHeight = -1
-                    if revisionChanged {
-                        host.invalidateIntrinsicContentSize()
-                    }
-                }
+        /// Native render path: build/configure the spec's view pinned to the cell
+        /// with the row insets, rebuilding if the recycled cell held a different
+        /// view type.
+        private func installNativeRow(spec: NativeRowSpec, item: PiAgentAppKitTranscriptItem, width: CGFloat) {
+            // A recycled cell holding a different native view type must rebuild it.
+            if let existingType = nativeRowTypeID, existingType != spec.typeID {
+                teardownNativeRow()
+            }
+            let row: NSView
+            if let existing = nativeRow {
+                row = existing
             } else {
-                let host = NSHostingView(rootView: newRoot)
-                pinToEdges(host)
-                hostingView = host
+                row = spec.make()
+                row.translatesAutoresizingMaskIntoConstraints = false
+                addSubview(row)
+                // Full-width row; the view sizes/positions its own content.
+                let top = row.topAnchor.constraint(equalTo: topAnchor, constant: item.topInset)
+                let bottom = row.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -item.bottomInset)
+                NSLayoutConstraint.activate([
+                    row.leadingAnchor.constraint(equalTo: leadingAnchor),
+                    row.trailingAnchor.constraint(equalTo: trailingAnchor),
+                    top, bottom
+                ])
+                nativeTopC = top
+                nativeBottomC = bottom
+                nativeRow = row
+                nativeRowTypeID = spec.typeID
                 lastIntrinsicHeight = -1
+            }
+            nativeRowSpec = spec
+            // Let an interactive native row (e.g. expanding a list) ask the cell to
+            // re-measure and the table to re-tile when its content height changes.
+            spec.setHeightCallback(row) { [weak self] in
+                guard let self, let itemID = self.configuredItemID, self.configuredWidth > 1 else { return }
+                let h = self.forcedIntrinsicHeight()
+                if h > 0 { self.onMeasuredHeight?(itemID, h) }
+            }
+            let insetChanged = configuredTopInset != item.topInset || configuredBottomInset != item.bottomInset
+            if insetChanged {
+                nativeTopC?.constant = item.topInset
+                nativeBottomC?.constant = -item.bottomInset
+            }
+
+            let revisionChanged = configuredItemID != item.id || configuredRevision != item.contentRevision
+            let widthChanged = abs(configuredWidth - width) > 0.5
+            if revisionChanged || widthChanged {
+                spec.configure(row, width)
+                lastIntrinsicHeight = -1
+            }
+            if revisionChanged || widthChanged || insetChanged {
+                spec.settle(row)
             }
             configuredItemID = item.id
             configuredRevision = item.contentRevision
             configuredWidth = width
+            configuredTopInset = item.topInset
+            configuredBottomInset = item.bottomInset
         }
 
-        /// AppKit's per-pass layout hook — also where the row reports its
-        /// height. The cell already laid out to display, so reading the hosted
-        /// content's intrinsic size costs nothing extra; whenever it drifts we
-        /// hand the coordinator the new height and it re-tiles the row. This is
-        /// the only measurement path — there is no separate offscreen render.
+        private var pendingLayoutHeightReport = false
+
+        /// AppKit's per-pass layout hook, and where the row reports height drift.
         override func layout() {
-            super.layout()
-            guard let itemID = configuredItemID,
-                  let hostingView,
-                  configuredWidth > 1 else { return }
-            let intrinsic = hostingView.intrinsicContentSize.height
-            guard intrinsic > 0, intrinsic.isFinite,
-                  abs(intrinsic - lastIntrinsicHeight) > 0.5 else { return }
-            lastIntrinsicHeight = intrinsic
-            onMeasuredHeight?(itemID, intrinsic)
+            if let profiler {
+                profiler.measureCellLayout { super.layout() }
+            } else {
+                super.layout()
+            }
+            guard nativeRow != nil, nativeRowSpec != nil, configuredItemID != nil, configuredWidth > 1 else { return }
+            // Reporting height means MEASURING the row, which forces its subtree to
+            // lay out. AppKit recurses into that subtree only AFTER this `layout()`
+            // returns, so forcing it here is illegal re-entrancy — it logs
+            // `_NSDetectedLayoutRecursion` (captured: cell.layout → spec.measure →
+            // NativeMarkdownTextContainer.measureHeight → stackView.layoutSubtreeIfNeeded
+            // inside `_layoutSubtreeWithOldSize`). Hop out of the pass and measure
+            // once it has completed; coalesced so streaming's many passes don't
+            // stack up. Until it lands, `heightOfRow` keeps the row's estimate, and
+            // freshly-streamed rows already report synchronously via
+            // `forcedIntrinsicHeight()` — this path only catches later drift.
+            scheduleLayoutHeightReport()
         }
 
-        /// Force the hosted SwiftUI content to lay out *now* and return its
-        /// intrinsic height, instead of waiting for AppKit's async `layout()`
-        /// pass to report it. Used right after installing new streaming content
-        /// so the coordinator can re-tile the row in the same pass — closing the
-        /// window where the row is still tiled at the old (shorter) height while
-        /// the host, pinned to the cell, squishes the new taller content into it.
-        /// Records `lastIntrinsicHeight` so the subsequent async `layout()` sees
-        /// no change and doesn't redundantly re-report.
+        private func scheduleLayoutHeightReport() {
+            guard !pendingLayoutHeightReport else { return }
+            pendingLayoutHeightReport = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.pendingLayoutHeightReport = false
+                guard let row = self.nativeRow, let spec = self.nativeRowSpec,
+                      let itemID = self.configuredItemID, self.configuredWidth > 1 else { return }
+                let h = self.configuredTopInset + spec.measure(row, self.configuredWidth) + self.configuredBottomInset
+                guard h > 0, h.isFinite, abs(h - self.lastIntrinsicHeight) > 0.5 else { return }
+                self.lastIntrinsicHeight = h
+                self.onMeasuredHeight?(itemID, h)
+            }
+        }
+
+        /// Force the native row to lay out *now* and return its height, instead of
+        /// waiting for AppKit's async `layout()` pass to report it. Used right after
+        /// installing new streaming content so the coordinator can re-tile the row
+        /// in the same pass. Records `lastIntrinsicHeight` so the subsequent async
+        /// `layout()` sees no change and doesn't redundantly re-report.
         func forcedIntrinsicHeight() -> CGFloat {
-            guard let hostingView, configuredWidth > 1 else { return -1 }
-            hostingView.layoutSubtreeIfNeeded()
-            let intrinsic = hostingView.intrinsicContentSize.height
-            guard intrinsic > 0, intrinsic.isFinite else { return -1 }
-            lastIntrinsicHeight = intrinsic
-            return intrinsic
+            guard let row = nativeRow, let spec = nativeRowSpec, configuredWidth > 1 else { return -1 }
+            row.layoutSubtreeIfNeeded()
+            let h = configuredTopInset + spec.measure(row, configuredWidth) + configuredBottomInset
+            guard h > 0, h.isFinite else { return -1 }
+            lastIntrinsicHeight = h
+            return h
         }
     }
 }
@@ -1437,6 +1789,126 @@ private extension PiAgentTranscriptThread {
             + statuses
             + errors
         return candidates.map(\.timestamp).min() ?? .distantPast
+    }
+}
+
+/// The session list, isolated as an `Equatable` view so it can be wrapped in
+/// `.equatable()`. It lives next to the transcript inside `PiAgentScreen.body`,
+/// which re-runs at the streaming cadence (the transcript render cache is an
+/// ObservableObject, so any of its published changes invalidates the whole body).
+/// A SwiftUI `List` re-measures every row whenever its enclosing view updates —
+/// even when the rows themselves are unchanged — so those pulses were re-laying
+/// out the entire list ~30×/sec (the dominant `sizeThatFits` cost in the scroll
+/// profiles). Comparing the value inputs lets SwiftUI skip the list entirely on a
+/// pulse and rebuild it only when something it actually shows changed.
+///
+/// All per-row dynamic state (selection, running, renaming, title-generating, git
+/// activity, project) is passed in as resolved values and compared in `==`, so the
+/// list can never go stale: a real change to any of them differs the inputs and
+/// forces a rebuild. Bindings and callbacks are intentionally excluded from `==`.
+private struct SessionListContent: View, Equatable {
+    let visibleSessions: [PiAgentSessionRecord]
+    let selectedSessionIDs: Set<UUID>
+    let renamingSessionID: UUID?
+    let workingSessionIDs: Set<UUID>
+    let generatingTitleIDs: Set<UUID>
+    let activityByID: [UUID: PiAgentSessionGitActivity]
+    let projectsByID: [UUID: DiscoveredProject?]
+
+    @Binding var selection: Set<UUID>
+    let onSelect: (PiAgentSessionRecord) -> Void
+    let onBeginRename: (PiAgentSessionRecord) -> Void
+    let onEndRename: () -> Void
+    let onRename: (UUID, String) -> Void
+    let onTogglePinned: (UUID) -> Void
+    let onDelete: (UUID) -> Void
+
+    static func == (lhs: SessionListContent, rhs: SessionListContent) -> Bool {
+        let diff: String?
+        if lhs.visibleSessions != rhs.visibleSessions { diff = "visibleSessions" }
+        else if lhs.selectedSessionIDs != rhs.selectedSessionIDs { diff = "selectedSessionIDs" }
+        else if lhs.renamingSessionID != rhs.renamingSessionID { diff = "renamingSessionID" }
+        else if lhs.workingSessionIDs != rhs.workingSessionIDs { diff = "workingSessionIDs" }
+        else if lhs.generatingTitleIDs != rhs.generatingTitleIDs { diff = "generatingTitleIDs" }
+        else if lhs.activityByID != rhs.activityByID { diff = "activityByID" }
+        else if !Self.projectsVisuallyEqual(lhs.projectsByID, rhs.projectsByID) { diff = "projectsByID" }
+        else { diff = nil }
+#if DEBUG
+        if let diff {
+            SessionListContent.perfLog.error("SessionListContent re-eval — input changed: \(diff, privacy: .public)")
+        }
+#endif
+        return diff == nil
+    }
+
+    /// Compare the project map by ONLY what a row's icon actually shows — the
+    /// project identity (path) and its icon file — not the whole DiscoveredProject.
+    /// `viewModel.projectByPath` is reassigned wholesale on every project
+    /// re-discovery, which fires constantly while an agent writes files; the
+    /// re-derived projects differ in volatile fields (e.g. gitHubRemote resolving)
+    /// that the session row never displays. Comparing the full value made the list
+    /// re-evaluate ~30Hz (the dominant scroll-profile cost); this keeps it stable
+    /// while still reacting to a project being added/removed or its icon changing.
+    private static func projectsVisuallyEqual(_ lhs: [UUID: DiscoveredProject?], _ rhs: [UUID: DiscoveredProject?]) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        for (id, lProject) in lhs {
+            guard let rProject = rhs[id] else { return false }
+            if lProject?.id != rProject?.id || lProject?.iconFileURL != rProject?.iconFileURL {
+                return false
+            }
+        }
+        return true
+    }
+
+#if DEBUG
+    private static let perfLog = Logger(subsystem: "streetcoding.agent-deck", category: "SessionListPerf")
+#endif
+
+    var body: some View {
+        AppList(
+            sections: [AppListSection(id: "sessions", title: nil, items: visibleSessions)],
+            selection: .multi($selection),
+            cornerRadius: AppTheme.Chat.subCardCornerRadius,
+            rowHorizontalPadding: 0,
+            rowVerticalPadding: 0,
+            listHorizontalInset: 6
+        ) { session in
+            row(session)
+        }
+        .animation(.snappy(duration: 0.24), value: visibleSessions.map(\.id))
+        .bottomEdgeFade(height: 34)
+    }
+
+    @ViewBuilder
+    private func row(_ session: PiAgentSessionRecord) -> some View {
+        PiAgentSessionRow(
+            session: session,
+            project: projectsByID[session.id] ?? nil,
+            isSelected: selectedSessionIDs.contains(session.id),
+            isRunning: workingSessionIDs.contains(session.id),
+            isRenaming: renamingSessionID == session.id,
+            isGeneratingTitle: generatingTitleIDs.contains(session.id),
+            gitActivity: activityByID[session.id] ?? .none,
+            onSelect: { onSelect(session) },
+            onBeginRename: { onBeginRename(session) },
+            onEndRename: onEndRename,
+            onRename: { onRename(session.id, $0) },
+            onTogglePinned: { onTogglePinned(session.id) },
+            onDelete: { onDelete(session.id) }
+        )
+        .equatable()
+        .contextMenu {
+            Button {
+                onTogglePinned(session.id)
+            } label: {
+                Label(session.isPinned ? "Unpin Session" : "Pin Session", systemImage: session.isPinned ? "pin.slash" : "pin")
+            }
+            Button(role: .destructive) {
+                onDelete(session.id)
+            } label: {
+                Label(selectedSessionIDs.contains(session.id) && selectedSessionIDs.count > 1 ? "Delete Selected Sessions" : "Delete Session", systemImage: "trash")
+            }
+        }
     }
 }
 
@@ -1481,7 +1953,16 @@ struct PiAgentScreen: View {
     @State private var composerHistoryDraft = ""
     @State private var selectedSubagentTranscriptRunID: UUID?
     @State private var selectedSubagentGraphRunID: UUID?
-    @StateObject private var transcriptCache = PiAgentTranscriptRenderCache()
+    // Owned but NOT observed: `@State` (not `@StateObject`) holds the cache for the
+    // view's lifetime without subscribing `PiAgentScreen.body` to its
+    // `objectWillChange`. The cache pulses `streamingRevision` ~30Hz while a session
+    // streams; subscribing the whole screen re-evaluated the session list + composer
+    // on every pulse (the SessionListContent re-eval storm). Only the extracted
+    // `PiAgentTranscriptHost` child takes the cache as `@ObservedObject`, so the
+    // pulse now re-renders the transcript table alone. The cache is driven entirely
+    // by `store.*`-keyed `.task`/`.onChange` triggers, which the parent still
+    // observes — so dropping the subscription doesn't miss any update.
+    @State private var transcriptCache = PiAgentTranscriptRenderCache()
     @State private var transcriptBottomScrollRequest = 0
     @State private var transcriptIsPinnedToBottom = true
     @State private var showArchivedPreCompactionTranscript = false
@@ -1741,7 +2222,7 @@ struct PiAgentScreen: View {
                             requestDeleteSessions(selectedSessionIDs)
                         } label: {
                             Image(systemName: "trash.fill")
-                                .font(.system(size: 14, weight: .semibold))
+                                .font(AppTheme.Font.body.weight(.semibold))
                                 .foregroundStyle(Color.red)
                                 .contentTransition(.symbolEffect(.replace))
                                 .frame(width: 30, height: 30)
@@ -1785,18 +2266,35 @@ struct PiAgentScreen: View {
                     if visibleSessions.isEmpty {
                         AppEmptyState("No sessions found", systemImage: "magnifyingglass", description: "Try another search.", layout: .fill)
                     } else {
-                        AppList(
-                            sections: [AppListSection(id: "sessions", title: nil, items: visibleSessions)],
-                            selection: .multi($selectedSessionIDs),
-                            cornerRadius: 10,
-                            rowHorizontalPadding: 0,
-                            rowVerticalPadding: 0,
-                            listHorizontalInset: 6
-                        ) { session in
-                            sessionListRow(session)
-                        }
-                        .animation(.snappy(duration: 0.24), value: visibleSessionIDs)
-                        .bottomEdgeFade(height: 34)
+                        SessionListContent(
+                            visibleSessions: visibleSessions,
+                            selectedSessionIDs: selectedSessionIDs,
+                            renamingSessionID: renamingSessionID,
+                            workingSessionIDs: workingVisibleSessionIDs,
+                            generatingTitleIDs: viewModel.piAgentTitleGeneratingSessionIDs,
+                            activityByID: visibleSessionActivityByID,
+                            projectsByID: visibleSessionProjectsByID,
+                            selection: $selectedSessionIDs,
+                            onSelect: { session in
+                                renamingSessionID = nil
+                                selectSessionFromList(session)
+                            },
+                            onBeginRename: { session in
+                                selectSessionFromList(session, forceSingle: true)
+                                renamingSessionID = session.id
+                            },
+                            onEndRename: { renamingSessionID = nil },
+                            onRename: { viewModel.renamePiAgentSession($0, title: $1) },
+                            onTogglePinned: { viewModel.togglePiAgentSessionPinned($0) },
+                            onDelete: { id in
+                                requestDeleteSessions(
+                                    selectedSessionIDs.contains(id) && selectedSessionIDs.count > 1
+                                        ? selectedSessionIDs
+                                        : [id]
+                                )
+                            }
+                        )
+                        .equatable()
                     }
                 }
             }
@@ -1804,49 +2302,28 @@ struct PiAgentScreen: View {
         .background(Color.clear)
     }
 
-    @ViewBuilder
-    private func sessionListRow(_ session: PiAgentSessionRecord) -> some View {
-        let isWorking = viewModel.piAgentSessionIsWorking(session)
+    // Per-row dynamic state resolved up front so the session list can be an
+    // Equatable view (see SessionListContent): comparing these resolved values is
+    // what lets a streaming-cadence body re-eval skip the list unless a row's
+    // contents actually changed. Each iterates only the (cached) visible sessions.
+    private var workingVisibleSessionIDs: Set<UUID> {
+        Set(visibleSessions.filter { viewModel.piAgentSessionIsWorking($0) }.map(\.id))
+    }
 
-        PiAgentSessionRow(
-            session: session,
-            project: viewModel.projectByPath[session.projectPath],
-            isSelected: selectedSessionIDs.contains(session.id),
-            isRunning: isWorking,
-            isRenaming: renamingSessionID == session.id,
-            isGeneratingTitle: viewModel.piAgentTitleGeneratingSessionIDs.contains(session.id),
-            gitActivity: sessionActivityCache[session.id] ?? .none,
-            onSelect: {
-                renamingSessionID = nil
-                selectSessionFromList(session)
-            },
-            onBeginRename: {
-                selectSessionFromList(session, forceSingle: true)
-                renamingSessionID = session.id
-            },
-            onEndRename: { renamingSessionID = nil },
-            onRename: { viewModel.renamePiAgentSession(session.id, title: $0) },
-            onTogglePinned: { viewModel.togglePiAgentSessionPinned(session.id) },
-            onDelete: {
-                requestDeleteSessions(
-                    selectedSessionIDs.contains(session.id) && selectedSessionIDs.count > 1
-                        ? selectedSessionIDs
-                        : [session.id]
-                )
-            }
-        )
-        .contextMenu {
-            Button {
-                viewModel.togglePiAgentSessionPinned(session.id)
-            } label: {
-                Label(session.isPinned ? "Unpin Session" : "Pin Session", systemImage: session.isPinned ? "pin.slash" : "pin")
-            }
-            Button(role: .destructive) {
-                requestDeleteSessions(selectedSessionIDs.contains(session.id) && selectedSessionIDs.count > 1 ? selectedSessionIDs : [session.id])
-            } label: {
-                Label(selectedSessionIDs.contains(session.id) && selectedSessionIDs.count > 1 ? "Delete Selected Sessions" : "Delete Session", systemImage: "trash")
-            }
+    private var visibleSessionActivityByID: [UUID: PiAgentSessionGitActivity] {
+        var map: [UUID: PiAgentSessionGitActivity] = [:]
+        for session in visibleSessions where sessionActivityCache[session.id] != nil {
+            map[session.id] = sessionActivityCache[session.id]
         }
+        return map
+    }
+
+    private var visibleSessionProjectsByID: [UUID: DiscoveredProject?] {
+        var map: [UUID: DiscoveredProject?] = [:]
+        for session in visibleSessions {
+            map[session.id] = viewModel.projectByPath[session.projectPath]
+        }
+        return map
     }
 
     private var activeSessionColumn: some View {
@@ -1909,9 +2386,9 @@ struct PiAgentScreen: View {
                     if session.isAgentBound, let agentName = session.agentName, !agentName.isEmpty {
                         HStack(spacing: 4) {
                             Image(systemName: "sparkles.rectangle.stack")
-                                .font(.caption2.weight(.semibold))
+                                .font(AppTheme.Font.caption2.weight(.semibold))
                             Text("Chat with \(agentName)")
-                                .font(.footnote.weight(.semibold))
+                                .font(AppTheme.Font.footnote.weight(.semibold))
                         }
                         .foregroundStyle(AppTheme.brandAccent)
                         .padding(.horizontal, 6)
@@ -1920,7 +2397,7 @@ struct PiAgentScreen: View {
                     }
                     AppLabelTag(text: effectiveStatus(for: session), color: effectiveStatusColor(for: session))
                     Text(session.updatedAt.formatted(date: .abbreviated, time: .shortened))
-                        .font(.footnote)
+                        .font(AppTheme.Font.footnote)
                         .foregroundStyle(AppTheme.mutedText)
                     Spacer(minLength: 0)
                 }
@@ -1934,7 +2411,7 @@ struct PiAgentScreen: View {
 
                 if let error = session.lastError {
                     Text(error)
-                        .font(.footnote)
+                        .font(AppTheme.Font.footnote)
                         .foregroundStyle(.red)
                 }
             }
@@ -1947,25 +2424,36 @@ struct PiAgentScreen: View {
     }
 
     private var transcript: some View {
-        PiAgentAppKitTranscriptView(
-            items: appKitTranscriptItems,
+        // `PiAgentTranscriptHost` is the ONLY view that observes `transcriptCache`,
+        // so the ~30Hz streaming pulse re-renders the transcript table alone and no
+        // longer invalidates this screen's session list / composer. `makeItems` is
+        // re-run inside the host on each pulse; it reads the live cache + parent
+        // references (store/viewModel), so the items stay correct even though the
+        // parent struct it captured isn't re-evaluated between pulses.
+        PiAgentTranscriptHost(
+            cache: transcriptCache,
             sessionID: store.selectedSession?.id,
-            renderRevision: transcriptCache.renderRevision,
-            streamingRevision: transcriptCache.streamingRevision,
-            autoScrollTurnRevision: transcriptCache.autoScrollTurnRevision,
             bottomScrollRequest: transcriptBottomScrollRequest,
+            makeItems: { appKitTranscriptItems },
             onPinnedToBottomChange: { isPinnedToBottom in
                 transcriptIsPinnedToBottom = isPinnedToBottom
-            }
+            },
+            onBenchAdvanceSession: { viewModel.selectNextPiAgentSession() },
+            benchSessionCount: { viewModel.scopedPiAgentSessionsInOrder().count }
         )
         .onChange(of: selectedSessionProcessingMessage) { _, message in
             updateStabilizedProcessingMessage(message)
             guard message != nil, transcriptIsPinnedToBottom else { return }
             requestTranscriptBottomScroll()
         }
+        .perfScene("PiAgentTranscript")
     }
 
     private var appKitTranscriptItems: [PiAgentAppKitTranscriptItem] {
+        TranscriptScrollProfiler.measureBody("itemsBuild") { appKitTranscriptItemsBuild }
+    }
+
+    private var appKitTranscriptItemsBuild: [PiAgentAppKitTranscriptItem] {
         let timelineSnapshot = transcriptTimelineSnapshot
         let timelineItems = timelineSnapshot.mainVisibleItems
         let chromeRevision = appKitTranscriptChromeRevision(snapshot: timelineSnapshot)
@@ -1975,7 +2463,6 @@ struct PiAgentScreen: View {
         let commandSlashNames = Set((store.selectedSession?.commandInvocations ?? []).map { name in
             name.hasPrefix("/") ? String(name.dropFirst()) : name
         })
-        let projectPath = store.selectedSession.map { $0.worktreePath ?? $0.projectPath }
         let subagentRuns = nativeSubagentRunsByID
 
         var descriptors: [PiAgentTranscriptBlockDescriptor] = []
@@ -1985,7 +2472,8 @@ struct PiAgentScreen: View {
             if visibility.showShortcutsStrip {
                 descriptors.append(PiAgentTranscriptBlockDescriptor(
                     id: "shortcuts-strip-\(session.id.uuidString)",
-                    view: AnyView(PiAgentShortcutsStrip()),
+                    view: nil,
+                    kind: .native(.of(PiAgentNativeShortcutsStripView.self) { view, width in view.configure(width: width) }),
                     baseRevision: 0,
                     estimatedContentHeight: { _ in 40 },
                     threadID: nil,
@@ -2003,38 +2491,36 @@ struct PiAgentScreen: View {
                 hasher.combine(parentTitle)
                 hasher.combine(parentID)
                 hasher.combine(snapshot)
+                let forkPayload = NativeForkOriginPayload.make(
+                    parentTitle: parentTitle, parentSessionID: parentID,
+                    transcriptSnapshot: snapshot, onSelectParent: onSelect)
                 descriptors.append(PiAgentTranscriptBlockDescriptor(
                     id: "fork-origin-\(session.id.uuidString)",
-                    view: AnyView(PiAgentForkOriginCard(
-                        parentTitle: parentTitle,
-                        parentSessionID: parentID,
-                        transcriptSnapshot: snapshot,
-                        onSelectParent: onSelect
-                    )),
+                    view: nil,
+                    kind: .native(.of(PiAgentNativeForkOriginCardView.self) { view, width in
+                        view.configure(payload: forkPayload, width: width)
+                    }),
                     baseRevision: hasher.finalize(),
                     estimatedContentHeight: { _ in 70 },
                     threadID: nil,
                     isThreadQuestion: false
                 ))
             }
-            if let finalSystemPrompt = session.finalSystemPrompt {
-                descriptors.append(PiAgentTranscriptBlockDescriptor(
-                    id: "system-prompt-\(session.id.uuidString)",
-                    view: AnyView(PiAgentSystemPromptAuditCard(title: "Final System Prompt", subtitle: "", prompt: finalSystemPrompt)),
-                    baseRevision: finalSystemPrompt.hashValue,
-                    estimatedContentHeight: { _ in 80 },
-                    threadID: nil,
-                    isThreadQuestion: false
-                ))
-            }
+            // The final system prompt is no longer a transcript card — it's a
+            // toolbar button (next to Plan / Session Resources / Transcript Display)
+            // that opens the same text popover. See `piAgentPrimaryToolbarContent`.
             for request in store.supervisorRequests(for: session.id).filter({ $0.status == .pending }) {
+                let supervisorPayload = NativeSupervisorPayload.make(
+                    request: request,
+                    onRespond: { response in viewModel.respondToSubagentSupervisorRequest(request.id, parentSessionID: session.id, response: response) },
+                    onCancel: { viewModel.cancelSubagentSupervisorRequest(request.id, parentSessionID: session.id) }
+                )
                 descriptors.append(PiAgentTranscriptBlockDescriptor(
                     id: "supervisor-request-\(request.id)",
-                    view: AnyView(PiSubagentSupervisorRequestCard(
-                        request: request,
-                        onRespond: { response in viewModel.respondToSubagentSupervisorRequest(request.id, parentSessionID: session.id, response: response) },
-                        onCancel: { viewModel.cancelSubagentSupervisorRequest(request.id, parentSessionID: session.id) }
-                    )),
+                    view: nil,
+                    kind: .native(.of(PiAgentNativeSupervisorCardView.self) { view, width in
+                        view.configure(payload: supervisorPayload, width: width)
+                    }),
                     baseRevision: request.hashValue,
                     estimatedContentHeight: { _ in 180 },
                     threadID: nil,
@@ -2047,9 +2533,17 @@ struct PiAgentScreen: View {
             var hasher = Hasher()
             hasher.combine(archive.hiddenCount)
             hasher.combine(archive.compactedAt)
+            let isShowing = showArchivedPreCompactionTranscript
+            let archivePayload = NativeArchiveNoticePayload.preCompaction(
+                hiddenCount: archive.hiddenCount, compactedAt: archive.compactedAt,
+                isShowing: isShowing, onToggle: { showArchivedPreCompactionTranscript.toggle() })
+            hasher.combine(isShowing)
             descriptors.append(PiAgentTranscriptBlockDescriptor(
                 id: "pre-compaction-archive",
-                view: AnyView(preCompactionArchiveCard(archive)),
+                view: nil,
+                kind: .native(.of(PiAgentNativeArchiveNoticeView.self) { view, width in
+                    view.configure(payload: archivePayload, width: width)
+                }),
                 baseRevision: hasher.finalize(),
                 estimatedContentHeight: { _ in 60 },
                 threadID: nil,
@@ -2060,9 +2554,15 @@ struct PiAgentScreen: View {
             var hasher = Hasher()
             hasher.combine(archive.hiddenCount)
             hasher.combine(archive.limit)
+            let recentPayload = NativeArchiveNoticePayload.recentWindow(
+                hiddenCount: archive.hiddenCount, limit: archive.limit,
+                onOpen: { isEarlierTranscriptSheetPresented = true })
             descriptors.append(PiAgentTranscriptBlockDescriptor(
                 id: "recent-window-archive",
-                view: AnyView(recentWindowArchiveCard(archive)),
+                view: nil,
+                kind: .native(.of(PiAgentNativeArchiveNoticeView.self) { view, width in
+                    view.configure(payload: recentPayload, width: width)
+                }),
                 baseRevision: hasher.finalize(),
                 estimatedContentHeight: { _ in 60 },
                 threadID: nil,
@@ -2074,7 +2574,10 @@ struct PiAgentScreen: View {
         if store.isSelectedTranscriptLoading && timelineItems.isEmpty {
             descriptors.append(PiAgentTranscriptBlockDescriptor(
                 id: "pi-agent-transcript-state-card",
-                view: AnyView(loadingTranscriptCard),
+                view: nil,
+                kind: .native(.of(PiAgentNativeStateCardView.self) { view, width in
+                    view.configure(payload: .loading(), width: width)
+                }),
                 baseRevision: chromeRevision,
                 estimatedContentHeight: { _ in 80 },
                 threadID: nil,
@@ -2083,7 +2586,10 @@ struct PiAgentScreen: View {
         } else if timelineItems.isEmpty && descriptors.isEmpty {
             descriptors.append(PiAgentTranscriptBlockDescriptor(
                 id: "pi-agent-transcript-state-card",
-                view: AnyView(emptyTranscriptCard),
+                view: nil,
+                kind: .native(.of(PiAgentNativeStateCardView.self) { view, width in
+                    view.configure(payload: .empty(), width: width)
+                }),
                 baseRevision: chromeRevision,
                 estimatedContentHeight: { _ in 120 },
                 threadID: nil,
@@ -2095,14 +2601,18 @@ struct PiAgentScreen: View {
                 case let .thread(thread):
                     if let question = thread.question {
                         let blockID = "q-\(item.id)"
+                        // Native fast path for plain-text questions (no attachment
+                        // Chip-bearing questions use the dedicated chip-aware card;
+                        // plain questions use the lighter bubble.
+                        let hasChips = PiAgentUserMessageContent.displayChipsNaturalWidth(
+                            for: question, skills: skills, commandSlashNames: commandSlashNames) > 0
+                        let questionKind = hasChips
+                            ? nativeChipQuestionKind(question, skills: skills, commandSlashNames: commandSlashNames)
+                            : nativeQuestionKind(question, skills: skills, commandSlashNames: commandSlashNames)
                         descriptors.append(PiAgentTranscriptBlockDescriptor(
                             id: blockID,
-                            view: AnyView(threadBlockCard(
-                                thread: thread, visibility: visibility, skills: skills,
-                                commandSlashNames: commandSlashNames,
-                                projectPath: projectPath, subagentRuns: subagentRuns,
-                                renderMode: .question, blockID: blockID
-                            )),
+                            view: nil,
+                            kind: questionKind,
                             baseRevision: appKitQuestionBlockRevision(question, contextRevision: contextRevision),
                             estimatedContentHeight: { Self.estimatedQuestionHeight(question, width: $0) },
                             threadID: item.id,
@@ -2112,14 +2622,15 @@ struct PiAgentScreen: View {
                     for child in PiAgentTranscriptThreadCard.visibleChildren(
                         of: thread, visibility: visibility, nativeSubagentRunsByID: subagentRuns
                     ) {
+                        // Native rendering for the supported child types; the
+                        // rest (tool groups, subagent/memory cards) still hosted.
+                        let nativeKind = nativeChildKind(
+                            for: child, visibility: visibility, skills: skills,
+                            commandSlashNames: commandSlashNames, subagentRuns: subagentRuns)
                         descriptors.append(PiAgentTranscriptBlockDescriptor(
                             id: child.id,
-                            view: AnyView(threadBlockCard(
-                                thread: thread, visibility: visibility, skills: skills,
-                                commandSlashNames: commandSlashNames,
-                                projectPath: projectPath, subagentRuns: subagentRuns,
-                                renderMode: .child(child), blockID: child.id
-                            )),
+                            view: nil,
+                            kind: nativeKind ?? Self.nativeEmptyKind,
                             baseRevision: appKitChildBlockRevision(child, contextRevision: contextRevision),
                             estimatedContentHeight: { Self.estimatedChildHeight(child, width: $0) },
                             threadID: item.id,
@@ -2127,9 +2638,13 @@ struct PiAgentScreen: View {
                         ))
                     }
                 case let .plan(event):
+                    let planPayload = NativePlanCardPayload.make(event: event)
                     descriptors.append(PiAgentTranscriptBlockDescriptor(
                         id: item.id,
-                        view: AnyView(PiAgentCurrentPlanCard(event: event).id(item.id)),
+                        view: nil,
+                        kind: .native(.of(PiAgentNativePlanCardView.self) { view, width in
+                            view.configure(payload: planPayload, width: width)
+                        }),
                         baseRevision: appKitTranscriptContentRevision(for: item, snapshot: timelineSnapshot, contextRevision: contextRevision),
                         estimatedContentHeight: { _ in 120 },
                         threadID: nil,
@@ -2142,7 +2657,8 @@ struct PiAgentScreen: View {
         // Bottom anchor — a 1pt row scrollToBottom can always land on.
         descriptors.append(PiAgentTranscriptBlockDescriptor(
             id: "pi-agent-bottom-anchor",
-            view: AnyView(Color.clear.frame(height: 1)),
+            view: nil,
+            kind: .native(.of(PiAgentNativeSpacerView.self) { _, _ in }),
             baseRevision: 0,
             estimatedContentHeight: { _ in 1 },
             threadID: nil,
@@ -2150,15 +2666,16 @@ struct PiAgentScreen: View {
         ))
 
         // --- Inset pass: NSTableView intercell spacing is uniform, so split
-        // each inter-row gap in half across the two adjacent rows. Gaps:
-        // question↔reply 10, sibling children 8, everything else 12. ---
+        // each inter-row gap in half across the two adjacent rows. Gaps come from
+        // the design system: question↔reply (threadSpacing), sibling children
+        // (childSpacing), everything else (rowSpacing). ---
         if descriptors.count > 1 {
             for i in 0 ..< descriptors.count - 1 {
                 let gap: CGFloat
                 if let tid = descriptors[i].threadID, tid == descriptors[i + 1].threadID {
-                    gap = descriptors[i].isThreadQuestion ? 10 : 8
+                    gap = descriptors[i].isThreadQuestion ? AppTheme.Chat.threadSpacing : AppTheme.Chat.childSpacing
                 } else {
-                    gap = 12
+                    gap = AppTheme.Chat.rowSpacing
                 }
                 descriptors[i].bottomInset += gap / 2
                 descriptors[i + 1].topInset += gap / 2
@@ -2175,9 +2692,10 @@ struct PiAgentScreen: View {
             let topInset = descriptor.topInset
             let bottomInset = descriptor.bottomInset
             let contentEstimate = descriptor.estimatedContentHeight
+            let kind = descriptor.kind ?? Self.nativeEmptyKind
             return PiAgentAppKitTranscriptItem(
                 id: descriptor.id,
-                view: descriptor.view,
+                kind: kind,
                 contentRevision: revisionHasher.finalize(),
                 topInset: topInset,
                 bottomInset: bottomInset,
@@ -2219,6 +2737,61 @@ struct PiAgentScreen: View {
         .id(blockID)
     }
 
+    /// Native payload for a plain-text user question (no attachment chips):
+    /// hugged-width right-aligned bubble with leading copy + fork affordance.
+    /// Instance method because the fork actions capture `viewModel`.
+    /// The fork affordance for a user-question row (Pi session + per-agent chat).
+    private func questionForkModel(_ question: PiAgentTranscriptEntry) -> ForkModel {
+        let agentOptions: [ForkAgentOption] = (forkAgentChoicesForSelectedSession ?? []).map { agent in
+            ForkAgentOption(
+                title: agent.name,
+                isDisabled: agent.resolved.disabled == true,
+                action: { [viewModel] in viewModel.forkPiAgentSessionAsAgentChat(from: question, agent: agent) }
+            )
+        }
+        return ForkModel(
+            onForkSession: { [viewModel] in viewModel.forkPiAgentSession(from: question) },
+            agentOptions: agentOptions
+        )
+    }
+
+    /// Native render kind for a chip-bearing user question (skill/command/
+    /// attachment chips) — the dedicated chip-aware question card.
+    private func nativeChipQuestionKind(
+        _ question: PiAgentTranscriptEntry,
+        skills: [SkillRecord],
+        commandSlashNames: Set<String>
+    ) -> PiAgentTranscriptCellKind {
+        let payload = NativeQuestionPayload.make(
+            entry: question, skills: skills, commandSlashNames: commandSlashNames,
+            fork: questionForkModel(question))
+        return .native(.of(PiAgentNativeQuestionView.self) { view, width in
+            view.configure(payload: payload, width: width)
+        })
+    }
+
+    private func nativeQuestionKind(
+        _ question: PiAgentTranscriptEntry,
+        skills: [SkillRecord],
+        commandSlashNames: Set<String>
+    ) -> PiAgentTranscriptCellKind {
+        let text = PiAgentUserMessageContent.displayMessageText(
+            for: question, skills: skills, commandSlashNames: commandSlashNames)
+        let fork = questionForkModel(question)
+        return .bubble(NativeBubblePayload(
+            role: .user,
+            headerTitle: "You",
+            iconSymbol: "person.crop.circle",
+            markdownSource: text,
+            bodyPrefix: nil,
+            copyText: question.text,
+            copySide: .leading,
+            isThreadChild: false,
+            isUserHugged: true,
+            fork: fork
+        ))
+    }
+
     /// Per-block height estimators — character-count math, no SwiftUI pass.
     /// Mirror the heights the old per-thread estimator summed per child.
     private static func estimatedQuestionHeight(_ entry: PiAgentTranscriptEntry, width: CGFloat) -> CGFloat {
@@ -2226,6 +2799,159 @@ struct PiAgentScreen: View {
         let charsPerLine = max(Int(cardWidth / 7), 20)
         let lines = max(1, (entry.text.count + charsPerLine - 1) / charsPerLine)
         return CGFloat(lines) * 18 + 56
+    }
+
+    /// Native render kind for a thread child, or nil to fall back to the hosted
+    /// SwiftUI path. Tool groups and subagent/memory status cards stay hosted
+    /// (later stages); everything else renders natively.
+    /// A native 0-height empty row — the safety fallback now that every descriptor
+    /// is native (no `.hosted` path remains).
+    private static let nativeEmptyKind: PiAgentTranscriptCellKind =
+        .native(.of(PiAgentNativeSpacerView.self) { view, _ in view.spacerHeight = 0 })
+
+    private func nativeChildKind(
+        for child: PiAgentThreadChild,
+        visibility: PiAgentTranscriptVisibilitySettings,
+        skills: [SkillRecord],
+        commandSlashNames: Set<String>,
+        subagentRuns: [UUID: PiSubagentRunRecord]
+    ) -> PiAgentTranscriptCellKind? {
+        switch child {
+        case .assistant(let entry):
+            if let summary = PiAgentSubagentSummary.cached(for: entry) {
+                let payload = NativeSubagentSummaryPayload.make(summary: summary)
+                return .native(.of(PiAgentNativeSubagentSummaryView.self) { view, width in
+                    view.configure(payload: payload, width: width)
+                })
+            }
+            return Self.nativeReplyPayload(for: child).map { .bubble($0) }
+        case .thinking:
+            return Self.nativeReplyPayload(for: child).map { .bubble($0) }
+        case .steering(let entry):
+            // Chip-bearing steering messages use the native chip-question card,
+            // re-labeled as "Steering".
+            let hasChips = PiAgentUserMessageContent.displayChipsNaturalWidth(
+                for: entry, skills: skills, commandSlashNames: commandSlashNames) > 0
+            if hasChips {
+                var payload = NativeQuestionPayload.make(
+                    entry: entry, skills: skills, commandSlashNames: commandSlashNames, fork: nil)
+                payload.headerTitle = "Steering"
+                payload.headerIcon = "arrowshape.turn.up.forward.circle"
+                return .native(.of(PiAgentNativeQuestionView.self) { view, width in
+                    view.configure(payload: payload, width: width)
+                })
+            }
+            let text = PiAgentUserMessageContent.displayMessageText(
+                for: entry, skills: skills, commandSlashNames: commandSlashNames)
+            return .bubble(NativeBubblePayload(
+                role: .user,
+                headerTitle: "Steering",
+                iconSymbol: "arrowshape.turn.up.forward.circle",
+                markdownSource: text,
+                bodyPrefix: nil,
+                copyText: entry.text,
+                copySide: .trailing,
+                isThreadChild: true
+            ))
+        case .status(let entry):
+            if let memoryEvent = entry.agentMemoryEvent {
+                let payload = NativeMemoryCardPayload.make(event: memoryEvent)
+                return .native(.of(PiAgentNativeMemoryCardView.self) { view, width in
+                    view.configure(payload: payload, width: width)
+                })
+            }
+            if let runID = entry.nativeSubagentRunID, let run = subagentRuns[runID] {
+                if NativeSubagentFactory.isParallel(run) {
+                    let payload = NativeSubagentParallelPayload.make(
+                        run: run,
+                        imageStore: viewModel.agentImageStore,
+                        onOpenChildTranscript: { [self] in selectedSubagentTranscriptRunID = $0 },
+                        onStopChild: { [viewModel] in viewModel.stopNativeSubagent(runID: $0, parentSessionID: run.parentSessionID) }
+                    )
+                    return .native(.of(PiAgentNativeSubagentParallelCardView.self) { view, width in
+                        view.configure(payload: payload, width: width)
+                    })
+                }
+                let payload = NativeAgentBlockPayload.makeSingle(
+                    run: run,
+                    imageStore: viewModel.agentImageStore,
+                    onStop: { [viewModel] in viewModel.stopNativeSubagent(runID: run.id, parentSessionID: run.parentSessionID) },
+                    onTranscript: { [self] in selectedSubagentTranscriptRunID = run.id },
+                    onReveal: { [self] in revealSubagentRun(run) }
+                )
+                return .native(.of(PiAgentNativeSubagentRunCardView.self) { view, width in
+                    view.configure(payload: payload, width: width)
+                })
+            }
+            // "System Prompt Captured" / "Subagent Started" render as a native
+            // status row with prompt-audit buttons (computed in make(for:)).
+            if entry.isDividerStatus {
+                let payload = NativeDividerPayload.make(for: entry)
+                return .native(.of(PiAgentNativeStatusDividerView.self) { view, width in
+                    view.configure(payload: payload, width: width)
+                })
+            }
+            let payload = NativeStatusPayload.make(for: entry)
+            return .native(.of(PiAgentNativeStatusRowView.self) { view, width in
+                view.configure(payload: payload, width: width)
+            })
+        case .error(let entry):
+            let payload = NativeStatusPayload.make(for: entry)
+            return .native(.of(PiAgentNativeStatusRowView.self) { view, width in
+                view.configure(payload: payload, width: width)
+            })
+        case .retry(let entry, let info):
+            let payload = NativeRetryPayload.make(info: info, timestamp: entry.timestamp)
+            return .native(.of(PiAgentNativeRetryRowView.self) { view, width in
+                view.configure(payload: payload, width: width)
+            })
+        case .toolGroup(let group):
+            guard let model = NativeToolGroupModel.make(
+                group: group, visibility: visibility, projectPath: store.selectedSession.map { $0.worktreePath ?? $0.projectPath }
+            ) else {
+                // Tool sections all hidden by visibility → an empty 0-height row.
+                return .native(.of(PiAgentNativeSpacerView.self) { view, _ in view.spacerHeight = 0 })
+            }
+            return .native(.of(PiAgentNativeToolGroupView.self) { view, width in
+                view.configure(model: model, width: width)
+            })
+        }
+    }
+
+    /// Maps a thread child to a native bubble payload for the plain-text reply
+    /// rows (assistant / thinking). Returns nil for anything that still renders
+    /// through the hosted SwiftUI path (subagent summaries, tool groups, status,
+    /// errors, retries, steering — handled in later stages).
+    private static func nativeReplyPayload(for child: PiAgentThreadChild) -> NativeBubblePayload? {
+        switch child {
+        case .assistant(let entry):
+            if PiAgentSubagentSummary.cached(for: entry) != nil { return nil }
+            let text = entry.text
+            return NativeBubblePayload(
+                role: .assistant,
+                headerTitle: "Coding Agent",
+                iconSymbol: nil,
+                markdownSource: text,
+                bodyPrefix: nil,
+                copyText: text.trimmingCharacters(in: .whitespacesAndNewlines),
+                copySide: .trailing,
+                isThreadChild: true
+            )
+        case .thinking(let entry):
+            let display = entry.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return NativeBubblePayload(
+                role: .thinking,
+                headerTitle: entry.title,
+                iconSymbol: "brain.head.profile",
+                markdownSource: display.isEmpty ? "Pi has not emitted reasoning text yet." : display,
+                bodyPrefix: "Reasoning",
+                copyText: display,
+                copySide: .trailing,
+                isThreadChild: true
+            )
+        default:
+            return nil
+        }
     }
 
     private static func estimatedChildHeight(_ child: PiAgentThreadChild, width: CGFloat) -> CGFloat {
@@ -2404,7 +3130,7 @@ struct PiAgentScreen: View {
                     .controlSize(.small)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Loading transcript")
-                        .font(.headline)
+                        .font(AppTheme.Font.headline)
                     Text("Restoring the selected chat from disk.")
                         .foregroundStyle(AppTheme.mutedText)
                 }
@@ -2421,7 +3147,7 @@ struct PiAgentScreen: View {
                     .foregroundStyle(AppTheme.mutedText)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("No transcript yet")
-                        .font(.headline)
+                        .font(AppTheme.Font.headline)
                     Text("Send a message below to launch Pi Agent for this session.")
                         .foregroundStyle(AppTheme.mutedText)
                 }
@@ -2506,12 +3232,12 @@ struct PiAgentScreen: View {
     private func preCompactionArchiveCard(_ archive: (hiddenCount: Int, compactedAt: Date)) -> some View {
         HStack(spacing: 10) {
             Image(systemName: showArchivedPreCompactionTranscript ? "tray.and.arrow.up" : "archivebox")
-                .font(.caption.weight(.semibold))
+                .font(AppTheme.Font.caption.weight(.semibold))
                 .foregroundStyle(AppTheme.mutedText)
             Text(showArchivedPreCompactionTranscript ? "Showing pre-compaction transcript" : "Pre-compaction transcript hidden")
-                .font(.caption.weight(.semibold))
+                .font(AppTheme.Font.caption.weight(.semibold))
             Text("\(archive.hiddenCount) earlier item\(archive.hiddenCount == 1 ? "" : "s") before \(archive.compactedAt.formatted(date: .omitted, time: .shortened))")
-                .font(.caption)
+                .font(AppTheme.Font.caption)
                 .foregroundStyle(AppTheme.mutedText)
             Spacer(minLength: 0)
             Button(showArchivedPreCompactionTranscript ? "Hide" : "Load Earlier") {
@@ -2520,24 +3246,24 @@ struct PiAgentScreen: View {
                 }
             }
             .buttonStyle(.borderless)
-            .font(.caption.weight(.semibold))
+            .font(AppTheme.Font.caption.weight(.semibold))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.8)).stroke(AppTheme.contentStroke, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.8)).stroke(AppTheme.contentStroke, lineWidth: 1))
     }
 
     @ViewBuilder
     private func recentWindowArchiveCard(_ archive: (hiddenCount: Int, limit: Int)) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "clock.arrow.circlepath")
-                .font(.caption.weight(.semibold))
+                .font(AppTheme.Font.caption.weight(.semibold))
                 .foregroundStyle(AppTheme.mutedText)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Earlier transcript hidden")
-                    .font(.caption.weight(.semibold))
+                    .font(AppTheme.Font.caption.weight(.semibold))
                 Text("Showing the latest \(archive.limit) items to keep this chat responsive. \(archive.hiddenCount) earlier item\(archive.hiddenCount == 1 ? "" : "s") are available.")
-                    .font(.caption)
+                    .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
             }
             Spacer(minLength: 0)
@@ -2545,11 +3271,11 @@ struct PiAgentScreen: View {
                 isEarlierTranscriptSheetPresented = true
             }
             .buttonStyle(.borderless)
-            .font(.caption.weight(.semibold))
+            .font(AppTheme.Font.caption.weight(.semibold))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.8)).stroke(AppTheme.contentStroke, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius, style: .continuous).fill(AppTheme.contentSubtleFill.opacity(0.8)).stroke(AppTheme.contentStroke, lineWidth: 1))
     }
 
     private var earlierTranscriptSheet: some View {

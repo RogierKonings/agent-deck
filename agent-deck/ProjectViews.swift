@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import SwiftUI
 
 struct ProjectAssignmentToggleRow: View {
@@ -156,6 +157,8 @@ struct ProjectIconView: View {
         Group {
             if let image {
                 Image(nsImage: image)
+                    .interpolation(.high)
+                    .antialiased(true)
                     .resizable()
                     .scaledToFill()
             } else if let assetName, !assetName.isEmpty, NSImage(named: assetName) != nil {
@@ -204,6 +207,12 @@ actor ProjectIconCache {
 
     private let cache = NSCache<NSString, NSImage>()
 
+    /// Project icons render at most ~34pt; at 3x that's ~102px. Decoding a 128px
+    /// thumbnail keeps every use crisp while avoiding the full-resolution decode
+    /// (app icons / favicons are often 512px+ and were being downscaled by SwiftUI,
+    /// which both wasted memory and rendered fuzzily). One entry per path, shared.
+    private static let maxPixelSize = 128
+
     func cachedImage(for url: URL) -> NSImage? {
         cache.object(forKey: url.path as NSString)
     }
@@ -214,7 +223,7 @@ actor ProjectIconCache {
         }
 
         let image = await Task.detached(priority: .utility) {
-            NSImage(contentsOf: url)
+            Self.downsampledImage(at: url, maxPixelSize: Self.maxPixelSize)
         }.value
 
         if let image {
@@ -222,6 +231,26 @@ actor ProjectIconCache {
         }
 
         return image
+    }
+
+    /// Decode `url` straight to a crisp thumbnail no larger than `maxPixelSize` on
+    /// its long edge, honoring EXIF orientation. Falls back to a plain decode for
+    /// formats ImageIO can't thumbnail.
+    private static func downsampledImage(at url: URL, maxPixelSize: Int) -> NSImage? {
+        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else {
+            return NSImage(contentsOf: url)
+        }
+        let thumbnailOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions as CFDictionary) else {
+            return NSImage(contentsOf: url)
+        }
+        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
     }
 }
 

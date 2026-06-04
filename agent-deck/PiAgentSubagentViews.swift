@@ -38,19 +38,19 @@ struct PiSubagentSupervisorRequestCard: View {
         AppRowCard {
             VStack(alignment: .leading, spacing: 10) {
                 Label(request.title, systemImage: "questionmark.bubble")
-                    .font(.headline)
+                    .font(AppTheme.Font.headline)
                     .foregroundStyle(.orange)
                 if let interview = structuredInterview {
                     if let intro = interview.prompt ?? interview.message, !intro.isEmpty {
-                        Text(intro).font(.subheadline)
+                        Text(intro).font(AppTheme.Font.subheadline)
                     }
                     ForEach(interview.questions) { question in
                         VStack(alignment: .leading, spacing: 5) {
                             Text(question.labelText)
-                                .font(.caption.weight(.semibold))
+                                .font(AppTheme.Font.caption.weight(.semibold))
                             if question.type == "info" {
                                 Text(question.placeholder ?? "No response required.")
-                                    .font(.caption)
+                                    .font(AppTheme.Font.caption)
                                     .foregroundStyle(.secondary)
                             } else {
                                 AppTextField(text: binding(for: question.id), placeholder: question.placeholder ?? "Response", axis: .vertical)
@@ -60,11 +60,11 @@ struct PiSubagentSupervisorRequestCard: View {
                     }
                 } else {
                     Text(request.message)
-                        .font(.subheadline)
+                        .font(AppTheme.Font.subheadline)
                     TextEditor(text: $response)
                         .frame(minHeight: 76)
                         .padding(6)
-                        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+                        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: AppTheme.Chat.codeCornerRadius))
                 }
                 HStack {
                     Spacer()
@@ -186,7 +186,7 @@ struct PiNativeSubagentRunCard: View {
                             compactMetric(item)
                         }
                     }
-                    .font(.caption)
+                    .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
                 }
             }
@@ -212,9 +212,9 @@ struct PiNativeSubagentRunCard: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 7) {
                     Text(run.agentName)
-                        .font(.headline)
+                        .font(AppTheme.Font.headline)
                     Text(shortRunID)
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .font(AppTheme.Font.code.weight(.medium))
                         .foregroundStyle(AppTheme.mutedText)
                         .padding(.horizontal, 5)
                         .padding(.vertical, 2)
@@ -236,9 +236,9 @@ struct PiNativeSubagentRunCard: View {
     private func parallelHeader(children: [PiSubagentChildRecord]) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text("Parallel agents")
-                .font(.headline)
+                .font(AppTheme.Font.headline)
             Text("\(children.count)")
-                .font(.caption2.monospaced().weight(.bold))
+                .font(AppTheme.Font.caption2.monospaced().weight(.bold))
                 .foregroundStyle(AppTheme.mutedText)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
@@ -254,7 +254,7 @@ struct PiNativeSubagentRunCard: View {
             isDetailsPresented.toggle()
         } label: {
             Image(systemName: "info.circle")
-                .font(.system(size: 14, weight: .semibold))
+                .font(AppTheme.Font.body.weight(.semibold))
                 .frame(width: 28, height: 28)
         }
         .buttonStyle(.borderless)
@@ -330,7 +330,7 @@ struct PiNativeSubagentRunCard: View {
     private var detailsPopover: some View {
         VStack(alignment: .leading, spacing: 12) {
             Label("Run details", systemImage: "info.circle")
-                .font(.headline)
+                .font(AppTheme.Font.headline)
 
             AppKeyValueList(rows: detailRows)
 
@@ -338,7 +338,7 @@ struct PiNativeSubagentRunCard: View {
                 Divider()
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Actions")
-                        .font(.caption.weight(.semibold))
+                        .font(AppTheme.Font.caption.weight(.semibold))
                         .foregroundStyle(AppTheme.mutedText)
 
                     if !run.artifactDirectory.isEmpty {
@@ -418,7 +418,7 @@ struct PiNativeSubagentRunCard: View {
     private func compactMetric(_ item: CompactMetadataItem) -> some View {
         HStack(spacing: 3) {
             Image(systemName: item.icon)
-                .font(.caption2.weight(.semibold))
+                .font(AppTheme.Font.caption2.weight(.semibold))
             Text(item.text)
                 .lineLimit(1)
         }
@@ -432,7 +432,7 @@ struct PiNativeSubagentRunCard: View {
         }
         .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: AppTheme.Chat.panelCornerRadius, style: .continuous)
                 .fill(
                     LinearGradient(
                         colors: [AppTheme.contentSubtleFill.opacity(0.82), AppTheme.contentFill.opacity(0.58)],
@@ -463,13 +463,13 @@ struct PiNativeSubagentRunCard: View {
                         compactMetric(item)
                     }
                 }
-                .font(.caption)
+                .font(AppTheme.Font.caption)
                 .foregroundStyle(AppTheme.mutedText)
             }
         }
         .padding(14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .appContentSurface(cornerRadius: 14)
+        .appContentSurface(cornerRadius: AppTheme.Chat.panelCornerRadius)
     }
 
     private func parallelChildHeader(_ child: PiSubagentChildRecord) -> some View {
@@ -479,12 +479,12 @@ struct PiNativeSubagentRunCard: View {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(alignment: .firstTextBaseline, spacing: 7) {
                         Text(child.agentName)
-                            .font(.headline)
+                            .font(AppTheme.Font.headline)
                             .lineLimit(1)
                             .layoutPriority(1)
                         if let outcome = child.expectedOutcome {
                             Text(outcome.displayName)
-                                .font(.system(size: 10, weight: .medium))
+                                .font(AppTheme.Font.caption2.weight(.medium))
                                 .foregroundStyle(AppTheme.mutedText)
                                 .lineLimit(1)
                                 .fixedSize(horizontal: true, vertical: false)
@@ -688,7 +688,7 @@ private struct PiSubagentTaskPreview: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label("Task", systemImage: "list.clipboard")
-                .font(.caption.weight(.semibold))
+                .font(AppTheme.Font.caption.weight(.semibold))
                 .fontWidth(.expanded)
                 .foregroundStyle(AppTheme.mutedText)
 
@@ -699,7 +699,7 @@ private struct PiSubagentTaskPreview: View {
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, maxHeight: fillsHeight ? .infinity : nil, alignment: .topLeading)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: AppTheme.Chat.panelCornerRadius, style: .continuous)
                 .fill(AppTheme.contentSubtleFill.opacity(0.65))
                 .stroke(AppTheme.contentStroke, lineWidth: 1)
         )
@@ -755,7 +755,8 @@ struct PiSubagentActivityGlyph: View {
                     }
             } else {
                 Image(systemName: "paperplane")
-                    .font(.system(size: 19, weight: .medium))
+                    .imageScale(.large)
+                    .fontWeight(.medium)
                     .foregroundStyle(color)
                     .transaction { transaction in
                         transaction.animation = nil
@@ -799,7 +800,7 @@ struct PiNativeSubagentGraphSheet: View {
                     Text("Deck agent graph · \(run.agentName)")
                         .font(.title3.bold())
                     Text("\(run.mode.rawValue.capitalized) · \(run.status.rawValue.capitalized) · \(run.children?.count ?? 0) child runs")
-                        .font(.caption)
+                        .font(AppTheme.Font.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -820,7 +821,7 @@ struct PiNativeSubagentGraphSheet: View {
             if let summary = run.aggregateSummary ?? run.summary, !summary.isEmpty {
                 Divider()
                 Text(summary)
-                    .font(.caption)
+                    .font(AppTheme.Font.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(5)
             }
@@ -835,7 +836,7 @@ struct PiNativeSubagentGraphSheet: View {
                 HStack(spacing: 8) {
                     Circle().fill(color(for: child.status)).frame(width: 9, height: 9)
                     Text("\(child.index + 1). \(child.agentName)")
-                        .font(.headline)
+                        .font(AppTheme.Font.headline)
                     AppLabelTag(text: child.status.rawValue, color: color(for: child.status))
                     Spacer()
                     if child.status.isActive {
@@ -853,17 +854,17 @@ struct PiNativeSubagentGraphSheet: View {
                 }
                 if let task = child.task, !task.isEmpty {
                     Text(task)
-                        .font(.caption)
+                        .font(AppTheme.Font.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(3)
                 }
                 if let summary = child.summary, !summary.isEmpty {
                     Text(summary)
-                        .font(.caption)
+                        .font(AppTheme.Font.caption)
                         .lineLimit(4)
                 } else if let error = child.error, !error.isEmpty {
                     Text(error)
-                        .font(.caption)
+                        .font(AppTheme.Font.caption)
                         .foregroundStyle(.red)
                         .lineLimit(4)
                 }
@@ -880,10 +881,10 @@ struct PiNativeSubagentGraphSheet: View {
     private func graphMeta(_ title: String, _ value: String?) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 4) {
             Text("\(title):")
-                .font(.caption2.weight(.semibold))
+                .font(AppTheme.Font.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
             Text(value ?? "—")
-                .font(.caption2.monospaced())
+                .font(AppTheme.Font.caption2.monospaced())
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .foregroundStyle(AppTheme.mutedText)
@@ -921,7 +922,7 @@ struct PiNativeSubagentTranscriptSheet: View {
                     Text("Deck agent transcript")
                         .font(.title3.bold())
                     Text("\(run.agentName) · \(run.status.rawValue.capitalized)")
-                        .font(.caption.weight(.semibold))
+                        .font(AppTheme.Font.caption.weight(.semibold))
                         .foregroundStyle(statusColor)
                 }
                 Spacer()
@@ -944,7 +945,7 @@ struct PiNativeSubagentTranscriptSheet: View {
                             .foregroundStyle(AppTheme.mutedText)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(14)
-                            .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .background(AppTheme.contentSubtleFill, in: RoundedRectangle(cornerRadius: AppTheme.Chat.panelCornerRadius, style: .continuous))
                     } else {
                         ForEach(filteredTranscriptEntries) { entry in
                             transcriptEntryView(entry)
@@ -1076,7 +1077,7 @@ struct PiNativeSubagentRunSheet: View {
                     Text("Run Deck Agent")
                         .font(.title3.bold())
                     Text("Launches a separate Pi RPC child session managed by \(AppBrand.displayName). This does not insert or send a raw /run command.")
-                        .font(.caption)
+                        .font(AppTheme.Font.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -1093,7 +1094,7 @@ struct PiNativeSubagentRunSheet: View {
             if let selectedInfo {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(selectedInfo.description.isEmpty ? "No description" : selectedInfo.description)
-                        .font(.subheadline)
+                        .font(AppTheme.Font.subheadline)
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 6) {
                         subagentInfoLine("Model", selectedInfo.model ?? "Default")
                         subagentInfoLine("Thinking", selectedInfo.thinking ?? "Default")
@@ -1104,28 +1105,28 @@ struct PiNativeSubagentRunSheet: View {
                     }
                     if selectedInfo.output != nil {
                         Label("Deck agent runs save the final response to app artifacts by default. Project-file output should be explicit in the task.", systemImage: "exclamationmark.triangle")
-                            .font(.caption)
+                            .font(AppTheme.Font.caption)
                             .foregroundStyle(.orange)
                     }
                 }
                 .padding(10)
-                .appContentSurface(cornerRadius: 12)
+                .appContentSurface(cornerRadius: AppTheme.Chat.cardCornerRadius)
             }
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Task")
-                    .font(.headline)
+                    .font(AppTheme.Font.headline)
                 TextEditor(text: $task)
-                    .font(.body)
+                    .font(AppTheme.Font.body)
                     .frame(minHeight: 140)
                     .scrollContentBackground(.hidden)
                     .padding(8)
-                    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+                    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: AppTheme.Chat.subCardCornerRadius))
             }
 
             VStack(alignment: .leading, spacing: 8) {
                 Label("Files to read first", systemImage: "doc.text.magnifyingglass")
-                    .font(.subheadline.weight(.semibold))
+                    .font(AppTheme.Font.subheadline.weight(.semibold))
                 HStack(alignment: .top, spacing: 8) {
                     AppTextField(text: $readFirstPathsText, placeholder: "Optional project-relative paths, comma or newline separated", axis: .vertical)
                         .lineLimit(1...4)
@@ -1148,29 +1149,29 @@ struct PiNativeSubagentRunSheet: View {
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
                             .buttonStyle(.plain)
-                            .font(.caption)
+                            .font(AppTheme.Font.caption)
                         }
                     }
                     .padding(.horizontal, 6)
                     if readFirstFileSuggestions.count > 8 {
                         Text("Showing top 8 — keep typing to refine")
-                            .font(.caption2)
+                            .font(AppTheme.Font.caption2)
                             .italic()
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 6)
                     }
                 }
                 Text("Use this for files the caller knows are relevant now. Type @ to search project files, use the paperclip, or drag files here. Defaults from the agent are treated as hints only; \(AppBrand.displayName) does not inject stale file contents.")
-                    .font(.caption2)
+                    .font(AppTheme.Font.caption2)
                     .foregroundStyle(.secondary)
             }
             .padding(10)
-            .appContentSurface(cornerRadius: 12)
+            .appContentSurface(cornerRadius: AppTheme.Chat.cardCornerRadius)
             .overlay {
                 if isReadFirstDropTargeted {
-                    RoundedRectangle(cornerRadius: 12)
+                    RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius)
                         .stroke(AppTheme.brandAccent, lineWidth: 2)
-                        .background(AppTheme.brandAccent.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                        .background(AppTheme.brandAccent.opacity(0.08), in: RoundedRectangle(cornerRadius: AppTheme.Chat.cardCornerRadius))
                 }
             }
             .onDrop(of: [.fileURL], isTargeted: $isReadFirstDropTargeted) { providers in
@@ -1184,9 +1185,9 @@ struct PiNativeSubagentRunSheet: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 Label("Deck agent run", systemImage: "checkmark.seal")
-                    .font(.subheadline.weight(.semibold))
+                    .font(AppTheme.Font.subheadline.weight(.semibold))
                 Text("\(AppBrand.displayName) starts and tracks the child session directly, records artifacts under Application Support, and posts a status/result entry back to the parent transcript.")
-                    .font(.caption)
+                    .font(AppTheme.Font.caption)
                     .foregroundStyle(.secondary)
                 Picker("Expected outcome", selection: $expectedOutcome) {
                     ForEach(PiSubagentExpectedOutcome.allCases) { outcome in
@@ -1195,26 +1196,26 @@ struct PiNativeSubagentRunSheet: View {
                 }
                 .appMenuPicker()
                 Toggle("Use git worktree isolation", isOn: $useWorktreeIsolation)
-                    .font(.caption)
+                    .font(AppTheme.Font.caption)
                 Text("Creates a detached git worktree inside the run artifacts so child file edits are isolated from the main checkout.")
-                    .font(.caption2)
+                    .font(AppTheme.Font.caption2)
                     .foregroundStyle(.secondary)
                 if expectedOutcome == .writeProjectFile {
                     AppTextField(text: $requestedOutputPath, placeholder: "Project-relative output path, e.g. docs/plan.md")
                     Toggle("Allow overwrite if the file exists", isOn: $allowOverwrite)
-                        .font(.caption)
+                        .font(AppTheme.Font.caption)
                 }
                 Toggle("Allow direct project writes without a worktree", isOn: $allowDirectProjectWrites)
-                    .font(.caption)
+                    .font(AppTheme.Font.caption)
                     .disabled(useWorktreeIsolation || expectedOutcome != .directProjectWrites)
                 if let outputPolicyError {
                     Label(outputPolicyError, systemImage: "lock.shield")
-                        .font(.caption)
+                        .font(AppTheme.Font.caption)
                         .foregroundStyle(.orange)
                 }
             }
             .padding(10)
-            .appContentSurface(cornerRadius: 12)
+            .appContentSurface(cornerRadius: AppTheme.Chat.cardCornerRadius)
 
             HStack {
                 Spacer()
@@ -1343,10 +1344,10 @@ struct PiNativeSubagentRunSheet: View {
     private func subagentInfoLine(_ title: String, _ value: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text("\(title):")
-                .font(.caption.weight(.semibold))
+                .font(AppTheme.Font.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
             Text(value)
-                .font(.caption)
+                .font(AppTheme.Font.caption)
                 .lineLimit(1)
                 .truncationMode(.tail)
         }
