@@ -378,6 +378,12 @@ final class NativeMarkdownTextContainer: NSView {
     /// frames instead of re-running a full TextKit layout on every `sizeThatFits`
     /// probe (that per-frame re-measure was the transcript's 30fps scroll cap).
     private var heightCache: (width: CGFloat, height: CGFloat)?
+    /// The width at which every block was last fully laid out (invalidate-all +
+    /// double pass). When a later measure comes in at this same width, the blocks are
+    /// already wrapped correctly and only the block(s) that changed need re-measuring
+    /// — so the streaming re-measure can take a single cheap pass. Reset on rebuild()
+    /// (fresh views need the full pass once) so it only fast-paths incremental edits.
+    private var lastFullLayoutWidth: CGFloat?
     /// Budget of forced fresh re-measures after a content change, to self-heal a
     /// too-short first measure (per-block TextKit views can report a stale
     /// intrinsic size on the first pass after a rebuild). The debounced
@@ -595,19 +601,30 @@ final class NativeMarkdownTextContainer: NSView {
             return heightCache.height
         }
         configureWidthConstraint(to: width)
-        // Two layout passes. A text view's intrinsicContentSize wraps at
-        // max(bounds.width, containerSize.width): on the FIRST pass bounds.width
-        // may still be stale-wide, so the text wraps to too few lines and the
-        // measured height comes back short — which then gets cached and leaves
-        // the last line crowding the card's bottom edge. The first pass assigns
-        // each block its real width; we then invalidate the per-block intrinsics
-        // and lay out again so they re-wrap at that width before we read the
-        // fitting size.
+        if let lastFullLayoutWidth, abs(lastFullLayoutWidth - width) < 0.5 {
+            // Streaming hot path: width is unchanged since the last full layout, so
+            // every block is already wrapped correctly. A block whose text grew
+            // self-invalidated its intrinsic (updateTextView → invalidate), and any
+            // freshly appended block starts dirty — a single pass re-measures just
+            // those and leaves the rest cached, instead of re-laying-out every block.
+            stackView.layoutSubtreeIfNeeded()
+            let height = ceil(stackView.fittingSize.height)
+            heightCache = (width, height)
+            return height
+        }
+        // Width changed (or first measure after a rebuild). A text view's
+        // intrinsicContentSize wraps at max(bounds.width, containerSize.width): on the
+        // FIRST pass bounds.width may still be stale-wide, so the text wraps to too few
+        // lines and the measured height comes back short — which then gets cached and
+        // leaves the last line crowding the card's bottom edge. The first pass assigns
+        // each block its real width; we then invalidate the per-block intrinsics and
+        // lay out again so they re-wrap at that width before we read the fitting size.
         stackView.layoutSubtreeIfNeeded()
         invalidateBlockIntrinsics(in: stackView)
         stackView.layoutSubtreeIfNeeded()
         let height = ceil(stackView.fittingSize.height)
         heightCache = (width, height)
+        lastFullLayoutWidth = width
         return height
     }
 
@@ -666,6 +683,10 @@ final class NativeMarkdownTextContainer: NSView {
     }
 
     private func rebuild(document: CachedMarkdownDocument) {
+        // Fresh views need the full invalidate-all + double pass on their first
+        // measure (they can report a stale-wide intrinsic), so drop the fast-path
+        // marker — only incremental edits at an unchanged width should skip it.
+        lastFullLayoutWidth = nil
         stackView.arrangedSubviews.forEach { view in
             stackView.removeArrangedSubview(view)
             view.removeFromSuperview()
