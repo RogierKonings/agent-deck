@@ -120,6 +120,125 @@ struct WindowBackgroundApplier: NSViewRepresentable {
     }
 }
 
+/// `NSHostingView` for the launch splash that (a) ignores the window's safe area so
+/// the splash lays out edge-to-edge and centres in the *whole* window, and (b)
+/// swallows every mouse event inside its bounds — including over empty material — so
+/// nothing behind it (the toolbar especially) receives hover/click while it's up.
+private final class InitialLoadCoverHostingView<Content: View>: NSHostingView<Content> {
+    override var safeAreaInsets: NSEdgeInsets { NSEdgeInsetsZero }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        // `point` is in the superview's coordinate space.
+        guard frame.contains(point) else { return super.hitTest(point) }
+        return super.hitTest(point) ?? self
+    }
+}
+
+/// Covers the ENTIRE window — titlebar and toolbar included — with the launch
+/// splash, then fades it out once `isActive` flips false.
+///
+/// A normal SwiftUI `.overlay` only reaches the window's content region; the
+/// `NavigationSplitView` toolbar lives in the titlebar *above* that, so it would
+/// stay visible and clickable through the splash. Installing the splash as a
+/// subview of the window's frame view (the layer that hosts the titlebar) puts it
+/// on top of everything and lets it block all interaction.
+struct AppInitialLoadWindowCover: NSViewRepresentable {
+    /// Master switch for the launch splash. Flip to `false` to disable it — the
+    /// workspace usually loads fast enough that the splash isn't strictly needed.
+    static let isEnabled = true
+
+    var isActive: Bool
+
+    func makeNSView(context: Context) -> NSView {
+        let anchor = AnchorView()
+        anchor.coordinator = context.coordinator
+        anchor.active = isActive
+        return anchor
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        guard let anchor = nsView as? AnchorView else { return }
+        anchor.active = isActive
+        // Synchronous so the dismissal animation starts in the same frame the
+        // refresh completes — no async hop.
+        context.coordinator.sync(active: isActive, anchor: nsView)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    /// Installs the cover the instant it enters the window — before the window's
+    /// first paint — so the splash is the first thing on screen, never a flash of
+    /// the app followed by the overlay.
+    final class AnchorView: NSView {
+        weak var coordinator: Coordinator?
+        var active = false
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard window != nil else { return }
+            coordinator?.sync(active: active, anchor: self)
+        }
+    }
+
+    final class Coordinator {
+        private var cover: NSView?
+        /// When the cover became visible, so a too-fast launch still shows the
+        /// splash for at least `minimumOnScreen` before it fades.
+        private var shownAt: Date?
+        private let minimumOnScreen: TimeInterval = 1.0
+
+        func sync(active: Bool, anchor: NSView, retries: Int = 12) {
+            guard let frameView = anchor.window?.contentView?.superview,
+                  frameView.bounds.width > 1, frameView.bounds.height > 1 else {
+                // The window/frame may not exist yet on the very first launch pass.
+                if active && retries > 0 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak anchor] in
+                        guard let anchor else { return }
+                        self.sync(active: active, anchor: anchor, retries: retries - 1)
+                    }
+                }
+                return
+            }
+
+            if active {
+                guard cover == nil else { return }
+                let host = InitialLoadCoverHostingView(rootView: AppInitialLoadOverlay())
+                host.frame = frameView.bounds
+                host.autoresizingMask = [.width, .height]
+                frameView.addSubview(host) // last subview → above the toolbar
+                cover = host
+                shownAt = Date()
+            } else if cover != nil {
+                // Keep the splash up for its minimum, then fade. Re-dispatch rather
+                // than dismiss now if the refresh beat the floor.
+                let elapsed = shownAt.map { Date().timeIntervalSince($0) } ?? minimumOnScreen
+                let remaining = minimumOnScreen - elapsed
+                if remaining > 0 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + remaining) { [weak anchor] in
+                        guard let anchor else { return }
+                        self.sync(active: false, anchor: anchor)
+                    }
+                    return
+                }
+                dismiss()
+            }
+        }
+
+        private func dismiss() {
+            guard let existing = cover else { return }
+            cover = nil
+            shownAt = nil
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.3
+                ctx.allowsImplicitAnimation = true
+                existing.animator().alphaValue = 0
+            } completionHandler: {
+                MainActor.assumeIsolated { existing.removeFromSuperview() }
+            }
+        }
+    }
+}
+
 /// SwiftUI wrapper around `PiAgentNativeTextPopoverController` so the System Prompt
 /// toolbar button shows the exact same title + scrollable monospaced text popover the
 /// old transcript "Final System Prompt" card's "View" button used.
@@ -262,13 +381,9 @@ struct ContentView: View {
         mainContent
             // One calm loading state on launch instead of each pane (and the
             // background project/agent/skill/gh refresh) flickering in piecemeal.
-            .overlay {
-                if !viewModel.hasCompletedInitialRefresh {
-                    AppInitialLoadOverlay()
-                        .transition(.opacity)
-                }
-            }
-            .animation(.easeInOut(duration: 0.3), value: viewModel.hasCompletedInitialRefresh)
+            // Installed at the window level so it covers the whole window —
+            // titlebar and toolbar included — and blocks interaction underneath.
+            .background(AppInitialLoadWindowCover(isActive: AppInitialLoadWindowCover.isEnabled && !viewModel.hasCompletedInitialRefresh))
             .sheet(isPresented: $isOnboardingPresented, onDismiss: completeOnboarding) {
                 WelcomeOnboardingSheet(viewModel: viewModel) { target in
                     if let target {

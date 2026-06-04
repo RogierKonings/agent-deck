@@ -194,27 +194,26 @@ struct SkillsScreen: View {
                     .appDebugLayout("Skills.libraryLoading", logger: Self.layoutLog)
             }
 
-            // The detail pane must carry an explicit width contract. An HSplitView
-            // sizes itself from its panes' fitting widths, and a pane's fitting
-            // width comes from its `idealWidth` (per SwiftUI `frame` semantics).
-            // Without it, the detail content's own ideal width leaks through
-            // AppPage's vertical ScrollView — a long path / wide markdown card can
-            // report a ~1500pt ideal — and the split balloons past the available
-            // width, then gets centered and slides the library pane under the
-            // sidebar. `idealWidth` clamps the fitting size; `maxWidth: .infinity`
-            // still fills the real space at runtime.
             if viewModel.hasCompletedInitialRefresh {
+                // `lazy: true` is load-bearing for layout, not just perf. AppPage
+                // wraps its cards in a vertical ScrollView, which passes its content's
+                // *horizontal* ideal width straight through. With a plain VStack
+                // (lazy: false) every card is measured up front, so a wide one reports
+                // a huge ideal width that balloons this pane; the enclosing HSplitView
+                // then sizes to that oversized fitting width and centers it, sliding
+                // the library pane under the sidebar. A LazyVStack reports a bounded
+                // ideal, keeping the split's fitting width under the available width so
+                // it fills exactly. AgentDetailView uses lazy: true for the same reason.
                 AppPage(
                     selectedWarning?.title ?? skillDetailTitle,
-                    subtitle: selectedWarning?.subtitle ?? skillDetailSubtitle
+                    subtitle: selectedWarning?.subtitle ?? skillDetailSubtitle,
+                    lazy: true
                 ) {
                     skillDetailContent
                 }
-                .frame(minWidth: 480, idealWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
                 .appDebugLayout("Skills.detail selected=\(selectedSkill?.name ?? selectedWarning?.title ?? "nil")", logger: Self.layoutLog)
             } else {
                 AppLoadingView("Loading skill details…")
-                    .frame(minWidth: 480, idealWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
                     .appDebugLayout("Skills.detailLoading", logger: Self.layoutLog)
             }
         }

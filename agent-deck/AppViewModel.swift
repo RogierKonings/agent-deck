@@ -6536,26 +6536,17 @@ final class AppViewModel: NSObject {
         enabledProjects.filter { self.agent(agent, isEnabledFor: $0) }
     }
 
+    /// Read-only accessor for the per-agent skill-visibility cache. The full map
+    /// is computed by `buildSkillVisibilityIssuesByAgentID()` at refresh
+    /// boundaries (alongside the other warning caches), so this must NEVER
+    /// recompute or touch disk — it is called from view bodies for every agent
+    /// on every layout pass. Agents without issues are intentionally absent from
+    /// the cache, so a miss means "no issues", not "needs recompute". The old
+    /// recompute-on-miss path fell through to a synchronous `PiScanner().scan()`
+    /// per healthy agent, producing multi-hundred-ms main-thread hangs on tab
+    /// switches.
     func explicitSkillVisibilityIssues(for agent: EffectiveAgentRecord) -> [AgentSkillVisibilityIssue] {
-        if let cached = cachedSkillVisibilityIssuesByAgentID[agent.id] {
-            return cached
-        }
-        guard !agent.resolved.skills.isEmpty else { return [] }
-        let explicitSkills = agent.resolved.skills
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        guard !explicitSkills.isEmpty else { return [] }
-
-        let managedRecord = snapshot.libraryAgents.first { $0.name == agent.name }
-            ?? agent.globalCustom
-            ?? agent.projectCustom
-        guard let managedRecord else { return [] }
-
-        return assignedProjects(for: managedRecord).compactMap { project in
-            let missingSkills = explicitSkills.filter { !skillNamed($0, isRuntimeVisibleIn: project) }
-            guard !missingSkills.isEmpty else { return nil }
-            return AgentSkillVisibilityIssue(project: project, missingSkills: missingSkills)
-        }
+        cachedSkillVisibilityIssuesByAgentID[agent.id] ?? []
     }
 
     private func skillNamed(_ skillName: String, isRuntimeVisibleIn project: DiscoveredProject) -> Bool {

@@ -62,7 +62,22 @@ nonisolated struct ProjectDiscovery {
 
         func appendProject(_ url: URL, allowManualDirectory: Bool) {
             let standardizedURL = url.standardizedFileURL
-            guard allowManualDirectory ? isExistingDirectory(standardizedURL) : isProjectDirectory(standardizedURL) else { return }
+
+            // Memoize the recursive `.xcodeproj`/`.xcworkspace` descendant scan.
+            // It is consulted by BOTH the project-ness test and the project-type
+            // classifier and walks up to two directory levels, so without this it
+            // ran twice per candidate (and eagerly, even for plain git repos that
+            // never needed it). This dominated the discovery cost in scan
+            // profiles.
+            var cachedHasXcodeProject: Bool?
+            func hasXcodeProject() -> Bool {
+                if let cachedHasXcodeProject { return cachedHasXcodeProject }
+                let result = containsDescendant(withExtensions: ["xcodeproj", "xcworkspace"], in: standardizedURL, maxDepth: 2)
+                cachedHasXcodeProject = result
+                return result
+            }
+
+            guard allowManualDirectory ? isExistingDirectory(standardizedURL) : isProjectDirectory(standardizedURL, hasXcodeProject: hasXcodeProject) else { return }
             guard seenPaths.insert(standardizedURL.path).inserted else { return }
 
             let remote = gitHubRemote(for: standardizedURL)
@@ -77,7 +92,7 @@ nonisolated struct ProjectDiscovery {
             .joined(separator: "\n")
             .lowercased()
 
-            let projectType = projectType(for: standardizedURL)
+            let projectType = ProjectType.detect(at: standardizedURL, fileManager: fileManager, hasXcodeProject: hasXcodeProject)
             projects.append(DiscoveredProject(
                 url: standardizedURL,
                 gitHubRemote: remote,
@@ -272,27 +287,24 @@ nonisolated struct ProjectDiscovery {
         )
     }
 
-    private func isProjectDirectory(_ url: URL) -> Bool {
+    /// `hasXcodeProject` is the caller's memoized descendant scan — checked last
+    /// so plain git repos and Node packages (the common case) never pay for the
+    /// recursive `.xcodeproj` walk.
+    private func isProjectDirectory(_ url: URL, hasXcodeProject: () -> Bool) -> Bool {
         guard isExistingDirectory(url) else {
             return false
         }
 
         let gitDirectory = url.appendingPathComponent(".git")
+        if fileManager.fileExists(atPath: gitDirectory.path) { return true }
         let packageFile = url.appendingPathComponent("package.json")
-        let xcodeProject = containsDescendant(withExtensions: ["xcodeproj", "xcworkspace"], in: url, maxDepth: 2)
-
-        return fileManager.fileExists(atPath: gitDirectory.path) || fileManager.fileExists(atPath: packageFile.path) || xcodeProject
+        if fileManager.fileExists(atPath: packageFile.path) { return true }
+        return hasXcodeProject()
     }
 
     private func isExistingDirectory(_ url: URL) -> Bool {
         var isDirectory: ObjCBool = false
         return fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
-    }
-
-    private func projectType(for url: URL) -> ProjectType {
-        ProjectType.detect(at: url, fileManager: fileManager) {
-            containsDescendant(withExtensions: ["xcodeproj", "xcworkspace"], in: url, maxDepth: 2)
-        }
     }
 
     private func containsDescendant(withExtensions pathExtensions: Set<String>, in url: URL, maxDepth: Int) -> Bool {
@@ -311,6 +323,11 @@ nonisolated struct ProjectDiscovery {
             guard maxDepth > 0,
                   let resourceValues = try? child.resourceValues(forKeys: [.isDirectoryKey]),
                   resourceValues.isDirectory == true else { continue }
+
+            // Never descend into dependency trees: they can hold thousands of
+            // entries, and an `.xcodeproj` found inside one is never the user's
+            // own project.
+            if child.lastPathComponent == "node_modules" || child.lastPathComponent == "Pods" { continue }
 
             if containsDescendant(withExtensions: pathExtensions, in: child, maxDepth: maxDepth - 1) {
                 return true

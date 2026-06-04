@@ -632,6 +632,12 @@ final class PiAgentNativeBubbleView: NSView, PiAgentNativeRowContent {
     private static let hoverDebug = UserDefaults.standard.bool(forKey: "TranscriptHoverDebug")
 
     private func detectHoverMove(_ phase: String, _ action: () -> Void) {
+        // Fast path: hover is a hot interaction. `action` (setButtonsVisible)
+        // already settles layout, so do nothing else unless the diagnostic is
+        // explicitly enabled. The diagnostic below forces a second synchronous
+        // layout, schedules an async re-check, and writes to disk on the main
+        // thread — none of which belongs on every hover.
+        guard Self.hoverDebug else { action(); return }
         let before = cardView.frame.minX
         action()
         settleLayoutImmediately()
