@@ -222,9 +222,18 @@ final class PiAgentNativeExpandableMarkdown: NSView {
 
         toggle.isHidden = !truncated
         toggle.stringValue = isExpanded ? "Show less" : "Show more"
-        // Only let the toggle define the bottom when it's actually shown.
-        toggleBottomC.isActive = truncated
-        wrapperBottomC.isActive = !truncated
+        // Only let the toggle define the bottom when it's actually shown. Swap the
+        // two bottom pins deactivate-FIRST: activating one while the other is still
+        // active leaves both pinned to self.bottom for an instant, which AppKit
+        // evaluates eagerly as an unsatisfiable system (constraint-conflict storm +
+        // solver thrash that shows up as 100ms+ retiles).
+        if truncated {
+            wrapperBottomC.isActive = false
+            toggleBottomC.isActive = true
+        } else {
+            toggleBottomC.isActive = false
+            wrapperBottomC.isActive = true
+        }
         let toggleH = truncated ? ceil(toggle.intrinsicContentSize.height) + 4 : 0
 
         if isExpanded {
