@@ -123,7 +123,7 @@ struct PiAgentSubagentTranscriptView: View {
                 ForEach(summary.agents) { agent in
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: icon(for: agent.status))
-                            .font(.system(size: 13, weight: .bold))
+                            .font(AppTheme.Font.callout.weight(.bold))
                             .foregroundStyle(color(for: agent.status))
                             .frame(width: 18)
                         VStack(alignment: .leading, spacing: 4) {

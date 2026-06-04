@@ -1491,7 +1491,7 @@ private struct PiAgentFullDiffSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(row.path)
-                    .font(.headline.weight(.semibold))
+                    .font(AppTheme.Font.headline.weight(.semibold))
                     .lineLimit(2)
                     .truncationMode(.middle)
                 Text(row.changeCountText)
@@ -1525,7 +1525,7 @@ struct PiAgentNativeFullDiffSheet: View {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(row.path)
-                        .font(.headline.weight(.semibold))
+                        .font(AppTheme.Font.headline.weight(.semibold))
                         .lineLimit(2)
                         .truncationMode(.middle)
                     Text(row.changeCountText)
@@ -2303,7 +2303,7 @@ struct PiAgentForkOriginCard: View {
                         Text("\u{201C}\(parentTitle)\u{201D}")
                             .fontWeight(.semibold)
                     }
-                    .font(.headline)
+                    .font(AppTheme.Font.headline)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     if let snapshot = transcriptSnapshot, !snapshot.isEmpty {
@@ -2358,7 +2358,7 @@ struct PiAgentSystemPromptAuditCard: View {
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title)
-                        .font(.headline)
+                        .font(AppTheme.Font.headline)
                     HStack(spacing: 6) {
                         if !subtitle.isEmpty {
                             Text(subtitle)
@@ -2433,7 +2433,7 @@ struct PiAgentPromptAuditPopover: View {
                 Image(systemName: "doc.text.magnifyingglass")
                     .foregroundStyle(AppTheme.brandAccent)
                 Text(title)
-                    .font(.headline)
+                    .font(AppTheme.Font.headline)
                 Spacer(minLength: 0)
                 AppCopyIconButton(
                     text: text,
@@ -2467,7 +2467,7 @@ struct PiAgentErrorDetailPopover: View {
                 Image(systemName: "exclamationmark.triangle")
                     .foregroundStyle(AppTheme.roleError)
                 Text(title)
-                    .font(.headline)
+                    .font(AppTheme.Font.headline)
                 Spacer(minLength: 0)
                 AppCopyIconButton(
                     text: text,
@@ -3050,7 +3050,7 @@ private struct AttachmentPreviewPopover: View {
             Image(systemName: icon)
                 .foregroundStyle(AppTheme.brandAccent)
             Text(title)
-                .font(.headline)
+                .font(AppTheme.Font.headline)
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer()
