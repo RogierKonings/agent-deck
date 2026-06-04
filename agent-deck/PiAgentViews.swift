@@ -2436,20 +2436,9 @@ struct PiAgentScreen: View {
                     isThreadQuestion: false
                 ))
             }
-            if let finalSystemPrompt = session.finalSystemPrompt {
-                let sysPromptPayload = NativeSystemPromptPayload.make(title: "Final System Prompt", subtitle: "", prompt: finalSystemPrompt)
-                descriptors.append(PiAgentTranscriptBlockDescriptor(
-                    id: "system-prompt-\(session.id.uuidString)",
-                    view: nil,
-                    kind: .native(.of(PiAgentNativeSystemPromptCardView.self) { view, width in
-                        view.configure(payload: sysPromptPayload, width: width)
-                    }),
-                    baseRevision: finalSystemPrompt.hashValue,
-                    estimatedContentHeight: { _ in 80 },
-                    threadID: nil,
-                    isThreadQuestion: false
-                ))
-            }
+            // The final system prompt is no longer a transcript card — it's a
+            // toolbar button (next to Plan / Session Resources / Transcript Display)
+            // that opens the same text popover. See `piAgentPrimaryToolbarContent`.
             for request in store.supervisorRequests(for: session.id).filter({ $0.status == .pending }) {
                 let supervisorPayload = NativeSupervisorPayload.make(
                     request: request,

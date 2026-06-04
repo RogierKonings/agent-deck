@@ -114,6 +114,20 @@ private struct WindowBackgroundApplier: NSViewRepresentable {
     }
 }
 
+/// SwiftUI wrapper around `PiAgentNativeTextPopoverController` so the System Prompt
+/// toolbar button shows the exact same title + scrollable monospaced text popover the
+/// old transcript "Final System Prompt" card's "View" button used.
+private struct PiAgentTextPopover: NSViewControllerRepresentable {
+    let title: String
+    let text: String
+
+    func makeNSViewController(context: Context) -> PiAgentNativeTextPopoverController {
+        PiAgentNativeTextPopoverController(title: title, text: text)
+    }
+
+    func updateNSViewController(_ controller: PiAgentNativeTextPopoverController, context: Context) {}
+}
+
 final class ScrollerHidingProbe: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -219,6 +233,7 @@ struct ContentView: View {
     @State private var showingPiAgentDeleteAlert = false
     @State private var isPiAgentTranscriptOptionsPresented = false
     @State private var isPiAgentStartupResourcesPresented = false
+    @State private var isPiAgentSystemPromptPresented = false
     @State private var isPiAgentSubagentsPopoverPresented = false
     @State private var navigationColumnVisibility: NavigationSplitViewVisibility = .all
     @State private var agentModelQuickEditor: AgentModelQuickEditorContext?
@@ -1043,6 +1058,22 @@ struct ContentView: View {
                 .help("Choose what appears in the agent transcript")
                 .popover(isPresented: $isPiAgentTranscriptOptionsPresented, arrowEdge: .bottom) {
                     PiAgentTranscriptDisplayOptionsPopover(viewModel: viewModel)
+                }
+
+                Button {
+                    isPiAgentSystemPromptPresented.toggle()
+                } label: {
+                    Label("System Prompt", systemImage: "doc.text.magnifyingglass")
+                }
+                .toolbarNeutralChrome()
+                .help("View the final system prompt sent to the agent")
+                .disabled((viewModel.piAgentSessionStore.selectedSession?.finalSystemPrompt ?? "").isEmpty)
+                .popover(isPresented: $isPiAgentSystemPromptPresented, arrowEdge: .bottom) {
+                    if let prompt = viewModel.piAgentSessionStore.selectedSession?.finalSystemPrompt, !prompt.isEmpty {
+                        // Same text popover the old transcript card's "View" button used.
+                        PiAgentTextPopover(title: "Final System Prompt", text: prompt)
+                            .frame(width: 420, height: 300)
+                    }
                 }
             }
         }
