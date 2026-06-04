@@ -35,11 +35,17 @@ final class TranscriptScrollProfiler {
     static let logger = Logger(subsystem: "streetcoding.agent-deck", category: "ScrollPerf")
     static let signposter = OSSignposter(subsystem: "streetcoding.agent-deck", category: "ScrollPerf")
 
-    /// Master switch. Reads a UserDefaults flag once; defaults ON.
+    /// Master switch. DEBUG builds only (defaults ON, toggleable); release builds
+    /// compile it to a constant `false`, so every `measure*` is a pass-through and
+    /// nothing logs in production.
     static let isEnabled: Bool = {
+        #if DEBUG
         let defaults = UserDefaults.standard
         if defaults.object(forKey: "ScrollPerfEnabled") == nil { return true }
         return defaults.bool(forKey: "ScrollPerfEnabled")
+        #else
+        return false
+        #endif
     }()
 
     // A 60 Hz frame is 16.67 ms. Treat a gap between consecutive user-driven

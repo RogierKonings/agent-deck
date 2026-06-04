@@ -43,13 +43,25 @@ nonisolated final class HangWatchdog: @unchecked Sendable {
 
     /// A frame longer than this (ms) counts as a hang worth capturing. 60fps is
     /// 16.7ms; 150ms is ~9 dropped frames — a clear stall, not normal churn.
-    /// Override with `defaults write streetcoding.agent-deck HangWatchdogThresholdMs -int 50`
-    /// to also catch sustained mid-jank (steady 30fps reads as ~33ms frames).
+    /// Override with `defaults write streetcoding.agent-deck HangWatchdogThresholdMs -int 50`.
     private var threshold: CFTimeInterval = 0.15
     /// How long `sample` profiles once a hang is detected.
     private let sampleSeconds = 2
+    /// A main-thread gap above this (but below the hang threshold) is a "hitch" —
+    /// a dropped-frame stutter, logged app-wide with the active scene. ~33ms ≈ two
+    /// dropped 60fps frames. Override with `HangWatchdogHitchMs`.
+    private var hitchThreshold: CFTimeInterval = 0.033
+    /// Hitches at/above this also fire a throttled external `sample` (sustained
+    /// jank), reusing `captureHitch`.
+    private var hitchCaptureThreshold: CFTimeInterval = 0.045
+    /// The active scene tag, snapshotted from `PerfScene.current` on the heartbeat
+    /// so the background watcher can read it without touching main-thread state.
+    private var scene: String = "app"
 
+    /// Start the app-wide hang + hitch monitor. DEBUG builds only — in release this
+    /// is a no-op so no heartbeat runs, no `sample` is spawned, and nothing logs.
     func start() {
+#if DEBUG
         let defaults = UserDefaults.standard
         if defaults.object(forKey: "HangWatchdogEnabled") != nil,
            defaults.bool(forKey: "HangWatchdogEnabled") == false {
@@ -59,34 +71,48 @@ nonisolated final class HangWatchdog: @unchecked Sendable {
            override.doubleValue >= 16 {
             threshold = override.doubleValue / 1000
         }
+        if let override = defaults.object(forKey: "HangWatchdogHitchMs") as? NSNumber,
+           override.doubleValue >= 16 {
+            hitchThreshold = override.doubleValue / 1000
+        }
         lastBeat = CACurrentMediaTime()
 
-        // Heartbeat on the main runloop — stops the instant the main thread hangs.
-        let t = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
+        // Heartbeat on the main runloop at ~60Hz — stops the instant the main
+        // thread hangs. On each beat, the gap to the previous beat reveals a hang
+        // that just ended OR a hitch (a brief stutter), attributed to the scene.
+        let t = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             guard let self else { return }
+            let now = CACurrentMediaTime()
             self.lock.lock()
-            self.lastBeat = CACurrentMediaTime()
-            if self.hangActive {
-                let hung = (self.lastBeat - self.hangStartBeat) * 1000
-                self.hangActive = false
-                self.lock.unlock()
-                Self.logger.error("HANG ENDED — main thread was blocked ~\(Int(hung))ms")
-            } else {
-                self.lock.unlock()
+            let gap = now - self.lastBeat
+            self.lastBeat = now
+            self.scene = PerfScene.current
+            let endedHang = self.hangActive ? (now - self.hangStartBeat) : nil
+            if self.hangActive { self.hangActive = false }
+            let scene = self.scene
+            self.lock.unlock()
+
+            if let hung = endedHang {
+                Self.logger.error("HANG ENDED — main thread blocked ~\(Int(hung * 1000))ms · scene=\(scene, privacy: .public)")
+            } else if gap > self.hitchThreshold && gap < self.threshold {
+                Self.logger.error("HITCH Δ=\(Int(gap * 1000))ms · scene=\(scene, privacy: .public)")
+                if gap >= self.hitchCaptureThreshold { self.captureHitch(gapMs: Int(gap * 1000)) }
             }
         }
         RunLoop.main.add(t, forMode: .common)
         mainTimer = t
 
-        // Background watcher.
+        // Background watcher — catches a hang *while it's still happening* so the
+        // external sampler grabs the blocked stack.
         let q = DispatchQueue(label: "streetcoding.agent-deck.hangwatchdog", qos: .userInitiated)
         let bg = DispatchSource.makeTimerSource(queue: q)
-        bg.schedule(deadline: .now() + 0.1, repeating: 0.04)
+        bg.schedule(deadline: .now() + 0.1, repeating: 1.0 / 120.0)
         bg.setEventHandler { [weak self] in self?.check() }
         bg.resume()
         bgTimer = bg
 
-        Self.logger.info("HangWatchdog started (threshold \(Int(self.threshold * 1000))ms)")
+        Self.logger.info("HangWatchdog started (hang \(Int(self.threshold * 1000))ms · hitch \(Int(self.hitchThreshold * 1000))ms)")
+#endif
     }
 
     private func check() {
@@ -99,14 +125,15 @@ nonisolated final class HangWatchdog: @unchecked Sendable {
         sampling = true
         sampleIndex += 1
         let index = sampleIndex
+        let scene = self.scene
         lock.unlock()
-        captureSample(index: index, blockedMs: Int(gap * 1000))
+        captureSample(index: index, blockedMs: Int(gap * 1000), scene: scene)
     }
 
-    private func captureSample(index: Int, blockedMs: Int) {
+    private func captureSample(index: Int, blockedMs: Int, scene: String) {
         let pid = ProcessInfo.processInfo.processIdentifier
         let path = "/tmp/agentdeck-hang-\(index).txt"
-        Self.logger.error("HANG detected (~\(blockedMs)ms blocked) — capturing main-thread backtrace → \(path, privacy: .public)")
+        Self.logger.error("HANG detected (~\(blockedMs)ms blocked) · scene=\(scene, privacy: .public) — capturing main-thread backtrace → \(path, privacy: .public)")
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/sample")

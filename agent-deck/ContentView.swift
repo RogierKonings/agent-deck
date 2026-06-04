@@ -297,8 +297,10 @@ struct ContentView: View {
             .frame(minWidth: 240)
             .background(Color.clear, ignoresSafeAreaEdges: .all)
             .navigationSplitViewColumnWidth(min: 240, ideal: 260, max: 320)
+            .perfScene("Sidebar")
         } detail: {
             detailSplitView
+                .perfScene("Detail")
         }
         .frame(minWidth: 1180, minHeight: 700)
         .navigationTitle(toolbarTitle)

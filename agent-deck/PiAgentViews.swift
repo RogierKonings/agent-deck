@@ -2260,6 +2260,7 @@ struct PiAgentScreen: View {
             guard message != nil, transcriptIsPinnedToBottom else { return }
             requestTranscriptBottomScroll()
         }
+        .perfScene("PiAgentTranscript")
     }
 
     private var appKitTranscriptItems: [PiAgentAppKitTranscriptItem] {
