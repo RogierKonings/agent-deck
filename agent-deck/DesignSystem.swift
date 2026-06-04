@@ -421,10 +421,17 @@ struct AppLoadingView: View {
 /// with half-populated views. Fades out (see the call site's `.animation`).
 struct AppInitialLoadOverlay: View {
     var message: String = "Loading workspace…"
-    /// One-shot entrance (planes glide in along their flight path + fade).
+    /// One-shot entrance (icon scales/fades in).
     @State private var entered = false
-    /// Barely-there idle float so the planes feel alive without jittering.
+    /// Barely-there idle float so the splash feels alive without jittering.
     @State private var floating = false
+
+    /// The app icon the user currently has selected (Default vs Alternate), so the
+    /// splash matches their Dock icon. Falls back to the live application icon.
+    private var appIcon: NSImage? {
+        let choice = AppIconChoice.choice(forStoredName: AppSettingsStore.shared.settings.selectedAppIconName)
+        return NSImage(named: choice.assetName) ?? NSApplication.shared.applicationIconImage
+    }
 
     var body: some View {
         ZStack {
@@ -432,20 +439,31 @@ struct AppInitialLoadOverlay: View {
                 .fill(.regularMaterial)
                 .ignoresSafeArea()
 
-            VStack(spacing: 26) {
-                Image("paperplanes")
-                    .resizable()
-                    .interpolation(.high)
-                    .scaledToFit()
-                    .frame(width: 250)
-                    .shadow(color: AppTheme.brandAccent.opacity(0.22), radius: 22, y: 8)
-                    // Idle: a slow, low-amplitude drift along the diagonal — reads as
-                    // a hover, not a bounce.
-                    .offset(x: floating ? 4 : -4, y: floating ? -4 : 3)
-                    .animation(.easeInOut(duration: 2.8).repeatForever(autoreverses: true), value: floating)
-                    // Entrance: glide up the flight path from lower-left + fade in.
-                    .offset(x: entered ? 0 : -34, y: entered ? 0 : 26)
-                    .opacity(entered ? 1 : 0)
+            // The paper-plane swarm, faint, blended into the background as a subtle
+            // decoration drifting behind the icon.
+            Image("paperplanes")
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .frame(width: 620)
+                .opacity(0.07)
+                .offset(x: floating ? 14 : -14, y: floating ? -10 : 10)
+                .animation(.easeInOut(duration: 6).repeatForever(autoreverses: true), value: floating)
+                .allowsHitTesting(false)
+
+            VStack(spacing: 22) {
+                if let appIcon {
+                    Image(nsImage: appIcon)
+                        .resizable()
+                        .interpolation(.high)
+                        .scaledToFit()
+                        .frame(width: 76, height: 76)
+                        .shadow(color: AppTheme.brandAccent.opacity(0.28), radius: 22, y: 8)
+                        .scaleEffect(entered ? 1 : 0.86)
+                        // Gentle idle float, separate from the entrance scale.
+                        .offset(y: floating ? -3 : 3)
+                        .animation(.easeInOut(duration: 2.8).repeatForever(autoreverses: true), value: floating)
+                }
 
                 VStack(spacing: 14) {
                     Text(message)
@@ -454,11 +472,11 @@ struct AppInitialLoadOverlay: View {
                     AppIndeterminateBar()
                         .frame(width: 168)
                 }
-                .opacity(entered ? 1 : 0)
             }
+            .opacity(entered ? 1 : 0)
         }
         .onAppear {
-            withAnimation(.spring(response: 0.7, dampingFraction: 0.82)) { entered = true }
+            withAnimation(.spring(response: 0.6, dampingFraction: 0.82)) { entered = true }
             floating = true
         }
     }
