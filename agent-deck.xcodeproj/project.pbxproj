@@ -226,6 +226,7 @@
 /* Begin PBXShellScriptBuildPhase section */
 		AABBCCDD0000000100000001 /* Inject Sparkle Info.plist keys */ = {
 			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
 			files = (
 			);
@@ -239,7 +240,6 @@
 			shellPath = /bin/zsh;
 			shellScript = "\"${SRCROOT}/scripts/inject-sparkle-info.sh\"\n";
 			showEnvVarsInLog = 0;
-			alwaysOutOfDate = 1;
 		};
 /* End PBXShellScriptBuildPhase section */
 

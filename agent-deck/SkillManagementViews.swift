@@ -195,9 +195,16 @@ struct SkillsScreen: View {
             }
 
             if viewModel.hasCompletedInitialRefresh {
+                // `lazy: true` is load-bearing, not just a perf tweak: a non-lazy
+                // AppPage measures every card up front, so a wide card's horizontal
+                // ideal width leaks up through AppPage's vertical ScrollView and
+                // balloons this detail pane — the HSplitView then sizes to that
+                // oversized ideal and gets centered, sliding the library pane under
+                // the sidebar. The LazyVStack defers measuring off-screen cards.
                 AppPage(
                     selectedWarning?.title ?? skillDetailTitle,
-                    subtitle: selectedWarning?.subtitle ?? skillDetailSubtitle
+                    subtitle: selectedWarning?.subtitle ?? skillDetailSubtitle,
+                    lazy: true
                 ) {
                     skillDetailContent
                 }

@@ -477,7 +477,13 @@ struct PromptsScreen: View {
     }
 
     private func promptDetail(_ prompt: PromptTemplateRecord) -> some View {
-        AppPage(prompt.invocation, subtitle: prompt.description.isEmpty ? nil : prompt.description) {
+        // `lazy: true` is load-bearing, not just a perf tweak: a non-lazy AppPage
+        // is a VStack that measures every card up front, so the wide markdown card's
+        // horizontal ideal width leaks up through AppPage's vertical ScrollView and
+        // balloons this detail pane. The HSplitView then sizes to that oversized
+        // ideal and gets centered, sliding the library pane under the sidebar. The
+        // LazyVStack defers measuring off-screen cards, keeping the pane bounded.
+        AppPage(prompt.invocation, subtitle: prompt.description.isEmpty ? nil : prompt.description, lazy: true) {
             AppCard {
                 promptHeaderEditor(prompt)
 
