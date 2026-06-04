@@ -309,9 +309,11 @@ final class PiAgentNativeStatusRowView: PiAgentNativeCardRowView {
     private let titleLabel = NSTextField(labelWithString: "")
     private let detailLabel = NSTextField(labelWithString: "")
     private let timeLabel = NSTextField(labelWithString: "")
+    private let auditStack = NSStackView()
 
     private var errorPopoverText: String?
     private var errorPopoverTitle: String = ""
+    private var auditActions: [NativeStatusPayload.AuditAction] = []
 
     override func commonSetup() {
         iconView.translatesAutoresizingMaskIntoConstraints = false
@@ -337,10 +339,17 @@ final class PiAgentNativeStatusRowView: PiAgentNativeCardRowView {
         timeLabel.setContentHuggingPriority(.required, for: .horizontal)
         timeLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
+        auditStack.translatesAutoresizingMaskIntoConstraints = false
+        auditStack.orientation = .horizontal
+        auditStack.spacing = 2
+        auditStack.setContentHuggingPriority(.required, for: .horizontal)
+        auditStack.setContentCompressionResistancePriority(.required, for: .horizontal)
+
         cardContent.addSubview(iconView)
         cardContent.addSubview(titleLabel)
         cardContent.addSubview(detailLabel)
         cardContent.addSubview(timeLabel)
+        cardContent.addSubview(auditStack)
 
         NSLayoutConstraint.activate([
             iconView.leadingAnchor.constraint(equalTo: cardContent.leadingAnchor),
@@ -356,8 +365,11 @@ final class PiAgentNativeStatusRowView: PiAgentNativeCardRowView {
             detailLabel.centerYAnchor.constraint(equalTo: cardContent.centerYAnchor),
 
             timeLabel.leadingAnchor.constraint(greaterThanOrEqualTo: detailLabel.trailingAnchor, constant: 8),
-            timeLabel.trailingAnchor.constraint(equalTo: cardContent.trailingAnchor),
             timeLabel.centerYAnchor.constraint(equalTo: cardContent.centerYAnchor),
+
+            auditStack.leadingAnchor.constraint(equalTo: timeLabel.trailingAnchor, constant: 6),
+            auditStack.trailingAnchor.constraint(equalTo: cardContent.trailingAnchor),
+            auditStack.centerYAnchor.constraint(equalTo: cardContent.centerYAnchor),
 
             cardContent.topAnchor.constraint(equalTo: iconView.topAnchor).withPriority(250)
         ])
@@ -374,6 +386,22 @@ final class PiAgentNativeStatusRowView: PiAgentNativeCardRowView {
         timeLabel.stringValue = payload.timeText
         errorPopoverText = payload.errorPopoverText
         errorPopoverTitle = payload.title
+
+        auditActions = payload.auditActions
+        auditStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        for (i, action) in auditActions.enumerated() {
+            let image = NSImage(systemSymbolName: action.symbol, accessibilityDescription: action.help)?
+                .withSymbolConfiguration(.init(pointSize: NativeTranscriptFont.captionSize, weight: .semibold))
+            let btn = NSButton(image: image ?? NSImage(), target: self, action: #selector(auditTapped(_:)))
+            btn.isBordered = false
+            btn.imagePosition = .imageOnly
+            btn.tag = i
+            btn.contentTintColor = AppTheme.ns(AppTheme.mutedText)
+            btn.toolTip = action.help
+            btn.widthAnchor.constraint(equalToConstant: 22).isActive = true
+            btn.heightAnchor.constraint(equalToConstant: 20).isActive = true
+            auditStack.addArrangedSubview(btn)
+        }
 
         let neutral = payload.color
         applyCard(
@@ -399,6 +427,15 @@ final class PiAgentNativeStatusRowView: PiAgentNativeCardRowView {
         popover.contentViewController = PiAgentNativeTextPopoverController(title: errorPopoverTitle, text: text)
         popover.show(relativeTo: cardSurface.bounds, of: cardSurface, preferredEdge: .maxY)
     }
+
+    @objc private func auditTapped(_ sender: NSButton) {
+        guard sender.tag >= 0, sender.tag < auditActions.count else { return }
+        let action = auditActions[sender.tag]
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = PiAgentNativeTextPopoverController(title: action.title, text: action.text())
+        popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .maxY)
+    }
 }
 
 /// Typed payload for a compact status / error row.
@@ -411,6 +448,16 @@ struct NativeStatusPayload {
     var timeText: String
     var copyText: String?
     var errorPopoverText: String?
+    /// Prompt-audit affordances (e.g. "System Prompt Captured" / "Subagent
+    /// Started") — trailing icon buttons that pop over their text.
+    var auditActions: [AuditAction] = []
+
+    struct AuditAction {
+        var symbol: String
+        var help: String
+        var title: String
+        var text: () -> String
+    }
 }
 
 // MARK: - Status divider row (compaction / git events)
@@ -716,8 +763,54 @@ extension NativeStatusPayload {
             detail: detail,
             timeText: entry.timestamp.formatted(date: .omitted, time: .shortened),
             copyText: entry.text,
-            errorPopoverText: showsErrorPopover ? entry.text : nil
+            errorPopoverText: showsErrorPopover ? entry.text : nil,
+            auditActions: promptAuditActions(for: entry)
         )
+    }
+
+    /// Prompt-audit buttons for "System Prompt Captured" / "Subagent Started"
+    /// status entries (mirrors `PiAgentStatusTranscriptRow.promptActions`).
+    private static func promptAuditActions(for entry: PiAgentTranscriptEntry) -> [AuditAction] {
+        if entry.title == "System Prompt Captured", let prompt = capturedSystemPrompt(entry) {
+            return [AuditAction(symbol: "doc.text.magnifyingglass", help: "Show final system prompt captured from Pi runtime",
+                                title: "Final System Prompt", text: { prompt })]
+        }
+        if entry.title == "Subagent Started", let meta = subagentPromptMetadata(entry) {
+            let authored = meta.authored, final = meta.final
+            return [
+                AuditAction(symbol: "doc.text", help: "Show system prompt \(AppBrand.displayName) passed to the child",
+                            title: "\(AppBrand.displayName) Authored System Prompt", text: { promptFileText(path: authored) }),
+                AuditAction(symbol: "doc.text.magnifyingglass", help: "Show system prompt captured from the child Pi runtime",
+                            title: "Final Runtime System Prompt", text: { promptFileText(path: final) })
+            ]
+        }
+        return []
+    }
+
+    private static func capturedSystemPrompt(_ entry: PiAgentTranscriptEntry) -> String? {
+        guard let raw = entry.rawJSON, let data = raw.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        if let prefill = object["prefill"] as? String,
+           let payload = try? JSONSerialization.jsonObject(with: Data(prefill.utf8)) as? [String: Any],
+           let prompt = payload["systemPrompt"] as? String { return prompt }
+        if let dataObject = object["data"] as? [String: Any],
+           let prefill = dataObject["prefill"] as? String,
+           let payload = try? JSONSerialization.jsonObject(with: Data(prefill.utf8)) as? [String: Any],
+           let prompt = payload["systemPrompt"] as? String { return prompt }
+        return object["systemPrompt"] as? String
+    }
+
+    private static func subagentPromptMetadata(_ entry: PiAgentTranscriptEntry) -> (authored: String, final: String)? {
+        guard let raw = entry.rawJSON, let data = raw.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              ["agent_deck_subagent_started", "agent_deck_subagent_card"].contains(object["type"] as? String),
+              let authored = object["authoredSystemPromptPath"] as? String,
+              let final = object["finalSystemPromptPath"] as? String else { return nil }
+        return (authored, final)
+    }
+
+    private static func promptFileText(path: String) -> String {
+        (try? String(contentsOfFile: path, encoding: .utf8)) ?? "Prompt unavailable."
     }
 }
 

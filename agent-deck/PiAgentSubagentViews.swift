@@ -38,11 +38,11 @@ struct PiSubagentSupervisorRequestCard: View {
         AppRowCard {
             VStack(alignment: .leading, spacing: 10) {
                 Label(request.title, systemImage: "questionmark.bubble")
-                    .font(.headline)
+                    .font(AppTheme.Font.headline)
                     .foregroundStyle(.orange)
                 if let interview = structuredInterview {
                     if let intro = interview.prompt ?? interview.message, !intro.isEmpty {
-                        Text(intro).font(.subheadline)
+                        Text(intro).font(AppTheme.Font.subheadline)
                     }
                     ForEach(interview.questions) { question in
                         VStack(alignment: .leading, spacing: 5) {
@@ -60,7 +60,7 @@ struct PiSubagentSupervisorRequestCard: View {
                     }
                 } else {
                     Text(request.message)
-                        .font(.subheadline)
+                        .font(AppTheme.Font.subheadline)
                     TextEditor(text: $response)
                         .frame(minHeight: 76)
                         .padding(6)
@@ -212,7 +212,7 @@ struct PiNativeSubagentRunCard: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 7) {
                     Text(run.agentName)
-                        .font(.headline)
+                        .font(AppTheme.Font.headline)
                     Text(shortRunID)
                         .font(AppTheme.Font.code.weight(.medium))
                         .foregroundStyle(AppTheme.mutedText)
@@ -236,7 +236,7 @@ struct PiNativeSubagentRunCard: View {
     private func parallelHeader(children: [PiSubagentChildRecord]) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text("Parallel agents")
-                .font(.headline)
+                .font(AppTheme.Font.headline)
             Text("\(children.count)")
                 .font(AppTheme.Font.caption2.monospaced().weight(.bold))
                 .foregroundStyle(AppTheme.mutedText)
@@ -330,7 +330,7 @@ struct PiNativeSubagentRunCard: View {
     private var detailsPopover: some View {
         VStack(alignment: .leading, spacing: 12) {
             Label("Run details", systemImage: "info.circle")
-                .font(.headline)
+                .font(AppTheme.Font.headline)
 
             AppKeyValueList(rows: detailRows)
 
@@ -479,7 +479,7 @@ struct PiNativeSubagentRunCard: View {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(alignment: .firstTextBaseline, spacing: 7) {
                         Text(child.agentName)
-                            .font(.headline)
+                            .font(AppTheme.Font.headline)
                             .lineLimit(1)
                             .layoutPriority(1)
                         if let outcome = child.expectedOutcome {
@@ -835,7 +835,7 @@ struct PiNativeSubagentGraphSheet: View {
                 HStack(spacing: 8) {
                     Circle().fill(color(for: child.status)).frame(width: 9, height: 9)
                     Text("\(child.index + 1). \(child.agentName)")
-                        .font(.headline)
+                        .font(AppTheme.Font.headline)
                     AppLabelTag(text: child.status.rawValue, color: color(for: child.status))
                     Spacer()
                     if child.status.isActive {
@@ -1093,7 +1093,7 @@ struct PiNativeSubagentRunSheet: View {
             if let selectedInfo {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(selectedInfo.description.isEmpty ? "No description" : selectedInfo.description)
-                        .font(.subheadline)
+                        .font(AppTheme.Font.subheadline)
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 6) {
                         subagentInfoLine("Model", selectedInfo.model ?? "Default")
                         subagentInfoLine("Thinking", selectedInfo.thinking ?? "Default")
@@ -1114,7 +1114,7 @@ struct PiNativeSubagentRunSheet: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Task")
-                    .font(.headline)
+                    .font(AppTheme.Font.headline)
                 TextEditor(text: $task)
                     .font(AppTheme.Font.body)
                     .frame(minHeight: 140)
@@ -1125,7 +1125,7 @@ struct PiNativeSubagentRunSheet: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 Label("Files to read first", systemImage: "doc.text.magnifyingglass")
-                    .font(.subheadline.weight(.semibold))
+                    .font(AppTheme.Font.subheadline.weight(.semibold))
                 HStack(alignment: .top, spacing: 8) {
                     AppTextField(text: $readFirstPathsText, placeholder: "Optional project-relative paths, comma or newline separated", axis: .vertical)
                         .lineLimit(1...4)
@@ -1184,7 +1184,7 @@ struct PiNativeSubagentRunSheet: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 Label("Deck agent run", systemImage: "checkmark.seal")
-                    .font(.subheadline.weight(.semibold))
+                    .font(AppTheme.Font.subheadline.weight(.semibold))
                 Text("\(AppBrand.displayName) starts and tracks the child session directly, records artifacts under Application Support, and posts a status/result entry back to the parent transcript.")
                     .font(AppTheme.Font.caption)
                     .foregroundStyle(.secondary)

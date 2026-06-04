@@ -847,7 +847,7 @@ private struct PiAgentIssuePickerPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Attach GitHub Issue")
-                .font(.headline)
+                .font(AppTheme.Font.headline)
 
             AppTextField(text: $query, placeholder: "Search visible issues")
 
@@ -1285,7 +1285,7 @@ private struct PiAgentComposerProjectPickerPopover: View {
         VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("New Session")
-                    .font(.headline)
+                    .font(AppTheme.Font.headline)
                 Text("Choose a project for Pi Agent.")
                     .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
@@ -1625,7 +1625,7 @@ struct PiAgentContextBreakdownPopover: View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 5) {
                 Text("Context usage")
-                    .font(.headline.weight(.semibold))
+                    .font(AppTheme.Font.headline.weight(.semibold))
                 if let tokens = session.contextTokens, let window = session.contextWindow {
                     HStack(spacing: 4) {
                         Image(systemName: "tugriksign.circle")

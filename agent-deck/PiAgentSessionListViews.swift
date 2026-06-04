@@ -182,7 +182,7 @@ private struct PiAgentProjectPickerPopover: View {
         VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("New Session")
-                    .font(.headline)
+                    .font(AppTheme.Font.headline)
                 Text("Choose a project for Pi Agent.")
                     .font(AppTheme.Font.caption)
                     .foregroundStyle(AppTheme.mutedText)
@@ -203,12 +203,12 @@ private struct PiAgentProjectPickerPopover: View {
                                 VStack(alignment: .leading, spacing: 1) {
                                     HStack(spacing: 6) {
                                         Text(project.repositoryDisplayName)
-                                            .font(.callout.weight(.semibold))
+                                            .font(AppTheme.Font.callout.weight(.semibold))
                                             .foregroundStyle(.primary)
                                             .lineLimit(1)
                                         if project.id == selectedProject?.id {
                                             Text("Current")
-                                                .font(.caption2.weight(.semibold))
+                                                .font(AppTheme.Font.caption2.weight(.semibold))
                                                 .foregroundStyle(AppTheme.brandAccent)
                                                 .padding(.horizontal, 5)
                                                 .padding(.vertical, 2)
@@ -277,7 +277,7 @@ struct PiAgentSessionRow: View {
             if session.isAgentBound, let agentName = session.agentName, !agentName.isEmpty {
                 HStack(spacing: 6) {
                     Image(systemName: "paperplane")
-                        .font(.caption2.weight(.semibold))
+                        .font(AppTheme.Font.caption2.weight(.semibold))
                         .frame(width: 11, alignment: .center)
                     Text(agentName)
                         .lineLimit(1)
@@ -305,7 +305,7 @@ struct PiAgentSessionRow: View {
             if let branch = session.branchName, !branch.isEmpty {
                 HStack(spacing: 6) {
                     Image("branch")
-                        .font(.caption2.weight(.semibold))
+                        .font(AppTheme.Font.caption2.weight(.semibold))
                         .frame(width: 11, alignment: .center)
                     Text(piAgentSessionDisplayBranchName(branch))
                         .lineLimit(1)
@@ -419,7 +419,7 @@ struct PiAgentSessionRow: View {
     private var deleteButton: some View {
         Button(action: onDelete) {
             Image(systemName: "trash")
-                .font(.caption.weight(.semibold))
+                .font(AppTheme.Font.caption.weight(.semibold))
         }
         .appSmallSecondaryButton()
         .help("Delete session")
@@ -549,7 +549,7 @@ private struct SessionGitActivityStrip: View {
     private func pip(kind: PiAgentGitEventKind, date: Date?, verb: String) -> some View {
         if let date {
             icon(for: kind)
-                .font(.caption2.weight(.semibold))
+                .font(AppTheme.Font.caption2.weight(.semibold))
                 .foregroundStyle(isSelected ? AppTheme.brandAccent : AppTheme.mutedText)
                 .help("Last \(verb) at \(date.formatted(date: .omitted, time: .shortened))")
         }
@@ -681,7 +681,7 @@ struct PiAgentProcessingIndicatorBar: View {
                     .foregroundStyle(AppTheme.piLogo.gradient)
                     .frame(width: 14, height: 14)
                 Text(message)
-                    .font(.callout.weight(.semibold))
+                    .font(AppTheme.Font.callout.weight(.semibold))
                     .foregroundStyle(AppTheme.mutedText)
                     .lineLimit(1)
                     .truncationMode(.tail)

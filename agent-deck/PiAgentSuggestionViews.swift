@@ -570,7 +570,7 @@ struct PiAgentUIRequestSheet: View {
         )
         .padding(22)
         .frame(minWidth: 560, idealWidth: 680, maxWidth: 760, alignment: .topLeading)
-        .appGlassPanel(cornerRadius: 22)
+        .appGlassPanel(cornerRadius: AppTheme.Chat.glassPanelCornerRadius)
         .presentationSizing(.fitted)
         .presentationBackground(.clear)
     }
@@ -626,10 +626,10 @@ struct PiAgentUIRequestCard: View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Image(systemName: "questionmark.bubble.fill")
                 .foregroundStyle(AppTheme.brandAccent)
-                .font(.headline)
+                .font(AppTheme.Font.headline)
             VStack(alignment: .leading, spacing: 4) {
                 Text(request.title)
-                    .font(.headline)
+                    .font(AppTheme.Font.headline)
                     .fontWidth(.expanded)
                 if let message = request.message, !message.isEmpty, message != request.title {
                     Text(message)

@@ -23,6 +23,7 @@ enum AppTheme {
     // styles directly — those contexts have native control sizing that already
     // reads well.
     enum Font {
+        static let titleSize: CGFloat = 20
         static let headlineSize: CGFloat = 14
         static let subheadlineSize: CGFloat = 13
         static let bodySize: CGFloat = 14
@@ -33,6 +34,7 @@ enum AppTheme {
         static let codeSize: CGFloat = 13
         static let smallLabelSize: CGFloat = 9
 
+        static let title = SwiftUI.Font.system(size: titleSize)
         static let headline = SwiftUI.Font.system(size: headlineSize, weight: .semibold)
         static let subheadline = SwiftUI.Font.system(size: subheadlineSize)
         static let body = SwiftUI.Font.system(size: bodySize)

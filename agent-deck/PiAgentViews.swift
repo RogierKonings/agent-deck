@@ -2801,7 +2801,8 @@ struct PiAgentScreen: View {
                     view.configure(payload: payload, width: width)
                 })
             }
-            if entry.title == "System Prompt Captured" || entry.title == "Subagent Started" { return nil }
+            // "System Prompt Captured" / "Subagent Started" render as a native
+            // status row with prompt-audit buttons (computed in make(for:)).
             if entry.isDividerStatus {
                 let payload = NativeDividerPayload.make(for: entry)
                 return .native(.of(PiAgentNativeStatusDividerView.self) { view, width in
@@ -3044,7 +3045,7 @@ struct PiAgentScreen: View {
                     .controlSize(.small)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Loading transcript")
-                        .font(.headline)
+                        .font(AppTheme.Font.headline)
                     Text("Restoring the selected chat from disk.")
                         .foregroundStyle(AppTheme.mutedText)
                 }
@@ -3061,7 +3062,7 @@ struct PiAgentScreen: View {
                     .foregroundStyle(AppTheme.mutedText)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("No transcript yet")
-                        .font(.headline)
+                        .font(AppTheme.Font.headline)
                     Text("Send a message below to launch Pi Agent for this session.")
                         .foregroundStyle(AppTheme.mutedText)
                 }

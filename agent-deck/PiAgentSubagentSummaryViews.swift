@@ -102,10 +102,10 @@ struct PiAgentSubagentTranscriptView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
                 Label("Deck agent run", systemImage: "person.2.wave.2")
-                    .font(.headline)
+                    .font(AppTheme.Font.headline)
                     .foregroundStyle(.cyan)
                 Text(title)
-                    .font(.headline.weight(.semibold))
+                    .font(AppTheme.Font.headline.weight(.semibold))
                 Spacer()
                 if summary.running > 0 {
                     AppSpinner()

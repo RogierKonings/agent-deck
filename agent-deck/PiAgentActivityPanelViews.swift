@@ -112,7 +112,7 @@ struct PiAgentActivityPanel: View {
                 .background(Circle().fill(AppTheme.contentFill).stroke(AppTheme.contentStroke, lineWidth: 1))
             VStack(alignment: .leading, spacing: 2) {
                 Text("Activity")
-                    .font(.headline.weight(.semibold))
+                    .font(AppTheme.Font.headline.weight(.semibold))
                 if let subtitle {
                     Text(subtitle)
                         .font(AppTheme.Font.caption)
@@ -207,10 +207,10 @@ struct PiAgentActivityPanel: View {
     private func compactEmptyState(title: String, message: String, icon: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Image(systemName: icon)
-                .font(.system(size: 20, weight: .semibold))
+                .font(AppTheme.Font.title.weight(.semibold))
                 .foregroundStyle(AppTheme.mutedText)
             Text(title)
-                .font(.headline.weight(.semibold))
+                .font(AppTheme.Font.headline.weight(.semibold))
             Text(message)
                 .font(AppTheme.Font.callout)
                 .foregroundStyle(AppTheme.mutedText)
@@ -268,7 +268,7 @@ struct PiAgentCurrentPlanCard: View {
                     .background(Circle().fill(AppTheme.brandAccent.opacity(0.13)))
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(title)
-                        .font(.callout.weight(.semibold))
+                        .font(AppTheme.Font.callout.weight(.semibold))
                         .foregroundStyle(.primary)
                     Text(subtitle)
                         .font(isSubtitleIdentifier ? AppTheme.Font.code.weight(.medium) : AppTheme.Font.caption2.weight(.medium))

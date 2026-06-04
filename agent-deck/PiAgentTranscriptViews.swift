@@ -3097,7 +3097,7 @@ private struct AttachmentPreviewPopover: View {
         VStack(alignment: .leading, spacing: 8) {
             if let description = use.skill?.description, !description.isEmpty {
                 Text(description)
-                    .font(.subheadline)
+                    .font(AppTheme.Font.subheadline)
                     .foregroundStyle(.secondary)
             }
             ScrollView(showsIndicators: false) {
@@ -3117,7 +3117,7 @@ private struct AttachmentPreviewPopover: View {
     private func commandPreviewBody(use: CommandUseAttachment) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Command invocation sent to Pi.")
-                .font(.subheadline)
+                .font(AppTheme.Font.subheadline)
                 .foregroundStyle(.secondary)
             Text("/\(use.name)")
                 .font(AppTheme.Font.code)
