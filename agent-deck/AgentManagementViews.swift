@@ -59,7 +59,7 @@ struct AgentsScreen: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            HSplitView {
+            SplitView {
                 if viewModel.hasCompletedInitialRefresh {
                     AgentLibraryPane(
                         viewModel: viewModel,
@@ -68,17 +68,14 @@ struct AgentsScreen: View {
                             agentBeingEdited = AgentEditPresentation(agent: agent, initialTab: .config)
                         }
                     )
-                    .frame(minWidth: 430, idealWidth: 520, maxWidth: 640)
                     .appDebugLayout("Agents.libraryPane", logger: Self.layoutLog)
                 } else {
                     AppLoadingView("Loading agents…")
-                        .frame(minWidth: 430, idealWidth: 520, maxWidth: 640)
                         .appDebugLayout("Agents.libraryLoading", logger: Self.layoutLog)
                 }
-
+            } detail: {
                 if !viewModel.hasCompletedInitialRefresh {
                     AppLoadingView("Loading agent details…")
-                        .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
                         .appDebugLayout("Agents.detailLoading", logger: Self.layoutLog)
                 } else if let agent = viewModel.selectedAgent {
                     AgentDetailView(
@@ -125,11 +122,6 @@ struct AgentsScreen: View {
                         autoGenerateAvatarPrompts: viewModel.appSettings.autoGenerateAgentAvatarPrompts,
                         generateAvatarPrompt: { try await viewModel.generateAgentAvatarPrompt(for: $0) }
                     )
-                    // Make the detail pane consume the HSplitView slot after the
-                    // library pane seeds the divider. AppPage uses lazy content to keep
-                    // expensive markdown/cards from driving the split's fitting width.
-                    .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
-                    .layoutPriority(1)
                     .appDebugLayout("Agents.detail selected=\(agent.name)", logger: Self.layoutLog)
                 } else {
                     ContentUnavailableView("No Agent Selected", systemImage: "sparkles.rectangle.stack")

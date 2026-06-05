@@ -112,7 +112,7 @@ struct PiAgentStartupResourcesPopover: View {
                         resourceSection("Environment", icon: "key", color: .green, items: envItems, columns: 1)
                         resourceSection("Agents", icon: "paperplane", color: .teal, items: agentItems, columns: 1, showsDetails: true)
                         resourceSection("Skills", icon: "wand.and.stars", color: AppTheme.assistantAccent, items: skillItems, columns: 1)
-                        resourceSection("Prompts", icon: "text.badge.star", color: .indigo, items: promptItems, columns: 1)
+                        resourceSection("Prompts", icon: AppSymbols.promptTemplate, color: .indigo, items: promptItems, columns: 1)
                     }
                 }
                 .padding(14)

@@ -438,7 +438,7 @@ struct PiAgentSlashSuggestions: View {
     private func icon(for kind: SlashItemKind) -> String {
         switch kind {
         case .command: return "terminal"
-        case .prompt: return "text.bubble"
+        case .prompt: return AppSymbols.promptTemplate
         case .skill: return "sparkles"
         }
     }
@@ -482,7 +482,7 @@ struct PiAgentSlashSelectionChip: View {
     private var icon: String {
         switch item.kind {
         case .command: return "terminal"
-        case .prompt: return "text.bubble"
+        case .prompt: return AppSymbols.promptTemplate
         case .skill: return "sparkles"
         }
     }

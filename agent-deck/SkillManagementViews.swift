@@ -183,27 +183,20 @@ struct SkillsScreen: View {
     }
 
     private var skillsScreenCore: some View {
-        HSplitView {
+        SplitView {
             if viewModel.hasCompletedInitialRefresh {
                 skillLibraryContent
-                    .frame(minWidth: 430, idealWidth: 520, maxWidth: 640)
                     .appDebugLayout("Skills.libraryPane", logger: Self.layoutLog)
             } else {
                 AppLoadingView("Loading skills…")
-                    .frame(minWidth: 430, idealWidth: 520, maxWidth: 640)
                     .appDebugLayout("Skills.libraryLoading", logger: Self.layoutLog)
             }
-
+        } detail: {
             if viewModel.hasCompletedInitialRefresh {
-                // Two layout contracts for this detail pane:
-                //
-                // • `lazy: true` — AppPage wraps cards in a vertical ScrollView; a
-                //   plain VStack measures every card up front, so a wide one reports
-                //   a ~1500pt ideal width that balloons this pane. A LazyVStack only
-                //   sums on-screen cards, bounding that ideal.
-                //
-                // • No `idealWidth` on the detail frame — the library pane seeds the
-                //   divider; layout priority makes this pane consume the remaining slot.
+                // `lazy: true` — AppPage wraps cards in a vertical ScrollView; a plain
+                // VStack measures every card up front, so a wide one reports a ~1500pt
+                // ideal width that balloons this pane. A LazyVStack only sums on-screen
+                // cards, bounding that ideal.
                 AppPage(
                     selectedWarning?.title ?? skillDetailTitle,
                     subtitle: selectedWarning?.subtitle ?? skillDetailSubtitle,
@@ -211,13 +204,9 @@ struct SkillsScreen: View {
                 ) {
                     skillDetailContent
                 }
-                .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
-                .layoutPriority(1)
                 .appDebugLayout("Skills.detail selected=\(selectedSkill?.name ?? selectedWarning?.title ?? "nil")", logger: Self.layoutLog)
             } else {
                 AppLoadingView("Loading skill details…")
-                    .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
-                    .layoutPriority(1)
                     .appDebugLayout("Skills.detailLoading", logger: Self.layoutLog)
             }
         }
