@@ -1653,6 +1653,22 @@ final class PiAgentRunnerService {
                 // entry id (updates the in-memory streamed entry in place, so no
                 // duplicate).
                 store.upsert(.init(id: assistantEntryID, sessionID: sessionID, role: .assistant, title: "Assistant", text: streamedText, rawJSON: nil))
+            } else if let errorText = assistantErrorMessage(from: message) {
+                // Pi aborted the turn (provider/auth failure, etc.). The final
+                // assistant message carries stopReason:"error" + errorMessage with
+                // empty content, and Pi emits no separate `error` RPC event — without
+                // this branch the empty turn-start placeholder is all that survives and
+                // the failure is invisible. Convert the placeholder in place into an
+                // error entry so the transcript shows what went wrong.
+                //
+                // Pi can deliver the same final message on message_end, turn_end AND
+                // agent_end; the first run nils out the assistant entry id, so without
+                // this dedup each subsequent run appends another identical error row.
+                guard !recentErrorEntryExists(with: errorText, sessionID: sessionID) else {
+                    scheduleIdleConfirmation(sessionID: sessionID)
+                    return
+                }
+                store.upsert(.init(id: assistantEntryID, sessionID: sessionID, role: .error, title: "Model Error", text: errorText, rawJSON: rawLine))
             } else {
                 let thinkingText = extractAssistantThinking(from: message)
                 if !thinkingText.isEmpty {
@@ -1685,6 +1701,13 @@ final class PiAgentRunnerService {
             .reversed()
             .prefix(8)
             .contains { $0.role == .assistant && $0.text == text }
+    }
+
+    private func recentErrorEntryExists(with text: String, sessionID: UUID) -> Bool {
+        store.transcript(for: sessionID)
+            .reversed()
+            .prefix(8)
+            .contains { $0.role == .error && $0.text == text }
     }
 
     private func finalAssistantMessage(from event: PiAgentRPCEvent) -> JSONValue? {
@@ -2225,6 +2248,21 @@ final class PiAgentRunnerService {
             }
         }
         return message["output"]?.stringValue ?? ""
+    }
+
+    /// The model/provider error carried on a final assistant message that
+    /// produced no text. Pi puts the failure on the message itself
+    /// (`stopReason: "error"` + `errorMessage`) rather than emitting a separate
+    /// `error` RPC event, so this is the only place a fatal turn error surfaces.
+    private func assistantErrorMessage(from message: JSONValue) -> String? {
+        if let raw = message["errorMessage"]?.stringValue {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        if message["stopReason"]?.stringValue == "error" {
+            return "The model provider returned an error."
+        }
+        return nil
     }
 
     private func extractAssistantThinking(from message: JSONValue) -> String {

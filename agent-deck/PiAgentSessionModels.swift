@@ -1169,6 +1169,17 @@ struct PiAgentTranscriptEntry: Identifiable, Codable, Hashable {
     }
 }
 
+extension PiAgentTranscriptEntry {
+    /// A per-tool failure (titled `Tool: <name>`). Frequent and tied to a tool
+    /// call, so it renders as a compact grouped row and honors the Errors toggle.
+    var isToolError: Bool { role == .error && title.hasPrefix("Tool: ") }
+
+    /// A fatal turn/model/provider error — Pi aborted the turn and produced no
+    /// output. Rendered as a prominent card and always shown (even when the
+    /// Errors toggle is off) so a turn that did nothing is never silent.
+    var isModelError: Bool { role == .error && !isToolError }
+}
+
 /// Single source of truth for the four divider-style git events that the
 /// toolbar appends to a session transcript. Keeps `isDividerStatus`, the
 /// transcript filter, and the divider icon table in sync via one type.

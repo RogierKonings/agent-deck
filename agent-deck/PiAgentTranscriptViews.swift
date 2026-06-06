@@ -1057,7 +1057,10 @@ struct PiAgentTranscriptThreadCard: View {
                 statusRowView(entry)
             }
         case .error(let entry):
-            if visibility.showErrors {
+            // Fatal turn/model/provider errors always render (even with the Errors
+            // toggle off) so a turn that produced no output is never silent; tool
+            // errors keep honoring the toggle.
+            if entry.isModelError || visibility.showErrors {
                 PiAgentStatusTranscriptRow(entry: entry)
                     .id(entry.id)
             }
@@ -1151,7 +1154,7 @@ struct PiAgentTranscriptThreadCard: View {
         thread.children.filter { child in
             switch child {
             case .thinking: return visibility.showThinking
-            case .error: return visibility.showErrors
+            case .error(let entry): return entry.isModelError || visibility.showErrors
             case .status(let entry):
                 return shouldShowStatusEntry(entry, visibility: visibility, nativeSubagentRunsByID: nativeSubagentRunsByID)
             case .steering, .assistant, .toolGroup, .retry: return true
