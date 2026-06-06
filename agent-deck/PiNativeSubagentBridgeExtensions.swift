@@ -4,6 +4,87 @@ struct PiNativeSubagentBridgeExtensions {
     nonisolated static let exaToolNames: Set<String> = ["web_search", "fetch_content", "get_search_content"]
     nonisolated static let fallbackWebFetchToolName = "web_fetch"
     nonisolated static let memoryToolNames: [String] = ["agent_deck_memory_write", "agent_deck_memory_mark_stale"]
+    nonisolated static let askUserToolName = "ask_user"
+    nonisolated static let parentSubagentToolNames: Set<String> = [
+        "managed_subagent",
+        "managed_parallel",
+        "list_supervisor_requests",
+        "set_session_plan",
+        "update_session_plan",
+        "answer_supervisor_request"
+    ]
+    nonisolated static let childSupervisorToolName = "contact_supervisor"
+
+    /// Every tool name Agent Deck may register through its built-in bridge extensions.
+    /// Used to detect potential conflicts with user-supplied Pi extensions. Some bridges
+    /// are conditional per launch (memory, web/exa, Deck agents, child supervisor), so
+    /// callers should present overlaps as a *potential* conflict rather than a certain shadow.
+    nonisolated static let allBridgeToolNames: Set<String> = {
+        var names = exaToolNames
+        names.insert(fallbackWebFetchToolName)
+        names.formUnion(memoryToolNames)
+        names.insert(askUserToolName)
+        names.formUnion(parentSubagentToolNames)
+        names.insert(childSupervisorToolName)
+        return names
+    }()
+
+    /// User-facing description of a built-in Agent Deck bridge for the read-only
+    /// "Agent Deck bridges" list in the Extensions screen. `condition == nil` means
+    /// the bridge always loads; otherwise it explains when it loads.
+    nonisolated struct BridgeDescriptor: Identifiable, Hashable, Sendable {
+        let id: String
+        let displayName: String
+        let toolNames: [String]
+        let condition: String?
+    }
+
+    /// The bridges Agent Deck may load into a parent Pi session, in display order.
+    /// These always register before any user-selected extension, so they take
+    /// precedence on tool-name conflicts.
+    nonisolated static let bridgeDescriptors: [BridgeDescriptor] = [
+        BridgeDescriptor(id: "ask_user", displayName: "Ask User", toolNames: [askUserToolName], condition: nil),
+        BridgeDescriptor(id: "web_exa", displayName: "Web search (Exa)", toolNames: exaToolNames.sorted(), condition: "Requires an Exa API key"),
+        BridgeDescriptor(id: "web_fetch", displayName: "Web fetch", toolNames: [fallbackWebFetchToolName], condition: "When no Exa key is set and web fetch is available"),
+        BridgeDescriptor(id: "memory", displayName: "Memory", toolNames: memoryToolNames, condition: "When memory is enabled"),
+        BridgeDescriptor(id: "deck_agents", displayName: "Deck agents", toolNames: parentSubagentToolNames.sorted(), condition: "When Deck agents are enabled")
+    ]
+
+    /// A bridge that actually loaded for a specific launch, for display in the
+    /// Session resources popover.
+    nonisolated struct InjectedBridge: Identifiable, Hashable, Sendable {
+        let id: String
+        let displayName: String
+        let toolNames: [String]
+    }
+
+    /// The Agent Deck bridges injected into a PARENT Pi session, evaluated against
+    /// the same runtime conditions as `PiAgentRunnerService.startSession(...)`.
+    /// Keep this in sync with that launch path. Only user-meaningful, tool-bearing
+    /// bridges are listed (the system-prompt audit and OpenAI-fast bridges register
+    /// no model-facing tools and are intentionally omitted).
+    nonisolated static func injectedParentBridges(
+        memoryEnabled: Bool,
+        exaConfigured: Bool,
+        fallbackWebFetchAvailable: Bool,
+        subagentsActive: Bool
+    ) -> [InjectedBridge] {
+        var bridges: [InjectedBridge] = [
+            InjectedBridge(id: "ask_user", displayName: "Ask User", toolNames: [askUserToolName])
+        ]
+        if memoryEnabled {
+            bridges.append(InjectedBridge(id: "memory", displayName: "Memory", toolNames: memoryToolNames))
+        }
+        if subagentsActive {
+            bridges.append(InjectedBridge(id: "deck_agents", displayName: "Deck agents", toolNames: parentSubagentToolNames.sorted()))
+        }
+        if exaConfigured {
+            bridges.append(InjectedBridge(id: "web_exa", displayName: "Web search (Exa)", toolNames: exaToolNames.sorted()))
+        } else if fallbackWebFetchAvailable {
+            bridges.append(InjectedBridge(id: "web_fetch", displayName: "Web fetch", toolNames: [fallbackWebFetchToolName]))
+        }
+        return bridges
+    }
 
     static func isExaConfigured(environment: [String: String]) -> Bool {
         environment["EXA_API_KEY"]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false

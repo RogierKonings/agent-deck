@@ -5,6 +5,10 @@ nonisolated final class PiAgentProcess: @unchecked Sendable {
         var arguments: [String]
         var currentDirectoryURL: URL
         var environment: [String: String] = [:]
+        /// Executable to launch. When `nil`, the `pi` binary is resolved. Set
+        /// it to run a different tool (e.g. `node` for the OAuth login bridge)
+        /// over the same streaming stdin/stdout plumbing.
+        var executableURL: URL? = nil
     }
 
     enum ProcessError: LocalizedError {
@@ -35,7 +39,7 @@ nonisolated final class PiAgentProcess: @unchecked Sendable {
     private var didCleanupIO = false
 
     init(configuration: Configuration, onStdoutLines: @escaping @Sendable ([String]) -> Void, onStderrLines: @escaping @Sendable ([String]) -> Void, onTermination: @escaping @Sendable (Int32) -> Void) throws {
-        let executable = try Self.resolvePiExecutable()
+        let executable = try configuration.executableURL ?? Self.resolvePiExecutable()
         let process = Process()
         process.executableURL = executable
         process.arguments = configuration.arguments

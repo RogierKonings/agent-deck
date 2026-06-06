@@ -531,15 +531,12 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         scrollView.documentView = tableView
         scrollView.contentView.postsBoundsChangedNotifications = true
         scrollView.postsFrameChangedNotifications = true
-        // Inset the resting content just into the tail of the top edge fade so
-        // the first row — the shortcuts strip, or the earliest message — lands
-        // where the gradient has already gone (near-)opaque, instead of half-
-        // dissolved into it. A touch less than the full 28pt fade height keeps
-        // the row snug to the fade's end with no dead gap. Content still fades
-        // normally as it scrolls up under the toolbar; a top inset leaves the
-        // bottom-pinning math (documentHeight − clipHeight) untouched.
+        // Keep AppKit insets at zero. The top fade compensation is a real table
+        // spacer row, so the first visible row starts in the same precise place
+        // on the initial layout, before any scroll event reconciles NSScrollView
+        // contentInsets.
         scrollView.automaticallyAdjustsContentInsets = false
-        scrollView.contentInsets = NSEdgeInsets(top: 18, left: 0, bottom: 0, right: 0)
+        scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
 
         context.coordinator.scrollView = scrollView
         context.coordinator.tableView = tableView
@@ -2048,6 +2045,7 @@ struct PiAgentScreen: View {
             // runs after Task.yield.
             store.requestSelectedTranscriptLoad()
             requestSelectedTranscriptLoadAfterViewUpdate()
+            viewModel.rehydratePiAgentTranscriptIfNeeded(store.selectedSession?.id)
             updateStabilizedProcessingMessage(selectedSessionProcessingMessage)
             Task { @MainActor in
                 await Task.yield()
@@ -2091,6 +2089,7 @@ struct PiAgentScreen: View {
             isEarlierTranscriptSheetPresented = false
             syncRuntimeFooterSnapshot()
             requestSelectedTranscriptLoadAfterViewUpdate()
+            viewModel.rehydratePiAgentTranscriptIfNeeded(newID)
             Task { @MainActor in
                 await Task.yield()
                 scheduleTranscriptCacheUpdate()
@@ -2717,6 +2716,20 @@ struct PiAgentScreen: View {
             }
         }
 
+        // Match the old NSScrollView top inset as an actual row so new/small
+        // transcripts do not start inside the SwiftUI top fade before scrolling.
+        // Insert after the inter-row gap pass so this adds exactly 18pt and no
+        // extra row spacing before the shortcuts/first message.
+        descriptors.insert(PiAgentTranscriptBlockDescriptor(
+            id: "pi-agent-top-fade-spacer",
+            view: nil,
+            kind: .native(.of(PiAgentNativeSpacerView.self) { view, _ in view.spacerHeight = 18 }),
+            baseRevision: 0,
+            estimatedContentHeight: { _ in 18 },
+            threadID: nil,
+            isThreadQuestion: false
+        ), at: 0)
+
         // --- Materialize: fold insets into the revision (so an inset change
         // re-tiles the row) and into the height estimate. ---
         return descriptors.map { descriptor in
@@ -2936,6 +2949,14 @@ struct PiAgentScreen: View {
                 view.configure(payload: payload, width: width)
             })
         case .error(let entry):
+            // Fatal model/provider errors get the richer error row (headline +
+            // collapsible italic detail); per-tool failures keep the compact row.
+            if entry.isModelError {
+                let payload = NativeErrorPayload.make(for: entry)
+                return .native(.of(PiAgentNativeErrorRowView.self) { view, width in
+                    view.configure(payload: payload, width: width)
+                })
+            }
             let payload = NativeStatusPayload.make(for: entry)
             return .native(.of(PiAgentNativeStatusRowView.self) { view, width in
                 view.configure(payload: payload, width: width)

@@ -2338,6 +2338,16 @@ final class AppViewModel: NSObject {
         acknowledgePiAgentSession(id)
     }
 
+    /// Repairs a session's transcript from Pi's session file when it becomes the
+    /// visible session — on click, on keyboard nav, and on the selection restored
+    /// at launch. Cheap and self-guarding (once per session, only when there's
+    /// something missing), so it's safe to call from view appear/selection hooks.
+    func rehydratePiAgentTranscriptIfNeeded(_ sessionID: UUID?) {
+        guard let sessionID,
+              let session = piAgentSessionStore.sessions.first(where: { $0.id == sessionID }) else { return }
+        piAgentRunner.rehydrateTranscriptFromSessionFileIfNeeded(session)
+    }
+
     /// Sessions for the active project, in the store's stable order (pinned +
     /// recency) — the base order the sidebar shows before any search filter.
     /// Drives next/previous session navigation and the scroll benchmark.
@@ -2405,6 +2415,66 @@ final class AppViewModel: NSObject {
     func setProviderEnabled(_ provider: String, isEnabled: Bool) {
         guard appSettingsController.setProviderEnabled(provider, isEnabled: isEnabled) else { return }
         appSettings = appSettingsController.settings
+    }
+
+    // MARK: - Provider sign-in
+
+    /// Providers with a credential in `~/.pi/agent/auth.json` (== signed in).
+    private(set) var signedInProviders: Set<String> = []
+    /// Provider id → credential type (`"api_key"`/`"oauth"`) for UI labelling.
+    private(set) var providerAuthTypes: [String: String] = [:]
+    /// Every provider PI can connect to (from pi-ai `getProviders()`), powering
+    /// the Add Provider picker — independent of what the model catalog shows.
+    private(set) var connectableProviders: [String] = []
+    /// Drives the Add Provider picker sheet (opened from the Models toolbar `+`).
+    var isAddProviderPresented = false
+
+    /// Loads the full connectable-provider list once (cached).
+    func ensureConnectableProvidersLoaded() {
+        guard connectableProviders.isEmpty else { return }
+        Task.detached(priority: .utility) {
+            let providers = await PiProviderCatalogService().loadConnectableProviders()
+            await MainActor.run { [weak self] in
+                self?.connectableProviders = providers
+            }
+        }
+    }
+
+    /// Reloads sign-in state from auth.json off the main thread.
+    func refreshProviderAuthState() {
+        Task.detached(priority: .utility) {
+            let types = PiAuthCredentialStore().signedInTypes()
+            await MainActor.run { [weak self] in
+                self?.applyProviderAuthState(types)
+            }
+        }
+    }
+
+    private func applyProviderAuthState(_ types: [String: String]) {
+        providerAuthTypes = types
+        signedInProviders = Set(types.keys)
+    }
+
+    /// Writes an API key into auth.json, then refreshes auth + catalog. Throws
+    /// surface as an inline error in the sign-in sheet.
+    func signInWithAPIKey(_ key: String, provider: String) throws {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        try PiAuthCredentialStore().setAPIKey(trimmed, provider: provider)
+        reloadAfterProviderAuthChange()
+    }
+
+    func signOutProvider(_ provider: String) throws {
+        try PiAuthCredentialStore().removeProvider(provider)
+        reloadAfterProviderAuthChange()
+    }
+
+    /// Re-reads sign-in state and re-queries the model catalog so newly
+    /// authorized (or removed) providers appear/disappear. Called after an
+    /// API-key write and on OAuth login completion.
+    func reloadAfterProviderAuthChange() {
+        refreshProviderAuthState()
+        refreshAvailableModels()
     }
 
     func setModelEnabled(_ model: AvailableModel, isEnabled: Bool) {
@@ -4658,6 +4728,36 @@ final class AppViewModel: NSObject {
 
     var piAgentTerminalApplicationOptions: [TerminalApplicationOption] {
         appSettingsController.piAgentTerminalApplicationOptions
+    }
+
+    var piAgentLaunchPreview: String {
+        appSettingsController.piAgentLaunchPreview
+    }
+
+    func isPiExtensionEnabled(_ candidate: PiExtensionCandidate) -> Bool {
+        appSettingsController.isPiExtensionEnabled(candidate)
+    }
+
+    func setPiAgentExtensionLoadingMode(_ mode: PiAgentExtensionLoadingMode) {
+        guard appSettingsController.setPiAgentExtensionLoadingMode(mode) else { return }
+        syncAppSettings()
+    }
+
+    func setPiExtension(_ candidate: PiExtensionCandidate, enabled: Bool) {
+        guard appSettingsController.setPiExtension(candidate, enabled: enabled) else { return }
+        syncAppSettings()
+    }
+
+    /// Caller passes the already-discovered candidate list (the Extensions screen
+    /// discovers off-main and caches) so this never triggers filesystem I/O.
+    func setAllPiExtensions(_ candidates: [PiExtensionCandidate], enabled: Bool) {
+        guard appSettingsController.setAllPiExtensions(candidates, enabled: enabled) else { return }
+        syncAppSettings()
+    }
+
+    func prunePiExtensionSelection(to candidates: [PiExtensionCandidate]) {
+        guard appSettingsController.prunePiExtensionSelection(to: candidates) else { return }
+        syncAppSettings()
     }
 
     func setPiAgentTerminalApplicationSelection(_ selectionID: String) {

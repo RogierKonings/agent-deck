@@ -110,6 +110,24 @@ final class AppSettingsController {
         settings.piAgentTerminalApplicationPath ?? TerminalApplicationOption.defaultID
     }
 
+    var piAgentExtensionLoadingMode: PiAgentExtensionLoadingMode {
+        settings.piAgentExtensionLoadingMode
+    }
+
+    var piAgentLaunchPreview: String {
+        settings.piAgentExtensionLoadingMode.parentSessionLaunchPreview
+    }
+
+    /// Runs filesystem discovery — call OFF the main thread (e.g. in `Task.detached`),
+    /// never from a SwiftUI body.
+    func discoveredPiExtensions(projectRoot: URL?) -> [PiExtensionCandidate] {
+        PiExtensionDiscoveryService().discover(projectRoot: projectRoot)
+    }
+
+    func isPiExtensionEnabled(_ candidate: PiExtensionCandidate) -> Bool {
+        !settings.disabledPiExtensionIDs.contains(candidate.id)
+    }
+
     var piAgentTerminalApplicationOptions: [TerminalApplicationOption] {
         var options = [TerminalApplicationOption(name: "macOS Default", path: nil)]
         // Only terminals Agent Deck can reliably drive (see `SupportedTerminal`).
@@ -421,6 +439,57 @@ final class AppSettingsController {
     @discardableResult
     func resetPiAgentTerminalApplicationToDefault() -> Bool {
         setPiAgentTerminalApplicationPath(nil)
+    }
+
+    @discardableResult
+    func setPiAgentExtensionLoadingMode(_ mode: PiAgentExtensionLoadingMode) -> Bool {
+        guard settings.piAgentExtensionLoadingMode != mode else { return false }
+        settings.piAgentExtensionLoadingMode = mode
+        persist()
+        return true
+    }
+
+    @discardableResult
+    func setPiExtension(_ candidate: PiExtensionCandidate, enabled: Bool) -> Bool {
+        var disabledIDs = settings.disabledPiExtensionIDs
+        if enabled {
+            disabledIDs.remove(candidate.id)
+        } else {
+            disabledIDs.insert(candidate.id)
+        }
+        guard disabledIDs != settings.disabledPiExtensionIDs else { return false }
+        settings.disabledPiExtensionIDs = disabledIDs
+        persist()
+        return true
+    }
+
+    @discardableResult
+    func setAllPiExtensions(_ candidates: [PiExtensionCandidate], enabled: Bool) -> Bool {
+        guard !candidates.isEmpty else { return false }
+        var disabledIDs = settings.disabledPiExtensionIDs
+        for candidate in candidates {
+            if enabled {
+                disabledIDs.remove(candidate.id)
+            } else {
+                disabledIDs.insert(candidate.id)
+            }
+        }
+        guard disabledIDs != settings.disabledPiExtensionIDs else { return false }
+        settings.disabledPiExtensionIDs = disabledIDs
+        persist()
+        return true
+    }
+
+    /// Drops deselection state for extensions that are no longer discovered, so a
+    /// re-appearing extension defaults to enabled. Pass the freshly discovered list.
+    @discardableResult
+    func prunePiExtensionSelection(to candidates: [PiExtensionCandidate]) -> Bool {
+        let validIDs = Set(candidates.map(\.id))
+        let pruned = settings.disabledPiExtensionIDs.intersection(validIDs)
+        guard pruned != settings.disabledPiExtensionIDs else { return false }
+        settings.disabledPiExtensionIDs = pruned
+        persist()
+        return true
     }
 
     @discardableResult

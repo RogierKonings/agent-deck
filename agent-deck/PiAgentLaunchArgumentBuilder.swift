@@ -70,12 +70,38 @@ enum PiAgentLaunchArgumentBuilder {
         return args
     }
 
+    // MARK: - User Pi extension loading
+
+    /// The leading `--no-extensions` flag for a launch. Both extension-loading modes
+    /// disable Pi's ambient discovery; Agent Deck always builds the explicit list itself.
+    /// Emit this BEFORE any `--extension` arguments.
+    static func noExtensionsArgument(settings: AppSettings) -> [String] {
+        settings.piAgentExtensionLoadingMode.ambientPiExtensionArguments
+    }
+
+    /// The `--extension <path>` pairs for the user's *enabled* discovered Pi extensions.
+    /// Empty unless the mode is `.useMyExtensions`. These MUST be appended AFTER Agent
+    /// Deck's own bridge `--extension`s so the bridges register first and win any
+    /// tool-name conflict (Pi resolves duplicate tool names first-registration-wins).
+    static func userSelectedExtensionArguments(
+        settings: AppSettings,
+        projectURL: URL?,
+        discoveryService: PiExtensionDiscoveryService = PiExtensionDiscoveryService()
+    ) -> [String] {
+        guard settings.piAgentExtensionLoadingMode.usesCustomPiExtensionSelection else { return [] }
+        var args: [String] = []
+        for candidate in discoveryService.enabledCandidates(settings: settings, projectRoot: projectURL) {
+            args.append(contentsOf: ["--extension", candidate.launchSource])
+        }
+        return args
+    }
+
     // MARK: - Internal
 
     private static func resolvedTools(from tools: [String], profile: ToolProfile) -> [String] {
         var result = tools.filter { tool in
             let normalized = tool.lowercased()
-            if normalized == "contact_supervisor" { return profile.includeSupervisorTool }
+            if normalized == PiNativeSubagentBridgeExtensions.childSupervisorToolName { return profile.includeSupervisorTool }
             if PiNativeSubagentBridgeExtensions.exaToolNames.contains(normalized) { return profile.includeExaTools }
             if normalized == PiNativeSubagentBridgeExtensions.fallbackWebFetchToolName { return profile.includeFallbackWebFetchTool }
             return true

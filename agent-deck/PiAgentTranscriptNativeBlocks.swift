@@ -712,6 +712,177 @@ struct NativeRetryPayload {
     var copyText: String?
 }
 
+// MARK: - Model/provider error row
+
+/// A fatal model/provider error (`PiAgentTranscriptEntry.isModelError`). Shows
+/// the error's first line as a red-tinted headline; any remaining detail (e.g.
+/// provider onboarding text) is tucked under an inline "more" disclosure and
+/// rendered italic in the same caption font. Mirrors the retry card's chrome.
+final class PiAgentNativeErrorRowView: PiAgentNativeCardRowView {
+    private let iconView = NSImageView()
+    private let headlineLabel = NSTextField(wrappingLabelWithString: "")
+    private let detailLabel = NSTextField(wrappingLabelWithString: "")
+    private let timeLabel = NSTextField(labelWithString: "")
+    private let chevronView = NSImageView()
+    private let textStack = NSStackView()
+    private let headerRight = NSStackView()
+    private var details: String?
+    private var expanded = false
+
+    private static let detailFont: NSFont =
+        NSFontManager.shared.convert(NativeTranscriptFont.caption(), toHaveTrait: .italicFontMask)
+
+    override func commonSetup() {
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        iconView.imageScaling = .scaleProportionallyUpOrDown
+        iconView.setContentHuggingPriority(.required, for: .horizontal)
+        iconView.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: nil)
+
+        headlineLabel.font = NativeTranscriptFont.caption(.semibold)
+        headlineLabel.textColor = .labelColor
+        headlineLabel.lineBreakMode = .byWordWrapping
+        headlineLabel.maximumNumberOfLines = 0
+
+        detailLabel.font = Self.detailFont
+        detailLabel.textColor = AppTheme.ns(AppTheme.mutedText)
+        detailLabel.lineBreakMode = .byWordWrapping
+        detailLabel.maximumNumberOfLines = 0
+
+        timeLabel.font = NativeTranscriptFont.caption2()
+        timeLabel.textColor = AppTheme.ns(AppTheme.mutedText)
+
+        chevronView.imageScaling = .scaleProportionallyDown
+        chevronView.contentTintColor = AppTheme.ns(AppTheme.mutedText)
+        chevronView.setContentHuggingPriority(.required, for: .horizontal)
+
+        headerRight.translatesAutoresizingMaskIntoConstraints = false
+        headerRight.orientation = .horizontal
+        headerRight.alignment = .centerY
+        headerRight.spacing = 6
+        headerRight.setContentHuggingPriority(.required, for: .horizontal)
+        headerRight.setContentCompressionResistancePriority(.required, for: .horizontal)
+        headerRight.addArrangedSubview(timeLabel)
+        headerRight.addArrangedSubview(chevronView)
+
+        textStack.translatesAutoresizingMaskIntoConstraints = false
+        textStack.orientation = .vertical
+        textStack.alignment = .leading
+        textStack.spacing = 5
+        textStack.addArrangedSubview(headlineLabel)
+        textStack.addArrangedSubview(detailLabel)
+
+        cardContent.addSubview(iconView)
+        cardContent.addSubview(textStack)
+        cardContent.addSubview(headerRight)
+
+        NSLayoutConstraint.activate([
+            iconView.leadingAnchor.constraint(equalTo: cardContent.leadingAnchor),
+            // Center the icon on the headline (matching the compact status row).
+            // In the collapsed state the headline fills cardContent, so this is the
+            // card's vertical center; expanded, it stays on the headline's line.
+            iconView.centerYAnchor.constraint(equalTo: headlineLabel.centerYAnchor),
+            iconView.widthAnchor.constraint(equalToConstant: 14),
+            iconView.heightAnchor.constraint(equalToConstant: 14),
+
+            textStack.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 10),
+            textStack.topAnchor.constraint(equalTo: cardContent.topAnchor),
+            textStack.bottomAnchor.constraint(equalTo: cardContent.bottomAnchor),
+
+            headerRight.leadingAnchor.constraint(greaterThanOrEqualTo: textStack.trailingAnchor, constant: 10),
+            headerRight.trailingAnchor.constraint(equalTo: cardContent.trailingAnchor),
+            // Time + chevron share the icon's centerline.
+            headerRight.centerYAnchor.constraint(equalTo: iconView.centerYAnchor)
+        ])
+
+        // The whole card toggles the detail — no separate button.
+        addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(rowTapped)))
+    }
+
+    func configure(payload: NativeErrorPayload, width rowWidth: CGFloat) {
+        iconView.contentTintColor = payload.accent
+        headlineLabel.stringValue = payload.headline
+        details = payload.details
+        detailLabel.stringValue = payload.details ?? ""
+        timeLabel.stringValue = payload.timeText
+        let hasDetails = payload.details != nil
+        chevronView.isHidden = !hasDetails
+        detailLabel.isHidden = !hasDetails || !expanded
+        updateChevron()
+
+        applyCard(
+            fill: payload.accent.withAlphaComponent(AppTheme.roleFillOpacity),
+            stroke: payload.accent.withAlphaComponent(AppTheme.roleStrokeOpacity),
+            cornerRadius: 12,
+            hPad: 12, vPad: 10,
+            placement: .leftAtCap,
+            copyText: payload.copyText,
+            width: rowWidth
+        )
+    }
+
+    private func updateChevron() {
+        chevronView.image = NSImage(systemSymbolName: expanded ? "chevron.up" : "chevron.down",
+                                    accessibilityDescription: expanded ? "Collapse" : "Expand")?
+            .withSymbolConfiguration(.init(pointSize: NativeTranscriptFont.caption2Size, weight: .semibold))
+    }
+
+    @objc private func rowTapped() {
+        guard details != nil else { return }
+        expanded.toggle()
+        detailLabel.isHidden = !expanded
+        updateChevron()
+        notifyContentHeightChanged()
+    }
+
+    override func contentHeight(forInnerWidth innerWidth: CGFloat) -> CGFloat {
+        // Reserve the icon (14 + 10 gap) and the trailing time+chevron column (~64).
+        let textWidth = max(40, innerWidth - 14 - 10 - 64)
+        headlineLabel.preferredMaxLayoutWidth = textWidth
+        var h = ceil(headlineLabel.intrinsicContentSize.height)
+        if details != nil, expanded {
+            detailLabel.preferredMaxLayoutWidth = textWidth
+            h += 5 + ceil(detailLabel.intrinsicContentSize.height)
+        }
+        return max(14, h)
+    }
+
+    override func prepareForReuseIfNeeded() {
+        super.prepareForReuseIfNeeded()
+        expanded = false
+    }
+}
+
+/// Typed payload for the model/provider error row. Splits the entry text into a
+/// first-line headline and the (optional) remaining detail.
+struct NativeErrorPayload {
+    var headline: String
+    var details: String?
+    var timeText: String
+    var copyText: String
+    var accent: NSColor
+
+    static func make(for entry: PiAgentTranscriptEntry) -> NativeErrorPayload {
+        let full = entry.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let headline: String
+        let details: String?
+        if let firstBreak = full.firstIndex(of: "\n") {
+            headline = String(full[..<firstBreak]).trimmingCharacters(in: .whitespaces)
+            let rest = String(full[full.index(after: firstBreak)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            details = rest.isEmpty ? nil : rest
+        } else {
+            headline = full
+            details = nil
+        }
+        return NativeErrorPayload(
+            headline: headline.isEmpty ? "Error" : headline,
+            details: details,
+            timeText: entry.timestamp.formatted(date: .omitted, time: .shortened),
+            copyText: full,
+            accent: AppTheme.ns(AppTheme.roleError)
+        )
+    }
+}
+
 // MARK: - Shared text popover
 
 /// A simple scrollable text popover used for error / prompt-audit detail.

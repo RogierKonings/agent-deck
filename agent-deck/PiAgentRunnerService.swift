@@ -93,6 +93,9 @@ final class PiAgentRunnerService {
 
     private var pendingCompactionInstructionsBySessionID: [UUID: String] = [:]
     private var pendingFreeformResponsesBySessionID: [UUID: String] = [:]
+    /// Sessions whose transcript we've already reconciled against Pi's session file
+    /// on open this launch — keeps the on-view disk read to once per session.
+    private var rehydratedFromDiskSessionIDs: Set<UUID> = []
     private var pendingThinkingLevelsBySessionID: [UUID: PendingThinkingLevel] = [:]
     private struct ForkProgress {
         let userMessageText: String
@@ -624,7 +627,8 @@ final class PiAgentRunnerService {
         }
 
         do {
-            var extraArguments: [String] = ["--no-extensions"]
+            let launchSettings = AppSettingsStore.shared.settings
+            var extraArguments: [String] = PiAgentLaunchArgumentBuilder.noExtensionsArgument(settings: launchSettings)
             if let auditURL = try? PiNativeSubagentBridgeExtensions.systemPromptAuditExtensionURL() {
                 extraArguments.append(contentsOf: ["--extension", auditURL.path])
             }
@@ -724,6 +728,12 @@ final class PiAgentRunnerService {
                       let webURL = try? PiNativeSubagentBridgeExtensions.fallbackWebFetchExtensionURL() {
                 extraArguments.append(contentsOf: ["--extension", webURL.path])
             }
+            // User-selected Pi extensions load LAST so every Agent Deck bridge above
+            // registers first and wins any tool-name conflict (e.g. ask_user, web_search).
+            extraArguments.append(contentsOf: PiAgentLaunchArgumentBuilder.userSelectedExtensionArguments(
+                settings: launchSettings,
+                projectURL: projectURL
+            ))
             let client = try PiRPCClient(
                 cwd: projectURL,
                 sessionFile: resumeExisting ? session.piSessionFile : nil,
@@ -1275,7 +1285,11 @@ final class PiAgentRunnerService {
         }
 
         if event.command == "get_messages" {
-            rehydrateAssistantText(from: event, sessionID: sessionID)
+            let messages = event.messages?.arrayValue
+                ?? event.data?["messages"]?.arrayValue
+                ?? event.data?.arrayValue
+                ?? []
+            applyRehydratedMessages(messages, sessionID: sessionID)
             return
         }
 
@@ -1723,34 +1737,121 @@ final class PiAgentRunnerService {
             .contains { $0.role == .error && $0.text == text }
     }
 
-    /// Pi's session file is the source of truth for a resumed session's history.
-    /// On reopen we fetch its messages (`get_messages`) and backfill any assistant
-    /// answer that was shown live but reached disk empty — e.g. the turn-start
-    /// placeholder was never filled because the process was closed before the turn
-    /// finalized. We only repair empty entries; non-empty ones, thinking, tools and
-    /// status cards (Memory Recalled, etc.) are left exactly as they are.
-    ///
-    /// Pi emits one assistant message per assistant turn and the runner creates one
-    /// assistant entry per turn, so the two lists align positionally. If the counts
-    /// differ (history trimmed by compaction/fork) we skip rather than risk writing
-    /// the wrong text onto an entry.
-    private func rehydrateAssistantText(from event: PiAgentRPCEvent, sessionID: UUID) {
-        let messages = event.messages?.arrayValue
-            ?? event.data?["messages"]?.arrayValue
-            ?? event.data?.arrayValue
-            ?? []
-        guard !messages.isEmpty else { return }
-        let piAssistants = messages.filter { ($0["role"]?.stringValue ?? "") == "assistant" }
+    /// Repairs a non-live session's transcript from Pi's session JSONL when the
+    /// session is opened. Opening a session does not relaunch Pi (so `get_messages`
+    /// never fires), which is why answers that never reached our local store — a
+    /// turn that finalized empty, or a transcript that was never persisted at all —
+    /// would otherwise stay missing on view. Pi's session file is the source of
+    /// truth; we read it off the main thread and apply the same reconciliation the
+    /// live `get_messages` path uses. Runs at most once per session per launch and
+    /// only when there is something to repair.
+    func rehydrateTranscriptFromSessionFileIfNeeded(_ session: PiAgentSessionRecord) {
+        let sessionID = session.id
+        RPCDebugLog.log("REHYDRATE check session=\(sessionID.uuidString.prefix(8)) title=\(session.title) live=\(clientsBySessionID[sessionID] != nil) already=\(rehydratedFromDiskSessionIDs.contains(sessionID)) piFile=\(session.piSessionFile ?? "nil")")
+        guard clientsBySessionID[sessionID] == nil else { return }          // live session owns its transcript
+        guard !rehydratedFromDiskSessionIDs.contains(sessionID) else { return }
+        guard let path = session.piSessionFile, !path.isEmpty else { return }
         let transcript = store.transcript(for: sessionID)
+        let assistants = transcript.filter { $0.role == .assistant }
+        let needsBackfill = !assistants.isEmpty && assistants.contains { $0.text.isEmpty }
+        let needsBuild = transcript.isEmpty
+        RPCDebugLog.log("REHYDRATE decision session=\(sessionID.uuidString.prefix(8)) entries=\(transcript.count) assistants=\(assistants.count) emptyAssistants=\(assistants.filter { $0.text.isEmpty }.count) needsBackfill=\(needsBackfill) needsBuild=\(needsBuild)")
+        guard needsBackfill || needsBuild else { return }
+        rehydratedFromDiskSessionIDs.insert(sessionID)
+        Task { [weak self] in
+            let messages = await Task.detached { Self.parsePiSessionMessages(at: path) }.value
+            RPCDebugLog.log("REHYDRATE parsed session=\(sessionID.uuidString.prefix(8)) piMessages=\(messages.count)")
+            await MainActor.run { self?.applyRehydratedMessages(messages, sessionID: sessionID) }
+        }
+    }
+
+    /// Reconciles Pi's authoritative messages into the local transcript. Shared by
+    /// the live `get_messages` response and the on-open disk read.
+    ///
+    /// - Backfill: when the transcript already has assistant entries, fill any that
+    ///   are empty with Pi's answer text and leave everything else (thinking, tools,
+    ///   status cards like "Memory Recalled") untouched. Pi emits one assistant
+    ///   message per assistant turn and the runner creates one assistant entry per
+    ///   turn, so the two lists align positionally; if the counts differ (history
+    ///   trimmed by compaction/fork) we skip rather than risk writing the wrong text.
+    /// - Build: when there is no local transcript at all, reconstruct one from Pi's
+    ///   messages so the conversation is visible.
+    private func applyRehydratedMessages(_ piMessages: [JSONValue], sessionID: UUID) {
+        guard !piMessages.isEmpty else { return }
+        let transcript = store.transcript(for: sessionID)
+
+        if transcript.isEmpty {
+            var built = 0
+            for message in piMessages {
+                for entry in transcriptEntries(rehydrating: message, sessionID: sessionID) {
+                    store.append(entry)
+                    built += 1
+                }
+            }
+            RPCDebugLog.log("REHYDRATE build session=\(sessionID.uuidString.prefix(8)) appended=\(built) entries from \(piMessages.count) messages")
+            return
+        }
+
+        let piAssistants = piMessages.filter { ($0["role"]?.stringValue ?? "") == "assistant" }
         let assistantEntryIndices = transcript.indices.filter { transcript[$0].role == .assistant }
+        RPCDebugLog.log("REHYDRATE backfill session=\(sessionID.uuidString.prefix(8)) entryAssistants=\(assistantEntryIndices.count) piAssistants=\(piAssistants.count) aligned=\(assistantEntryIndices.count == piAssistants.count)")
         guard assistantEntryIndices.count == piAssistants.count else { return }
+        var filled = 0
         for (slot, entryIndex) in assistantEntryIndices.enumerated() {
             let entry = transcript[entryIndex]
             guard entry.text.isEmpty else { continue }
             let recovered = extractAssistantText(from: piAssistants[slot])
             guard !recovered.isEmpty else { continue }
             store.updateEntry(entry.id, in: sessionID) { $0.text = recovered }
+            filled += 1
+            RPCDebugLog.log("REHYDRATE filled slot=\(slot) entryID=\(entry.id.uuidString.prefix(8)) len=\(recovered.count) preview=\(recovered.prefix(40))")
         }
+        RPCDebugLog.log("REHYDRATE backfill done session=\(sessionID.uuidString.prefix(8)) filled=\(filled)")
+    }
+
+    /// Maps a single Pi session message into the transcript entries used to rebuild
+    /// a missing transcript. Mirrors how the live stream produces entries.
+    private func transcriptEntries(rehydrating message: JSONValue, sessionID: UUID) -> [PiAgentTranscriptEntry] {
+        switch message["role"]?.stringValue ?? "" {
+        case "user":
+            let text = extractText(from: message)
+            return text.isEmpty ? [] : [.init(sessionID: sessionID, role: .user, title: "You", text: text)]
+        case "assistant":
+            var entries: [PiAgentTranscriptEntry] = []
+            let thinking = extractAssistantThinking(from: message)
+            if !thinking.isEmpty {
+                entries.append(.init(sessionID: sessionID, role: .thinking, title: "Thinking", text: thinking))
+            }
+            let text = extractAssistantText(from: message)
+            if !text.isEmpty {
+                entries.append(.init(sessionID: sessionID, role: .assistant, title: "Assistant", text: text))
+            }
+            return entries
+        case "toolResult", "bashExecution":
+            let text = extractText(from: message)
+            let name = message["toolName"]?.stringValue ?? "Tool"
+            return text.isEmpty ? [] : [.init(sessionID: sessionID, role: .tool, title: name, text: text)]
+        default:
+            return []
+        }
+    }
+
+    /// Reads a Pi session `.jsonl` file off the main thread and returns the message
+    /// objects (the `message` payload of each `message` line), in order. Lines
+    /// without a `message.role` (session/model metadata) are ignored.
+    private nonisolated static func parsePiSessionMessages(at path: String) -> [JSONValue] {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+              let text = String(data: data, encoding: .utf8) else { return [] }
+        let decoder = JSONDecoder()
+        var messages: [JSONValue] = []
+        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            guard let lineData = line.data(using: .utf8),
+                  let object = try? decoder.decode(JSONValue.self, from: lineData),
+                  let message = object["message"],
+                  message["role"]?.stringValue != nil else { continue }
+            messages.append(message)
+        }
+        return messages
     }
 
     private func finalAssistantMessage(from event: PiAgentRPCEvent) -> JSONValue? {

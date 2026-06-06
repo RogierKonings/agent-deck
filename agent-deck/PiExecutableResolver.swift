@@ -79,6 +79,35 @@ struct PiExecutableResolver: Sendable {
         return nil
     }
 
+    /// Locates the `node` binary the same way `resolve()` finds `pi`: explicit
+    /// override, then `PATH`, then the common install locations. Needed for the
+    /// OAuth login bridge, which runs a small Node script against PI's SDK.
+    nonisolated func resolveNode() -> URL? {
+        let environment = ProcessInfo.processInfo.environment
+        if let raw = environment["AGENT_DECK_NODE_PATH"], let url = executableURL(from: raw) {
+            return url
+        }
+        if let pathResolved = resolveExecutableInPATH("node", environment: environment) {
+            return pathResolved
+        }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        var candidates = [
+            "/opt/homebrew/bin/node",
+            "/usr/local/bin/node",
+            "/usr/bin/node",
+            "\(home)/.volta/bin/node",
+            "\(home)/.local/bin/node",
+            "\(home)/.nvm/versions/node/current/bin/node"
+        ]
+        let nvm = URL(fileURLWithPath: "\(home)/.nvm/versions/node")
+        if let versions = try? FileManager.default.contentsOfDirectory(at: nvm, includingPropertiesForKeys: nil) {
+            candidates.append(contentsOf: versions.map { $0.appendingPathComponent("bin/node").path })
+        }
+        return candidates
+            .map(URL.init(fileURLWithPath:))
+            .first { FileManager.default.isExecutableFile(atPath: $0.path) }
+    }
+
     nonisolated func commonPiCandidates() -> [URL] {
         var paths = [
             "/opt/homebrew/bin/pi",

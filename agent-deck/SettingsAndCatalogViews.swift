@@ -220,6 +220,8 @@ struct ModelsInfoPopover: View {
 struct ModelsScreen: View {
     var viewModel: AppViewModel
 
+    @State private var loginService = PiProviderLoginService()
+
     var body: some View {
         AppPage("Models") {
             if displayModels.isEmpty {
@@ -240,16 +242,28 @@ struct ModelsScreen: View {
         }
         .onAppear {
             viewModel.ensureAvailableModelsLoaded()
+            viewModel.refreshProviderAuthState()
+            viewModel.ensureConnectableProvidersLoaded()
+        }
+        .sheet(isPresented: Binding(
+            get: { viewModel.isAddProviderPresented },
+            set: { viewModel.isAddProviderPresented = $0 }
+        )) {
+            AddProviderFlowSheet(viewModel: viewModel, loginService: loginService)
         }
     }
 
     private func providerSection(_ group: (provider: String, models: [AvailableModel])) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .center) {
+            HStack(alignment: .center, spacing: 8) {
                 ProviderLabel(provider: group.provider, logoSize: 22, spacing: 8)
                     .font(.title3.weight(.bold))
                     .fontWidth(.expanded)
                     .foregroundStyle(.primary)
+                if group.provider != FoundationModelAutomationService.provider,
+                   viewModel.signedInProviders.contains(group.provider) {
+                    signOutButton(for: group.provider)
+                }
                 Spacer()
                 if group.provider != FoundationModelAutomationService.provider {
                     providerToggle(for: group)
@@ -473,6 +487,17 @@ struct ModelsScreen: View {
         .opacity(isProviderEnabled ? (isEnabled ? 1 : 0.55) : 0.4)
         .allowsHitTesting(isProviderEnabled)
         .padding(.vertical, 10)
+    }
+
+    private func signOutButton(for provider: String) -> some View {
+        Button {
+            Task { try? viewModel.signOutProvider(provider) }
+        } label: {
+            Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
+                .font(.caption.weight(.semibold))
+        }
+        .appSmallSecondaryButton()
+        .help("Sign out of \(provider) (removes its credentials from auth.json).")
     }
 
     private func providerToggle(for group: (provider: String, models: [AvailableModel])) -> some View {

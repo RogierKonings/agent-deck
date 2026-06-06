@@ -60,7 +60,7 @@ final class PiSubagentRunService {
         fileManager.createFile(atPath: artifactDirectory.appendingPathComponent("output.md").path, contents: nil)
 
         let childSessionDirectory = artifactDirectory.appendingPathComponent("sessions", isDirectory: true)
-        var extraArguments: [String] = []
+        var extraArguments: [String] = PiAgentLaunchArgumentBuilder.noExtensionsArgument(settings: AppSettingsStore.shared.settings)
         if !isContinuation {
             extraArguments.append(contentsOf: ["--session-dir", childSessionDirectory.path])
         }
@@ -82,7 +82,9 @@ final class PiSubagentRunService {
             includeExaTools: PiNativeSubagentBridgeExtensions.isExaConfigured(environment: environment),
             includeFallbackWebFetchTool: !PiNativeSubagentBridgeExtensions.isExaConfigured(environment: environment) && WebFetchDependencyService().status().isInstalled
         )))
-        extraArguments.append(contentsOf: PiAgentLaunchArgumentBuilder.agentExtensionArguments(for: agent))
+        // `--no-extensions` is already seeded at the top; the agent's authored
+        // extensions append without re-emitting it.
+        extraArguments.append(contentsOf: PiAgentLaunchArgumentBuilder.agentExtensionArguments(for: agent, prependNoExtensions: false))
         if let memoryExtensionURL {
             extraArguments.append(contentsOf: ["--extension", memoryExtensionURL.path])
         }
@@ -104,6 +106,11 @@ final class PiSubagentRunService {
         } else {
             bridgeWarnings.append("\(AppBrand.displayName) could not write the system prompt audit extension.")
         }
+        // User-selected Pi extensions load LAST so Agent Deck bridges register first and win conflicts.
+        extraArguments.append(contentsOf: PiAgentLaunchArgumentBuilder.userSelectedExtensionArguments(
+            settings: AppSettingsStore.shared.settings,
+            projectURL: childProjectURL
+        ))
         extraArguments.append("--no-skills")
         extraArguments.append(contentsOf: skillArguments)
         extraArguments.append("--no-prompt-templates")

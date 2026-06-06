@@ -1138,6 +1138,14 @@ struct ContentView: View {
                 }
                 .toolbarNeutralChrome()
                 .help("Refresh models")
+
+                Button {
+                    viewModel.isAddProviderPresented = true
+                } label: {
+                    Label("Add Provider", systemImage: "plus")
+                }
+                .toolbarPrimaryActionChrome()
+                .help("Connect a model provider")
             }
         }
     }
@@ -1533,6 +1541,8 @@ struct ContentView: View {
                     catch { NSSound.beep() }
                 }
             )
+        case .extensions:
+            ExtensionsScreen(viewModel: viewModel)
         case .doctor:
             DoctorScreen(viewModel: viewModel)
         }

@@ -16,6 +16,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
     case subagents = "Deck agents"
     case models = "Models"
     case environment = "Environment"
+    case extensions = "Extensions"
     case doctor = "Doctor"
 
     var id: String { rawValue }
@@ -33,6 +34,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         case .subagents: return "slider.horizontal.3"
         case .models: return "cpu"
         case .environment: return "key"
+        case .extensions: return "puzzlepiece.extension"
         case .doctor: return "stethoscope"
         }
     }
@@ -64,7 +66,7 @@ enum SidebarSection: String, CaseIterable, Identifiable {
         case .piResources:
             return [.agents, .skills, .prompts]
         case .runtime:
-            return [.models, .environment, .doctor]
+            return [.models, .environment, .extensions, .doctor]
         }
     }
 }

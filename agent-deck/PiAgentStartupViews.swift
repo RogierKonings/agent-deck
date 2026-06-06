@@ -78,6 +78,11 @@ struct PiAgentStartupResourcesPopover: View {
     var viewModel: AppViewModel
     let session: PiAgentSessionRecord
 
+    /// The extensions injected into this session — Agent Deck bridges (evaluated
+    /// against the session's runtime conditions) plus any user-selected Pi
+    /// extensions. Loaded off-main to keep popover open jank-free.
+    @State private var extensionItems: [PiStartupResourceItem] = []
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
@@ -100,6 +105,7 @@ struct PiAgentStartupResourcesPopover: View {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 14) {
                     resourceSection("Runtime", icon: "cpu", color: AppTheme.piLogo, items: runtimeItems, columns: 1, showsDetails: true)
+                    resourceSection("Extensions", icon: "puzzlepiece.extension", color: .orange, items: extensionItems, columns: 1, showsDetails: true)
 
                     if isEmpty {
                         Text("No agents, skills, prompts, or environment overrides were discovered for this session.")
@@ -119,6 +125,53 @@ struct PiAgentStartupResourcesPopover: View {
             }
         }
         .frame(width: 460, height: 480)
+        .task(id: session.id) { await loadExtensionItems() }
+    }
+
+    /// Builds the Extensions section. Cheap condition checks run on the main actor;
+    /// the filesystem discovery scan runs off-main. Mirrors the inject conditions in
+    /// `PiAgentRunnerService.startSession(...)`.
+    private func loadExtensionItems() async {
+        let memoryEnabled = viewModel.appSettings.agentMemoryEnabled
+        // Matches the launch's `else if` branch: the Deck-agents bridge is NOT loaded
+        // for agent-bound (1:1) sessions, even if subagents are enabled.
+        let subagentsActive = !session.isAgentBound
+            && session.subagentsEnabled
+            && !viewModel.catalogAgents(for: session).isEmpty
+        let exaConfigured = startupSnapshot.envKeys.contains {
+            $0.key == "EXA_API_KEY" && ($0.value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+        }
+        let webFetchInstalled = WebFetchDependencyService().status().isInstalled
+        let usesCustomSelection = viewModel.appSettings.piAgentExtensionLoadingMode.usesCustomPiExtensionSelection
+        let disabledIDs = viewModel.appSettings.disabledPiExtensionIDs
+        let projectURL = URL(fileURLWithPath: session.worktreePath ?? session.projectPath, isDirectory: true)
+
+        // Only the filesystem discovery scan is pushed off-main.
+        let userExtensions: [PiExtensionCandidate] = await Task.detached(priority: .utility) {
+            guard usesCustomSelection else { return [] }
+            return PiExtensionDiscoveryService().discover(projectRoot: projectURL).filter { !disabledIDs.contains($0.id) }
+        }.value
+
+        var items: [PiStartupResourceItem] = PiNativeSubagentBridgeExtensions.injectedParentBridges(
+            memoryEnabled: memoryEnabled,
+            exaConfigured: exaConfigured,
+            fallbackWebFetchAvailable: webFetchInstalled,
+            subagentsActive: subagentsActive
+        ).map { bridge in
+            PiStartupResourceItem(
+                title: bridge.displayName,
+                detail: "Agent Deck bridge · " + bridge.toolNames.joined(separator: ", "),
+                kind: .none
+            )
+        }
+        for ext in userExtensions {
+            items.append(PiStartupResourceItem(
+                title: ext.name,
+                detail: ext.scopeLabel + " · " + ext.launchSource,
+                kind: .file(URL(fileURLWithPath: ext.launchSource))
+            ))
+        }
+        extensionItems = items
     }
 
     private var isEmpty: Bool {
