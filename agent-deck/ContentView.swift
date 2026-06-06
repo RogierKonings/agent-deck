@@ -978,6 +978,24 @@ struct ContentView: View {
         if viewModel.selectedSidebarItem == .models {
             modelsPrimaryToolbarContent
         }
+        if viewModel.selectedSidebarItem == .extensions {
+            extensionsPrimaryToolbarContent
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var extensionsPrimaryToolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            ControlGroup {
+                Button {
+                    viewModel.refreshDiscoveredPiExtensions()
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .toolbarNeutralChrome()
+                .help("Re-scan for Pi extensions")
+            }
+        }
     }
 
     @ToolbarContentBuilder
@@ -1556,14 +1574,8 @@ struct ContentView: View {
 
     private var toolbarTitle: String {
         switch viewModel.selectedSidebarItem {
-        case .agents:
-            return viewModel.selectedAgent?.name ?? "Agents"
         case .agent:
-            return viewModel.piAgentSessionStore.selectedSession?.displayTitle ?? "Pi Agent"
-        case .skills:
-            return viewModel.selectedSkill?.name ?? "Skills"
-        case .issues:
-            return viewModel.selectedGitHubProject?.gitHubRemote?.nameWithOwner ?? "Issues"
+            return viewModel.piAgentSessionStore.selectedSession?.displayTitle ?? "Coding Agent"
         default:
             return viewModel.selectedSidebarItem.rawValue
         }

@@ -12,12 +12,12 @@ struct ExtensionsScreen: View {
     @State private var candidates: [PiExtensionCandidate] = []
     /// Bridge tool-name overlaps per candidate id, computed off-main.
     @State private var conflictsByID: [String: [String]] = [:]
+    /// Short description per candidate id (extension's leading comment), computed off-main.
+    @State private var descriptionsByID: [String: String] = [:]
     @State private var isDiscovering = false
     /// Whether the local web-fetch fallback dependency is installed (filesystem
     /// check, refreshed off the render path). Drives the "Web fetch" bridge state.
     @State private var webFetchInstalled = false
-    /// Bumped by Refresh to force a re-discovery without changing project.
-    @State private var refreshToken = 0
 
     private var mode: PiAgentExtensionLoadingMode {
         viewModel.appSettings.piAgentExtensionLoadingMode
@@ -33,13 +33,13 @@ struct ExtensionsScreen: View {
                 bridgesCard
             }
         }
-        // Re-discover on appear, on project switch, and on manual Refresh. Off-main.
-        .task(id: "\(viewModel.projectRootURL?.path ?? "")#\(refreshToken)") {
+        // Re-discover on appear, on project switch, and on toolbar Refresh. Off-main.
+        .task(id: "\(viewModel.projectRootURL?.path ?? "")#\(viewModel.piExtensionsRefreshToken)") {
             await discoverCandidates()
         }
-        // Re-scan for conflicts whenever the candidate set changes. Off-main.
+        // Re-scan conflicts + descriptions whenever the candidate set changes. Off-main.
         .task(id: candidates.map(\.id).joined()) {
-            await detectConflicts()
+            await loadRowMetadata()
         }
     }
 
@@ -148,16 +148,20 @@ struct ExtensionsScreen: View {
             if candidates.isEmpty {
                 emptyState
             } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(candidates) { candidate in
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(candidates.enumerated()), id: \.element.id) { index, candidate in
                         PiExtensionSelectionRow(
                             candidate: candidate,
                             isEnabled: Binding(
                                 get: { !viewModel.appSettings.disabledPiExtensionIDs.contains(candidate.id) },
                                 set: { viewModel.setPiExtension(candidate, enabled: $0) }
                             ),
+                            description: descriptionsByID[candidate.id],
                             conflictingToolNames: conflictsByID[candidate.id] ?? []
                         )
+                        if index < candidates.count - 1 {
+                            Divider().opacity(0.5)
+                        }
                     }
                 }
             }
@@ -166,20 +170,12 @@ struct ExtensionsScreen: View {
 
     private var selectionToolbar: some View {
         HStack(spacing: 8) {
-            Text("\(enabledCount) of \(candidates.count)")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
             Button("All") { viewModel.setAllPiExtensions(candidates, enabled: true) }
-                .appSecondaryButton()
+                .controlSize(.small)
                 .disabled(candidates.isEmpty || enabledCount == candidates.count)
             Button("None") { viewModel.setAllPiExtensions(candidates, enabled: false) }
-                .appSecondaryButton()
+                .controlSize(.small)
                 .disabled(candidates.isEmpty || enabledCount == 0)
-            Button { refreshToken &+= 1 } label: {
-                Image(systemName: "arrow.clockwise")
-            }
-            .appSecondaryButton()
-            .disabled(isDiscovering)
         }
     }
 
@@ -193,7 +189,7 @@ struct ExtensionsScreen: View {
                 .font(.subheadline.weight(.semibold))
             Text("Agent Deck looks in ~/.pi/agent/extensions, the selected project's .pi/extensions folder, settings.json extension paths, and installed package extension directories.")
                 .font(.footnote)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(AppTheme.mutedText)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -215,19 +211,22 @@ struct ExtensionsScreen: View {
         isDiscovering = false
     }
 
-    private func detectConflicts() async {
+    private func loadRowMetadata() async {
         let snapshot = candidates
-        let detected = await Task.detached(priority: .utility) {
-            var result: [String: [String]] = [:]
+        let meta = await Task.detached(priority: .utility) { () -> (conflicts: [String: [String]], descriptions: [String: String]) in
+            var conflicts: [String: [String]] = [:]
+            var descriptions: [String: String] = [:]
             for candidate in snapshot {
-                let conflicts = PiExtensionConflictDetector.conflictingBridgeToolNames(for: candidate)
-                if !conflicts.isEmpty {
-                    result[candidate.id] = conflicts
+                let found = PiExtensionConflictDetector.conflictingBridgeToolNames(for: candidate)
+                if !found.isEmpty { conflicts[candidate.id] = found }
+                if let description = PiExtensionDescriptionReader.leadingDescription(forFile: candidate.launchSource) {
+                    descriptions[candidate.id] = description
                 }
             }
-            return result
+            return (conflicts, descriptions)
         }.value
-        conflictsByID = detected
+        conflictsByID = meta.conflicts
+        descriptionsByID = meta.descriptions
     }
 }
 
@@ -236,6 +235,8 @@ struct ExtensionsScreen: View {
 private struct PiExtensionSelectionRow: View {
     let candidate: PiExtensionCandidate
     @Binding var isEnabled: Bool
+    /// Short description from the extension's leading comment, if any.
+    var description: String?
     /// Bridge tool names detected in this extension's source that overlap with
     /// Agent Deck's built-in bridges. Empty means no detected conflict.
     var conflictingToolNames: [String] = []
@@ -244,21 +245,17 @@ private struct PiExtensionSelectionRow: View {
         VStack(alignment: .leading, spacing: 6) {
             Toggle(isOn: $isEnabled) {
                 VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
-                        Text(candidate.name)
-                            .font(.subheadline.weight(.semibold))
-                            .lineLimit(1)
-                        PiExtensionScopeBadge(candidate: candidate)
+                    Text(candidate.name)
+                        .font(.body.weight(.semibold))
+                        .fontWidth(.expanded)
+                        .lineLimit(1)
+                    if let description, !description.isEmpty {
+                        Text(description)
+                            .font(.caption)
+                            .foregroundStyle(AppTheme.mutedText)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    HStack(spacing: 5) {
-                        Text(candidate.detailLabel)
-                        Text("•")
-                        Text(candidate.launchSource)
-                            .truncationMode(.middle)
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
                 }
             }
             .appCheckbox()
@@ -276,7 +273,8 @@ private struct PiExtensionSelectionRow: View {
                 .padding(.leading, 22)
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 10)
+        .help(candidate.launchSource)
     }
 
     private var conflictWarningText: String {
@@ -284,41 +282,5 @@ private struct PiExtensionSelectionRow: View {
         let plural = conflictingToolNames.count == 1 ? "Tool" : "Tools"
         let verb = conflictingToolNames.count == 1 ? "is" : "are"
         return "\(plural) \(names) \(verb) also provided by an Agent Deck bridge. Agent Deck loads its bridge first, so the bridge takes precedence and this extension's version may be shadowed."
-    }
-}
-
-private struct PiExtensionScopeBadge: View {
-    let candidate: PiExtensionCandidate
-
-    var body: some View {
-        Label(candidate.scopeLabel, systemImage: iconName)
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(color)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(color.opacity(0.10), in: Capsule())
-            .overlay(Capsule().stroke(color.opacity(0.25), lineWidth: 1))
-    }
-
-    private var iconName: String {
-        switch candidate.source.kind {
-        case .project, .legacyProject:
-            return "folder"
-        case .package:
-            return "shippingbox"
-        default:
-            return "globe"
-        }
-    }
-
-    private var color: Color {
-        switch candidate.source.kind {
-        case .project, .legacyProject:
-            return .cyan
-        case .package:
-            return .purple
-        default:
-            return .blue
-        }
     }
 }

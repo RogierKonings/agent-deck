@@ -260,12 +260,11 @@ struct ModelsScreen: View {
                     .font(.title3.weight(.bold))
                     .fontWidth(.expanded)
                     .foregroundStyle(.primary)
-                if group.provider != FoundationModelAutomationService.provider,
-                   viewModel.signedInProviders.contains(group.provider) {
-                    signOutButton(for: group.provider)
-                }
                 Spacer()
                 if group.provider != FoundationModelAutomationService.provider {
+                    if viewModel.signedInProviders.contains(group.provider) {
+                        signOutButton(for: group.provider)
+                    }
                     providerToggle(for: group)
                 }
             }
@@ -493,10 +492,19 @@ struct ModelsScreen: View {
         Button {
             Task { try? viewModel.signOutProvider(provider) }
         } label: {
-            Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
-                .font(.caption.weight(.semibold))
+            HStack(spacing: 5) {
+                Image(systemName: "rectangle.portrait.and.arrow.right")
+                    .font(.caption.weight(.semibold))
+                Text("Sign out")
+                    .font(.caption.weight(.semibold))
+                    .fontWidth(.expanded)
+            }
+            .foregroundStyle(AppTheme.brandAccent)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(AppTheme.brandAccent.opacity(0.12), in: Capsule(style: .continuous))
         }
-        .appSmallSecondaryButton()
+        .buttonStyle(.plain)
         .help("Sign out of \(provider) (removes its credentials from auth.json).")
     }
 

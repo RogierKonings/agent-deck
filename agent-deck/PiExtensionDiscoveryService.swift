@@ -153,7 +153,7 @@ nonisolated struct PiExtensionDiscoveryService: @unchecked Sendable {
             concreteExtensionLaunchSources(at: location).map { source in
                 PiExtensionCandidate(
                     id: candidateID(for: source.standardizedFileURL.path),
-                    name: displayName(for: source.path),
+                    name: displayName(for: source.standardizedFileURL.path),
                     launchSource: source.standardizedFileURL.path,
                     source: ScopeID(kind: .package, path: packageDirectory.path),
                     discoveryKind: .package,
@@ -376,5 +376,38 @@ nonisolated struct PiExtensionConflictDetector: @unchecked Sendable {
                 source.contains("\"\(name)\"") || source.contains("'\(name)'")
             }
             .sorted()
+    }
+}
+
+/// Extracts a short human description from a Pi extension's TypeScript source —
+/// the first line of a leading `/** … */` block comment (or `//` line comment).
+/// Most Pi extensions open with a JSDoc title line; returns nil when there is no
+/// leading comment so the UI just shows the name. Performs synchronous file I/O.
+nonisolated enum PiExtensionDescriptionReader {
+    static func leadingDescription(forFile path: String) -> String? {
+        guard let source = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
+        return leadingDescription(fromSource: source)
+    }
+
+    static func leadingDescription(fromSource source: String) -> String? {
+        let trimmed = source.drop { $0 == " " || $0 == "\t" || $0 == "\n" || $0 == "\r" }
+        if trimmed.hasPrefix("/*") {
+            guard let end = trimmed.range(of: "*/") else { return nil }
+            for raw in trimmed[trimmed.startIndex..<end.lowerBound].split(separator: "\n") {
+                var line = raw.trimmingCharacters(in: .whitespaces)
+                for prefix in ["/**", "/*", "*"] where line.hasPrefix(prefix) {
+                    line = String(line.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+                    break
+                }
+                if !line.isEmpty { return line }
+            }
+            return nil
+        }
+        if trimmed.hasPrefix("//") {
+            let first = trimmed.split(separator: "\n").first.map(String.init) ?? ""
+            let line = first.drop { $0 == "/" }.trimmingCharacters(in: .whitespaces)
+            return line.isEmpty ? nil : line
+        }
+        return nil
     }
 }

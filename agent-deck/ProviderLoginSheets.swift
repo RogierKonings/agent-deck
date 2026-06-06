@@ -33,7 +33,9 @@ private struct ProviderPickerRow: View {
     @State private var isHovering = false
 
     var body: some View {
-        Button(action: { if !isConnected { onSelect() } }) {
+        // Connected providers stay clickable so the user can re-auth or switch
+        // to a different account; the new login overwrites the stored credential.
+        Button(action: onSelect) {
             HStack(spacing: 10) {
                 ProviderLogoImage(provider: provider, size: 16)
                     .frame(width: 16)
@@ -52,15 +54,17 @@ private struct ProviderPickerRow: View {
             }
             .padding(.horizontal, AppListMetrics.rowHorizontalPadding)
             .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: AppListMetrics.cornerRadius, style: .continuous)
-                    .fill(isHovering && !isConnected ? AppListMetrics.hoverFill : Color.clear)
+                    .fill(isHovering ? AppListMetrics.hoverFill : Color.clear)
             )
             .contentShape(RoundedRectangle(cornerRadius: AppListMetrics.cornerRadius, style: .continuous))
         }
         .buttonStyle(.plain)
-        .opacity(isConnected ? 0.55 : 1)
-        .onHover { isHovering = $0 && !isConnected }
+        // Dimmed so it still reads as already-connected, but it remains active.
+        .opacity(isConnected ? 0.6 : 1)
+        .onHover { isHovering = $0 }
     }
 }
 
@@ -107,7 +111,7 @@ struct AddProviderFlowSheet: View {
             Divider()
             footer
         }
-        .frame(width: 520, height: 520)
+        .frame(width: 520)
         .onChange(of: oauthSucceeded) { _, success in
             guard success else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { dismiss() }
@@ -187,6 +191,11 @@ struct AddProviderFlowSheet: View {
                 .padding(.horizontal, 18)
                 .padding(.vertical, 6)
             }
+            // Cap the list so the picker is a stable height while the other
+            // steps (method / API key / OAuth) size to their content — the
+            // sheet then resizes per step instead of padding everything to a
+            // fixed 520.
+            .frame(height: 380)
         }
     }
 
@@ -255,6 +264,9 @@ struct AddProviderFlowSheet: View {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .stroke(AppTheme.contentStroke, lineWidth: 1)
             )
+            // Stroke-only background leaves the interior transparent, so make the
+            // whole card the hit target rather than just the text/icon.
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .buttonStyle(.plain)
     }
@@ -433,7 +445,7 @@ struct ProviderLoginPhaseView: View {
                         .controlSize(.small)
                 }
 
-            case let .pasteCode(promptID, message, placeholder):
+            case let .pasteCode(promptID, message, placeholder, allowEmpty):
                 VStack(alignment: .leading, spacing: 8) {
                     Text(message)
                         .font(.subheadline)
@@ -450,10 +462,10 @@ struct ProviderLoginPhaseView: View {
                             RoundedRectangle(cornerRadius: 6, style: .continuous)
                                 .strokeBorder(AppTheme.contentStroke, lineWidth: 1)
                         )
-                        .onSubmit { submit(promptID) }
-                    Button("Continue") { submit(promptID) }
+                        .onSubmit { submit(promptID, allowEmpty: allowEmpty) }
+                    Button("Continue") { submit(promptID, allowEmpty: allowEmpty) }
                         .appPrimaryButton()
-                        .disabled(pasteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(!allowEmpty && pasteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
 
             case let .select(promptID, message, options):
@@ -533,14 +545,14 @@ struct ProviderLoginPhaseView: View {
         }
     }
 
-    private func submit(_ promptID: Int) {
+    private func submit(_ promptID: Int, allowEmpty: Bool) {
         let value = pasteText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty else { return }
+        guard allowEmpty || !value.isEmpty else { return }
         service.submit(promptID: promptID, value: value)
     }
 
     private var currentPromptID: Int {
-        if case let .pasteCode(promptID, _, _) = service.phase { return promptID }
+        if case let .pasteCode(promptID, _, _, _) = service.phase { return promptID }
         return 0
     }
 }

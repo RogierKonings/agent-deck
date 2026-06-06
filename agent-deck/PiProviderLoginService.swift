@@ -22,7 +22,7 @@ final class PiProviderLoginService {
     enum Phase: Equatable {
         case launching
         case opening(url: URL, instructions: String?)
-        case pasteCode(promptID: Int, message: String, placeholder: String?)
+        case pasteCode(promptID: Int, message: String, placeholder: String?, allowEmpty: Bool)
         case select(promptID: Int, message: String, options: [SelectOption])
         case deviceCode(userCode: String, verificationURI: URL)
         case progress(String)
@@ -151,7 +151,8 @@ final class PiProviderLoginService {
                 phase = .pasteCode(
                     promptID: id,
                     message: object["message"] as? String ?? "Paste the authorization code",
-                    placeholder: object["placeholder"] as? String
+                    placeholder: object["placeholder"] as? String,
+                    allowEmpty: object["allowEmpty"] as? Bool ?? false
                 )
             }
         case "select":
@@ -268,6 +269,14 @@ final class PiProviderLoginService {
       else p.res(msg.value);
     });
 
+    // Hold the event loop open while we await stdin replies. readline + an open
+    // stdin don't reliably keep Node alive when it's idle at a prompt, so the
+    // process can exit with code 13 (unsettled top-level await) the instant a
+    // flow's first step is a prompt — e.g. GitHub Copilot's enterprise-domain
+    // question, before any socket/timer exists. A long interval guarantees it.
+    process.stdin.resume();
+    const keepAlive = setInterval(() => {}, 1 << 30);
+
     try {
       const auth = AuthStorage.create();
       await auth.login(providerId, {
@@ -278,9 +287,11 @@ final class PiProviderLoginService {
         onManualCodeInput: () => ask({ t: 'prompt', message: 'Paste the authorization code from your browser', allowEmpty: false }),
         onSelect: (p) => ask({ t: 'select', message: p.message, options: p.options }),
       });
+      clearInterval(keepAlive);
       send({ t: 'done' });
       process.exit(0);
     } catch (e) {
+      clearInterval(keepAlive);
       fail(e && e.message ? e.message : e);
     }
     """#

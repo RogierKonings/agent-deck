@@ -144,6 +144,21 @@ final class PiAgentExtensionLoadingModeTests: XCTestCase {
         XCTAssertFalse(none.contains("deck_agents"))
     }
 
+    // MARK: - Description reader
+
+    func testDescriptionReaderBlockComment() {
+        let src = "/**\n * Terminal notification extension for Pi.\n *\n * Details here.\n */\nimport x\n"
+        XCTAssertEqual(PiExtensionDescriptionReader.leadingDescription(fromSource: src), "Terminal notification extension for Pi.")
+    }
+
+    func testDescriptionReaderNoLeadingCommentIsNil() {
+        XCTAssertNil(PiExtensionDescriptionReader.leadingDescription(fromSource: "import type { ExtensionAPI } from \"x\";\n"))
+    }
+
+    func testDescriptionReaderLineComment() {
+        XCTAssertEqual(PiExtensionDescriptionReader.leadingDescription(fromSource: "// Quick footer tweak\nexport default {}"), "Quick footer tweak")
+    }
+
     // MARK: - Helpers
 
     private func makeTempHome(extensionFileNames: [String]) throws -> URL {

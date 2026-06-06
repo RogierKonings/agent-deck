@@ -4734,6 +4734,14 @@ final class AppViewModel: NSObject {
         appSettingsController.piAgentLaunchPreview
     }
 
+    /// Bumped by the Extensions toolbar Refresh action; the screen keys its
+    /// off-main discovery `.task` on this so a Refresh re-scans without a project change.
+    private(set) var piExtensionsRefreshToken = 0
+
+    func refreshDiscoveredPiExtensions() {
+        piExtensionsRefreshToken &+= 1
+    }
+
     func isPiExtensionEnabled(_ candidate: PiExtensionCandidate) -> Bool {
         appSettingsController.isPiExtensionEnabled(candidate)
     }
