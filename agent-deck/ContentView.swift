@@ -949,6 +949,22 @@ struct ContentView: View {
         }
     }
 
+    private var agentsToggleButton: some View {
+        let enabled = viewModel.appSettings.nativeSubagentsEnabledForNewSessions
+        let button = Button {
+            viewModel.toggleSubagentsForNewSessions()
+        } label: {
+            Label("Deck Agents", systemImage: enabled ? "paperplane.fill" : "paperplane")
+        }
+        .help(enabled ? "Turn Deck agents off for new sessions" : "Turn Deck agents on for new sessions")
+
+        if enabled {
+            return AnyView(button.toolbarPrimaryActionChrome())
+        } else {
+            return AnyView(button.toolbarNeutralChrome())
+        }
+    }
+
     @ToolbarContentBuilder
     private var primaryActionToolbarItems: some ToolbarContent {
         if viewModel.selectedSidebarItem == .projects {
@@ -985,16 +1001,15 @@ struct ContentView: View {
 
     @ToolbarContentBuilder
     private var extensionsPrimaryToolbarContent: some ToolbarContent {
+        // Single standalone button — no ControlGroup wrapper (that double-rings it).
         ToolbarItem(placement: .primaryAction) {
-            ControlGroup {
-                Button {
-                    viewModel.refreshDiscoveredPiExtensions()
-                } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                }
-                .toolbarNeutralChrome()
-                .help("Re-scan for Pi extensions")
+            Button {
+                viewModel.refreshDiscoveredPiExtensions()
+            } label: {
+                Label("Refresh", systemImage: "arrow.clockwise")
             }
+            .toolbarNeutralChrome()
+            .help("Re-scan for Pi extensions")
         }
     }
 
@@ -1025,6 +1040,13 @@ struct ContentView: View {
 
     @ToolbarContentBuilder
     private var agentsPrimaryToolbarContent: some ToolbarContent {
+        // Deck agents on/off toggle — same global default as the Pi Agent composer footer.
+        ToolbarItem(placement: .primaryAction) {
+            agentsToggleButton
+        }
+
+        ToolbarSpacer(.fixed, placement: .primaryAction)
+
         // Utility island: filter the list, bulk-edit models, and (contextually)
         // create a replacement for a selected builtin agent.
         ToolbarItem(placement: .primaryAction) {

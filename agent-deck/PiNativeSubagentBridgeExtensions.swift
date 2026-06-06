@@ -35,6 +35,8 @@ struct PiNativeSubagentBridgeExtensions {
     nonisolated struct BridgeDescriptor: Identifiable, Hashable, Sendable {
         let id: String
         let displayName: String
+        /// Plain-language explanation of what this bridge gives the agent.
+        let summary: String
         let toolNames: [String]
         let condition: String?
     }
@@ -43,11 +45,41 @@ struct PiNativeSubagentBridgeExtensions {
     /// These always register before any user-selected extension, so they take
     /// precedence on tool-name conflicts.
     nonisolated static let bridgeDescriptors: [BridgeDescriptor] = [
-        BridgeDescriptor(id: "ask_user", displayName: "Ask User", toolNames: [askUserToolName], condition: nil),
-        BridgeDescriptor(id: "web_exa", displayName: "Web search (Exa)", toolNames: exaToolNames.sorted(), condition: "Requires an Exa API key"),
-        BridgeDescriptor(id: "web_fetch", displayName: "Web fetch", toolNames: [fallbackWebFetchToolName], condition: "When no Exa key is set and web fetch is available"),
-        BridgeDescriptor(id: "memory", displayName: "Memory", toolNames: memoryToolNames, condition: "When memory is enabled"),
-        BridgeDescriptor(id: "deck_agents", displayName: "Deck agents", toolNames: parentSubagentToolNames.sorted(), condition: "When Deck agents are enabled")
+        BridgeDescriptor(
+            id: "ask_user",
+            displayName: "Ask User",
+            summary: "Lets the agent ask you questions through Agent Deck's native prompt cards.",
+            toolNames: [askUserToolName],
+            condition: nil
+        ),
+        BridgeDescriptor(
+            id: "web_exa",
+            displayName: "Web search (Exa)",
+            summary: "Gives the agent web search and page-content fetching, powered by Exa.",
+            toolNames: exaToolNames.sorted(),
+            condition: "Requires an Exa API key"
+        ),
+        BridgeDescriptor(
+            id: "web_fetch",
+            displayName: "Web fetch",
+            summary: "Lets the agent fetch the contents of a known URL when Exa search isn't configured.",
+            toolNames: [fallbackWebFetchToolName],
+            condition: "When no Exa key is set and web fetch is available"
+        ),
+        BridgeDescriptor(
+            id: "memory",
+            displayName: "Memory",
+            summary: "Lets the agent save and recall long-term memories across your sessions.",
+            toolNames: memoryToolNames,
+            condition: "When memory is enabled"
+        ),
+        BridgeDescriptor(
+            id: "deck_agents",
+            displayName: "Deck agents",
+            summary: "Lets the agent delegate work to your Deck agents and coordinate plans and supervision.",
+            toolNames: parentSubagentToolNames.sorted(),
+            condition: "When Deck agents are enabled"
+        )
     ]
 
     /// A bridge that actually loaded for a specific launch, for display in the

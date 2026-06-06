@@ -112,24 +112,23 @@ struct ExtensionsScreen: View {
 
     private func bridgeRow(_ bridge: PiNativeSubagentBridgeExtensions.BridgeDescriptor, isActive: Bool) -> some View {
         HStack(alignment: .top, spacing: 14) {
-            Image(systemName: "shield.lefthalf.filled")
-                .font(.title3)
-                .foregroundStyle(isActive ? AppTheme.brandAccent : .secondary)
-                .frame(width: 24)
-
-            VStack(alignment: .leading, spacing: 7) {
+            VStack(alignment: .leading, spacing: 5) {
                 Text(bridge.displayName)
                     .font(.body.weight(.semibold))
                     .fontWidth(.expanded)
-                Text(bridge.toolNames.joined(separator: ", "))
-                    .font(.caption.monospaced())
+                Text(bridge.summary)
+                    .font(.caption)
                     .foregroundStyle(AppTheme.mutedText)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(bridge.toolNames.joined(separator: ", "))
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                 if let condition = bridge.condition {
                     Text(condition)
-                        .font(.caption)
-                        .foregroundStyle(AppTheme.mutedText)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
