@@ -494,7 +494,11 @@ final class AppViewModel: NSObject {
 
         refreshTask?.cancel()
         let viewModel = self
-        refreshTask = Task.detached {
+        // `.utility`, not the default (which escalates to user-interactive QoS): a
+        // filesystem project scan must NOT outrank the main thread, or it starves the
+        // UI for CPU during scroll/interaction (a ~280ms scroll hang traced to
+        // `discoverProjects` running at user-interactive QoS).
+        refreshTask = Task.detached(priority: .utility) {
             let result = AppRefreshService().loadSnapshot(
                 rootURLs: rootURLs,
                 selectedProjectPath: selectedProjectPath,
@@ -6221,7 +6225,8 @@ final class AppViewModel: NSObject {
         let requestID = refreshRequestID
         refreshTask?.cancel()
         let viewModel = self
-        refreshTask = Task.detached {
+        // `.utility` so the project scan never outranks the main thread (see refresh()).
+        refreshTask = Task.detached(priority: .utility) {
             let result = AppRefreshService().loadSnapshot(
                 rootURLs: rootURLs,
                 selectedProjectPath: selectedProjectPath,

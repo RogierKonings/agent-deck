@@ -43,8 +43,12 @@ final class AgentImageStore: ObservableObject {
     private func prewarmImageCache() {
         let urls = assignments.values.map { imagesDirectory.appendingPathComponent($0) }
         guard !urls.isEmpty else { return }
-        Task.detached(priority: .utility) {
-            AgentImageLoader.prewarm(urls: urls)
+        // `.background` + a yield per image (see `prewarm`): this is a pure
+        // optimization (pre-decode so the first display is a cache hit), so it must
+        // never compete with the UI. Run at higher QoS as one tight loop it
+        // saturated a core and contributed to a launch-time scroll hang.
+        Task.detached(priority: .background) {
+            await AgentImageLoader.prewarm(urls: urls)
         }
     }
 
@@ -142,13 +146,16 @@ struct AgentImageLoader {
     /// the first `image(at:)` for each avatar is a cache hit instead of a
     /// blocking disk read + decode. Safe to call from any thread — `NSCache`
     /// is thread-safe, and a concurrent `image(at:)` miss simply decodes once.
-    nonisolated static func prewarm(urls: [URL]) {
+    nonisolated static func prewarm(urls: [URL]) async {
         for url in urls {
             let key = url as NSURL
             guard cache.object(forKey: key) == nil else { continue }
             if let image = downsampledImage(at: url) {
                 cache.setObject(image, forKey: key)
             }
+            // Cooperative break between decodes so a long prewarm can't monopolize
+            // a core — the scheduler can interleave higher-priority work.
+            await Task.yield()
         }
     }
 
