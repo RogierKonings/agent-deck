@@ -91,7 +91,7 @@ struct EnvPersistence {
 
         var text = output.joined(separator: "\n")
         if !text.hasSuffix("\n") { text.append("\n") }
-        try text.write(to: url, atomically: true, encoding: .utf8)
+        try AtomicFileWriter.writeText(text, to: draft.path, fileManager: fileManager)
     }
 
     func delete(_ record: EnvKeyRecord) throws {
@@ -112,7 +112,7 @@ struct EnvPersistence {
 
         var text = output.joined(separator: "\n")
         if !text.isEmpty, !text.hasSuffix("\n") { text.append("\n") }
-        try text.write(to: url, atomically: true, encoding: .utf8)
+        try AtomicFileWriter.writeText(text, to: record.source.path, fileManager: fileManager)
     }
 
     private func envKey(from line: String) -> String? {

@@ -77,7 +77,7 @@ struct AgentPersistence {
             }
         }
 
-        try writeText(serializeAgent(config), to: path)
+        try AtomicFileWriter.writeText(serializeAgent(config), to: path, fileManager: fileManager)
     }
 
     private func seededBuiltinOverrideConfig(for agent: EffectiveAgentRecord, base: AgentConfig, scope: AgentEditingTarget.OverrideScope) -> AgentConfig {
@@ -169,7 +169,7 @@ struct AgentPersistence {
             root["subagents"] = subagents
         }
 
-        try writeJSON(root, to: overridePath)
+        try AtomicFileWriter.writeJSON(root, to: overridePath, fileManager: fileManager)
     }
 
     private func buildBuiltinOverride(base: AgentConfig, edited: AgentConfig) -> [String: Any]? {
@@ -218,7 +218,7 @@ struct AgentPersistence {
             root["subagents"] = subagents
         }
 
-        try writeJSON(root, to: path)
+        try AtomicFileWriter.writeJSON(root, to: path, fileManager: fileManager)
     }
 
     func setBuiltinDisabled(_ isDisabled: Bool, for agent: EffectiveAgentRecord, scope: AgentEditingTarget.OverrideScope, projectRoot: String?) throws {
@@ -248,7 +248,7 @@ struct AgentPersistence {
             root["subagents"] = subagents
         }
 
-        try writeJSON(root, to: path)
+        try AtomicFileWriter.writeJSON(root, to: path, fileManager: fileManager)
     }
 
     /// Removes only the `disabled` key from this agent's override at the given
@@ -285,7 +285,7 @@ struct AgentPersistence {
             root["subagents"] = subagents
         }
 
-        try writeJSON(root, to: path)
+        try AtomicFileWriter.writeJSON(root, to: path, fileManager: fileManager)
     }
 
     private func parseExpectedOutcome(_ value: String?) -> PiSubagentExpectedOutcome? {
@@ -400,21 +400,6 @@ struct AgentPersistence {
             throw PersistenceError.invalidJSON(path)
         }
         return json
-    }
-
-    private func writeJSON(_ object: [String: Any], to path: String) throws {
-        let url = URL(fileURLWithPath: path)
-        try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
-        var text = String(decoding: data, as: UTF8.self)
-        if !text.hasSuffix("\n") { text.append("\n") }
-        try text.write(to: url, atomically: true, encoding: .utf8)
-    }
-
-    private func writeText(_ text: String, to path: String) throws {
-        let url = URL(fileURLWithPath: path)
-        try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try text.write(to: url, atomically: true, encoding: .utf8)
     }
 
     private func homeDirectory() -> URL {
