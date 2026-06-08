@@ -117,6 +117,7 @@ final class AppViewModel: NSObject {
     let piTerminal: PiTerminalCoordinator
     let projectServer: ProjectServerCoordinator
     let agentDeckRelease: AgentDeckReleaseCoordinator
+    let catalogAutoRefresh: CatalogAutoRefreshCoordinator
     let automation: AutomationCoordinator
     private var sessionWorktreeService: PiAgentSessionWorktreeService { environment.sessionWorktreeService }
     /// Memoizes `selectableAgentUniverse(forProjectPath:)` so the subagent
@@ -128,16 +129,8 @@ final class AppViewModel: NSObject {
     var globalSnapshot: ScanSnapshot = .empty {
         didSet { clearAgentUniverseCache() }
     }
-    private var autoRefreshCancellable: AnyCancellable?
-    private var watchFingerprintTask: Task<Void, Never>?
-    private var watchEventDebounceTask: Task<Void, Never>?
-    private var fileWatchEventMonitor: FileWatchEventMonitor?
-    private var lastWatchFingerprint: String = ""
-    private var watchedURLsForAutoRefresh: [URL] = []
+    var didShutdown = false
     let refreshCoordinator = RefreshCoordinator()
-    private let watchEventDebounceNanoseconds: UInt64 = 1_000_000_000
-    private let fallbackAutoRefreshInterval: TimeInterval = 300
-    private var didShutdown = false
 
     convenience override init() {
         self.init(environment: .live)
@@ -184,6 +177,7 @@ final class AppViewModel: NSObject {
             gitRepositoryService: environment.gitRepositoryService,
             releaseNotesGenerator: environment.releaseNotesGenerator
         )
+        catalogAutoRefresh = CatalogAutoRefreshCoordinator()
         super.init()
         projects.host = self
         githubWorkspace.host = self
@@ -200,6 +194,7 @@ final class AppViewModel: NSObject {
         piTerminal.attach(host: self)
         projectServer.attach(host: self)
         agentDeckRelease.attach(host: self)
+        catalogAutoRefresh.attach(host: self)
 
         settings.bootstrapFromController()
         #if DEBUG
@@ -225,7 +220,7 @@ final class AppViewModel: NSObject {
             self.refresh(includeModels: false, scanAllProjects: true, silentlyReconcile: true)
         }
         registerAppNotificationObservers()
-        startAutoRefresh()
+        catalogAutoRefresh.start()
         piSubagents.cleanupOrphanedArtifacts()
 
         Task { [weak self] in
@@ -244,7 +239,7 @@ final class AppViewModel: NSObject {
     private func shutdown(recordTranscript: Bool) {
         guard !didShutdown else { return }
         didShutdown = true
-        stopAutoRefresh(cancelPendingScan: true)
+        catalogAutoRefresh.stop(cancelPendingScan: true)
         refreshCoordinator.cancelPendingRefresh()
         piSessions.cancelAllPendingNotifications()
         piSessionTitleGenerator.cancelAll()
@@ -341,11 +336,11 @@ final class AppViewModel: NSObject {
             let discoveredProjectPaths = Set(result.discoveredProjects.map(\.path))
             allProjectSnapshots = allProjectSnapshots.filter { discoveredProjectPaths.contains($0.key) }
         }
-        watchedURLsForAutoRefresh = result.watchedURLs
-        if result.includesWatchFingerprint {
-            lastWatchFingerprint = result.watchFingerprint
-        }
-        updateAutoRefreshWatchList()
+        catalogAutoRefresh.applyRefreshSnapshot(
+            watchedURLs: result.watchedURLs,
+            watchFingerprint: result.watchFingerprint,
+            includesWatchFingerprint: result.includesWatchFingerprint
+        )
 
         if let matchingProject = result.selectedProject {
             projects.applySelectedProjectFromRefresh(url: matchingProject.url, path: matchingProject.path)
@@ -767,8 +762,8 @@ final class AppViewModel: NSObject {
             // Re-sample Foundation Model availability — it may have changed
             // (model finished downloading) while the app was inactive.
             self.rebuildAutomationModelCaches()
-            self.startAutoRefresh()
-            self.refreshIfWatchedFilesChanged()
+            self.catalogAutoRefresh.start()
+            self.catalogAutoRefresh.refreshIfWatchedFilesChanged()
             self.acknowledgeVisibleSelectedPiAgentSession()
             if self.selectedSidebarItem == .agent && self.shouldShowPiAgentGitActions {
                 self.prepareRepoChangesForSelectedPiAgentSession()
@@ -777,7 +772,7 @@ final class AppViewModel: NSObject {
     }
 
     @objc private func handleAppWillResignActiveNotification(_ notification: Notification) {
-        stopAutoRefresh(cancelPendingScan: true)
+        catalogAutoRefresh.stop(cancelPendingScan: true)
     }
 
     @objc private func handleAppWillTerminateNotification(_ notification: Notification) {
@@ -3292,84 +3287,6 @@ final class AppViewModel: NSObject {
     private func deduplicateByID<T: Identifiable>(_ values: [T]) -> [T] where T.ID: Hashable {
         var seen: Set<T.ID> = []
         return values.filter { seen.insert($0.id).inserted }
-    }
-
-    private func startAutoRefresh() {
-        guard !didShutdown else { return }
-        if fileWatchEventMonitor == nil {
-            fileWatchEventMonitor = FileWatchEventMonitor { [weak self] in
-                Task { @MainActor in
-                    self?.scheduleRefreshForWatchedFileEvent()
-                }
-            }
-        }
-        updateAutoRefreshWatchList()
-
-        // Always cancel-and-reassign instead of `guard == nil else return`.
-        // The latter silently leaks the prior subscription if anyone ever
-        // calls `startAutoRefresh()` twice without an intervening
-        // `stopAutoRefresh()`.
-        autoRefreshCancellable?.cancel()
-        autoRefreshCancellable = Timer.publish(every: fallbackAutoRefreshInterval, tolerance: 30, on: .main, in: .common)
-            .autoconnect()
-            .sink { [weak self] _ in
-                self?.refreshIfWatchedFilesChanged()
-            }
-    }
-
-    private func stopAutoRefresh(cancelPendingScan: Bool) {
-        fileWatchEventMonitor?.stop()
-        fileWatchEventMonitor = nil
-        watchEventDebounceTask?.cancel()
-        watchEventDebounceTask = nil
-        autoRefreshCancellable?.cancel()
-        autoRefreshCancellable = nil
-        if cancelPendingScan {
-            watchFingerprintTask?.cancel()
-            watchFingerprintTask = nil
-        }
-    }
-
-    private func updateAutoRefreshWatchList() {
-        guard let fileWatchEventMonitor else { return }
-        fileWatchEventMonitor.updateWatchedURLs(currentWatchedURLsForAutoRefresh())
-    }
-
-    private func currentWatchedURLsForAutoRefresh() -> [URL] {
-        watchedURLsForAutoRefresh.isEmpty
-            ? AppRefreshService.watchedURLs(projects: selectedDiscoveredProject.map { [$0] } ?? [], snapshot: snapshot, externalSkillPaths: appSettings.externalSkillPaths, externalPromptPaths: appSettings.externalPromptPaths)
-            : watchedURLsForAutoRefresh
-    }
-
-    private func scheduleRefreshForWatchedFileEvent() {
-        guard !didShutdown else { return }
-        watchEventDebounceTask?.cancel()
-        let delay = watchEventDebounceNanoseconds
-        watchEventDebounceTask = Task { @MainActor [weak self, delay] in
-            try? await Task.sleep(nanoseconds: delay)
-            guard let self, !Task.isCancelled, !self.didShutdown else { return }
-            self.watchEventDebounceTask = nil
-            self.refreshIfWatchedFilesChanged()
-        }
-    }
-
-    private func refreshIfWatchedFilesChanged() {
-        guard watchFingerprintTask == nil else { return }
-        let previousFingerprint = lastWatchFingerprint
-        let urls = currentWatchedURLsForAutoRefresh()
-        watchFingerprintTask = Task.detached(priority: .utility) { [weak self, previousFingerprint, urls] in
-            let fingerprint = FileWatchFingerprint.make(urls: urls)
-            guard !Task.isCancelled else { return }
-            await self?.applyWatchFingerprint(fingerprint, previousFingerprint: previousFingerprint)
-        }
-    }
-
-    private func applyWatchFingerprint(_ fingerprint: String, previousFingerprint: String) {
-        guard !Task.isCancelled else { return }
-        watchFingerprintTask = nil
-        guard fingerprint != previousFingerprint else { return }
-        lastWatchFingerprint = fingerprint
-        refresh(includeModels: false)
     }
 
 }
