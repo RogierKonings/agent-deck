@@ -77,35 +77,10 @@ final class AppViewModel: NSObject {
     /// then nils it. Observable so the screen's `.onChange` fires.
     var selectedMemoryID: String?
     var selectedAgentFilter: AgentFilter = .all
-    var discoveredProjects: [DiscoveredProject] = [] {
-        didSet {
-            rebuildProjectByPath()
-            discoveredProjectsRevision &+= 1
-        }
-    }
-    /// Bumped on every assignment to `discoveredProjects`. Cheap change signal
-    /// for cached layouts that depend on the project list ordering or contents
-    /// — avoids hashing/joining paths per `.task(id:)` evaluation.
-    private(set) var discoveredProjectsRevision: Int = 0
-    /// O(1) lookup mirror of `discoveredProjects`. Use this from view bodies
-    /// (e.g. `PiAgentSessionRow`'s project lookup) instead of `.first(where:)`,
-    /// which would walk the array per row per render.
-    private(set) var projectByPath: [String: DiscoveredProject] = [:]
-    private func rebuildProjectByPath() {
-        projectByPath = Dictionary(uniqueKeysWithValues: discoveredProjects.map { ($0.path, $0) })
-    }
+    let projects: ProjectDiscoveryState
     private(set) var isRefreshingProjects: Bool {
         get { refreshCoordinator.isRefreshingProjects }
         set { refreshCoordinator.isRefreshingProjects = newValue }
-    }
-    var projectPreferencesByPath: [String: ProjectPreference] = ProjectPreferencesStore.shared.preferencesByPath
-    /// Bumped every time `projectPreferencesByPath` is reassigned (via
-    /// `applyProjectPreferenceChanges` or the refresh snapshot apply path).
-    /// Cheap `.task(id:)` change signal for cached layouts that depend on
-    /// preferences — avoids hashing the full dict per render.
-    private(set) var projectPreferencesRevision: Int = 0
-    var selectedProjectPath: String? {
-        didSet { clearAgentUniverseCache() }
     }
     var allProjectSnapshots: [String: ScanSnapshot] = [:] {
         didSet { clearAgentUniverseCache() }
@@ -213,7 +188,6 @@ final class AppViewModel: NSObject {
     var globalSnapshot: ScanSnapshot = .empty {
         didSet { clearAgentUniverseCache() }
     }
-    private(set) var projectRootURL: URL?
     private var autoRefreshCancellable: AnyCancellable?
     private var watchFingerprintTask: Task<Void, Never>?
     private var watchEventDebounceTask: Task<Void, Never>?
@@ -225,7 +199,6 @@ final class AppViewModel: NSObject {
     private let watchEventDebounceNanoseconds: UInt64 = 1_000_000_000
     private let fallbackAutoRefreshInterval: TimeInterval = 300
     private var nativeParallelSchedulersByID: [UUID: NativeParallelGraphScheduler] = [:]
-    private let lastSelectedProjectDefaultsKey = "lastSelectedProjectPath"
     private var pendingPiAgentNotificationTasks: [UUID: Task<Void, Never>] = [:]
     private var artifactCleanupTask: Task<Void, Never>?
     private var didShutdown = false
@@ -246,7 +219,9 @@ final class AppViewModel: NSObject {
     init(environment: AppEnvironment) {
         self.environment = environment
         skillRepositorySyncService = environment.skillRepositorySyncService
+        projects = ProjectDiscoveryState(preferencesStore: environment.projectPreferencesStore)
         super.init()
+        projects.host = self
         githubWorkspace.host = self
 
         appSettings = appSettingsController.settings
@@ -258,10 +233,7 @@ final class AppViewModel: NSObject {
         // deterministic "nothing installed" state for the onboarding/Doctor previews.
         if ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1" { return }
         #endif
-        selectedProjectPath = UserDefaults.standard.string(forKey: lastSelectedProjectDefaultsKey)
-        if let selectedProjectPath {
-            projectRootURL = URL(fileURLWithPath: selectedProjectPath, isDirectory: true).standardizedFileURL
-        }
+        projects.loadPersistedSelection()
         piAgentSessionStore.newSessionSubagentsEnabled = appSettings.nativeSubagentsEnabledForNewSessions
         writeOpenAIFastModeConfig()
         configurePiAgentIdleParking()
@@ -495,9 +467,10 @@ final class AppViewModel: NSObject {
         _ result: AppRefreshSnapshot,
         includeModels: Bool
     ) {
-        projectPreferencesByPath = result.projectPreferencesByPath
-        projectPreferencesRevision &+= 1
-        discoveredProjects = result.discoveredProjects
+        projects.applyFromRefresh(
+            discoveredProjects: result.discoveredProjects,
+            preferencesByPath: result.projectPreferencesByPath
+        )
 
         if !appSettings.didMigrateAgentAssignmentsFromDiscoveredFiles {
             guard result.includesAllProjectSnapshots else {
@@ -526,14 +499,12 @@ final class AppViewModel: NSObject {
         updateAutoRefreshWatchList()
 
         if let matchingProject = result.selectedProject {
-            projectRootURL = matchingProject.url
+            projects.applySelectedProjectFromRefresh(url: matchingProject.url, path: matchingProject.path)
             snapshot = allProjectSnapshots[matchingProject.path]
                 ?? result.selectedProjectSnapshot.map { scopedAgentSnapshot($0, projectPath: matchingProject.path, globalCatalogSnapshot: result.globalSnapshot, catalogProjectSnapshots: catalogProjectSnapshots) }
                 ?? globalSnapshot
         } else {
-            projectRootURL = nil
-            self.selectedProjectPath = nil
-            persistSelectedProjectPath(nil)
+            projects.clearSelectionFromRefresh()
             snapshot = makeAggregateSnapshot()
         }
 
@@ -1169,178 +1140,6 @@ final class AppViewModel: NSObject {
         }
         skillBatchActionMessage = parts.isEmpty ? "No skills needed updating." : parts.joined(separator: "\n\n")
     }
-
-    func addProject(_ url: URL, selectingAfterAdd: Bool = false) {
-        let standardizedURL = url.standardizedFileURL
-        projectPreferencesStore.addProjectPath(standardizedURL.path)
-        projectPreferencesStore.setEnabled(true, for: standardizedURL.path)
-        projectPreferencesByPath = projectPreferencesStore.preferencesByPath
-
-        if selectingAfterAdd {
-            projectRootURL = standardizedURL
-            selectedProjectPath = standardizedURL.path
-            persistSelectedProjectPath(standardizedURL.path)
-        }
-
-        refresh(includeModels: false, scanAllProjects: false, extraProjectPathsToScan: [standardizedURL.path])
-        if selectingAfterAdd {
-            github.resetProjectScopedState()
-        }
-    }
-
-    func setSelectedProject(_ url: URL?) {
-        guard let url else {
-            clearProjectRoot()
-            return
-        }
-
-        let standardizedURL = url.standardizedFileURL
-        projectPreferencesStore.addProjectPath(standardizedURL.path)
-        projectPreferencesByPath = projectPreferencesStore.preferencesByPath
-        projectRootURL = standardizedURL
-        selectedProjectPath = standardizedURL.path
-        persistSelectedProjectPath(standardizedURL.path)
-        refresh(includeModels: false, scanAllProjects: false, extraProjectPathsToScan: [standardizedURL.path])
-        github.resetProjectScopedState()
-    }
-
-    func clearProjectRoot() {
-        projectRootURL = nil
-        selectedProjectPath = nil
-        persistSelectedProjectPath(nil)
-        refresh(includeModels: false)
-        github.resetProjectScopedState()
-    }
-
-    func projectPreference(for path: String) -> ProjectPreference {
-        projectPreferencesStore.preference(for: path)
-    }
-
-    func setProjectEnabled(_ isEnabled: Bool, for project: DiscoveredProject) {
-        projectPreferencesStore.setEnabled(isEnabled, for: project.path)
-        applyProjectPreferenceChanges()
-
-        if !isEnabled, selectedProjectPath == project.path {
-            projectRootURL = nil
-            selectedProjectPath = nil
-            persistSelectedProjectPath(nil)
-        }
-
-        if isEnabled {
-            refresh(includeModels: false, scanAllProjects: false, extraProjectPathsToScan: [project.path])
-        } else if selectedProjectPath == nil {
-            snapshot = makeAggregateSnapshot()
-        }
-        github.resetProjectScopedState()
-    }
-
-    func setAllProjectsEnabled(_ isEnabled: Bool) {
-        let paths = discoveredProjects.map(\.path)
-        projectPreferencesStore.setAllEnabled(isEnabled, for: paths)
-        applyProjectPreferenceChanges()
-
-        if !isEnabled, selectedProjectPath != nil {
-            projectRootURL = nil
-            selectedProjectPath = nil
-            persistSelectedProjectPath(nil)
-        }
-
-        if isEnabled {
-            refresh(includeModels: false)
-        } else {
-            snapshot = makeAggregateSnapshot()
-        }
-        github.resetProjectScopedState()
-    }
-
-    func removeProjectFromLibrary(_ project: DiscoveredProject) {
-        forgetProject(project)
-        github.resetProjectScopedState()
-    }
-
-    func moveProjectToTrash(_ project: DiscoveredProject) throws {
-        try FileManager.default.trashItem(at: project.url, resultingItemURL: nil)
-        forgetProject(project)
-        refresh(includeModels: false, scanAllProjects: true)
-        github.resetProjectScopedState()
-    }
-
-    private func forgetProject(_ project: DiscoveredProject) {
-        projectPreferencesStore.setHidden(true, for: project.path)
-        applyProjectPreferenceChanges()
-        allProjectSnapshots.removeValue(forKey: project.path)
-
-        if selectedProjectPath == project.path {
-            projectRootURL = nil
-            selectedProjectPath = nil
-            persistSelectedProjectPath(nil)
-        }
-
-        if selectedProjectPath == nil {
-            snapshot = makeAggregateSnapshot()
-        }
-    }
-
-    func toggleProjectFavorite(_ project: DiscoveredProject) {
-        projectPreferencesStore.toggleFavorite(for: project.path)
-        applyProjectPreferenceChanges()
-    }
-
-    func chooseCustomIcon(for project: DiscoveredProject) {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = false
-        panel.canChooseFiles = true
-        panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.image]
-        panel.prompt = "Choose Icon"
-        panel.message = "Choose an image to use as this project's custom icon."
-
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-
-        do {
-            try projectPreferencesStore.setCustomIcon(from: url, for: project.path)
-            applyProjectPreferenceChanges()
-        } catch {
-            github.githubLastError = error.localizedDescription
-        }
-    }
-
-    func clearCustomIcon(for project: DiscoveredProject) {
-        projectPreferencesStore.clearCustomIcon(for: project.path)
-        applyProjectPreferenceChanges()
-    }
-
-    private func applyProjectPreferenceChanges() {
-        // Preference changes (especially hiding/removing a project) must invalidate any
-        // in-flight refresh that was built with older preferences. Otherwise a stale
-        // refresh can apply after this local mutation and reinsert the removed project.
-        refreshCoordinator.invalidatePendingRefresh()
-
-        projectPreferencesByPath = projectPreferencesStore.preferencesByPath
-        projectPreferencesRevision &+= 1
-        discoveredProjects = discoveredProjects.compactMap { project in
-            let preference = projectPreferencesStore.preference(for: project.path)
-            guard !preference.isHidden else { return nil }
-            return DiscoveredProject(
-                url: project.url,
-                gitHubRemote: project.gitHubRemote,
-                isGitRepository: project.isGitRepository,
-                iconFileURL: preference.customIconPath.flatMap { URL(fileURLWithPath: $0) },
-                projectType: project.projectType,
-                fallbackSymbolName: project.fallbackSymbolName,
-                searchIndex: project.searchIndex
-            )
-        }
-    }
-
-    private func persistSelectedProjectPath(_ path: String?) {
-        if let path {
-            UserDefaults.standard.set(path, forKey: lastSelectedProjectDefaultsKey)
-        } else {
-            UserDefaults.standard.removeObject(forKey: lastSelectedProjectDefaultsKey)
-        }
-    }
-
 
     func refreshEverything() {
         guard !github.githubIsRefreshingEverything else { return }
@@ -4621,7 +4420,7 @@ final class AppViewModel: NSObject {
         return result
     }
 
-    private func clearAgentUniverseCache() {
+    func clearAgentUniverseCache() {
         agentUniverseCacheByProjectPath.removeAll(keepingCapacity: true)
     }
 
@@ -4888,32 +4687,6 @@ final class AppViewModel: NSObject {
 
     var hasConfirmedProjectsRootPaths: Bool {
         appSettingsController.hasConfirmedProjectsRootPaths
-    }
-
-    var enabledProjects: [DiscoveredProject] {
-        discoveredProjects.filter { projectPreference(for: $0.path).isEnabled }
-    }
-
-    var favoriteProjects: [DiscoveredProject] {
-        enabledProjects.filter { projectPreference(for: $0.path).isFavorite }
-    }
-
-    var gitHubProjects: [DiscoveredProject] {
-        enabledProjects.filter(\.isGitHubRepository)
-    }
-
-    var selectedDiscoveredProject: DiscoveredProject? {
-        guard let selectedProjectPath else { return nil }
-        return projectByPath[selectedProjectPath]
-    }
-
-    var selectedGitHubProject: DiscoveredProject? {
-        guard let selectedDiscoveredProject, selectedDiscoveredProject.isGitHubRepository else { return nil }
-        return selectedDiscoveredProject
-    }
-
-    var shouldWarnProjectSelection: Bool {
-        enabledProjects.isEmpty
     }
 
     var shouldWarnDoctor: Bool {
@@ -6905,7 +6678,7 @@ final class AppViewModel: NSObject {
         []
     }
 
-    private func makeAggregateSnapshot() -> ScanSnapshot {
+    func makeAggregateSnapshot() -> ScanSnapshot {
         // The no-project view is a global/library management view. Project-local
         // resources remain visible only when their project is selected; they are not
         // merged here so global/library resources do not depend on scanning every repo.
