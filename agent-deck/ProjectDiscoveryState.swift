@@ -249,6 +249,10 @@ final class ProjectDiscoveryState {
         preferencesStore.setAssignedAgent(agentName, assigned: assigned, for: path)
     }
 
+    func setAssignedPromptTemplate(_ promptName: String, assigned: Bool, for path: String) {
+        preferencesStore.setAssignedPromptTemplate(promptName, assigned: assigned, for: path)
+    }
+
     private func rebuildProjectByPath() {
         projectByPath = Dictionary(uniqueKeysWithValues: discoveredProjects.map { ($0.path, $0) })
     }

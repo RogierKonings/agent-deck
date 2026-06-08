@@ -121,6 +121,7 @@ final class AppViewModel: NSObject {
     let appLifecycle: AppLifecycleCoordinator
     let agentUniverse: AgentUniverseCoordinator
     let agentRepository: AgentRepositoryCoordinator
+    let promptRepository: PromptRepositoryCoordinator
     let composerSlash: ComposerSlashCoordinator
     let automation: AutomationCoordinator
     private var sessionWorktreeService: PiAgentSessionWorktreeService { environment.sessionWorktreeService }
@@ -181,6 +182,7 @@ final class AppViewModel: NSObject {
         appLifecycle = AppLifecycleCoordinator()
         agentUniverse = AgentUniverseCoordinator()
         agentRepository = AgentRepositoryCoordinator()
+        promptRepository = PromptRepositoryCoordinator()
         composerSlash = ComposerSlashCoordinator()
         super.init()
         projects.host = self
@@ -202,6 +204,7 @@ final class AppViewModel: NSObject {
         appLifecycle.attach(host: self)
         agentUniverse.attach(host: self)
         agentRepository.attach(host: self)
+        promptRepository.attach(host: self)
         composerSlash.attach(host: self)
         resourceCatalog.attach(host: self)
 
@@ -1385,7 +1388,7 @@ final class AppViewModel: NSObject {
         }
     }
 
-    private func replacePromptSettingsPaths(oldURLs: [URL], newURL: URL?) throws {
+    func replacePromptSettingsPaths(oldURLs: [URL], newURL: URL?) throws {
         let oldPaths = Set(oldURLs.map { $0.standardizedFileURL.path })
         for settingsPath in allSettingsPaths() {
             var root = try loadJSONDictionary(at: settingsPath)
@@ -1629,49 +1632,8 @@ final class AppViewModel: NSObject {
         return name
     }
 
-    func prompt(_ prompt: PromptTemplateRecord, isEnabledFor project: DiscoveredProject) -> Bool {
-        projectPreference(for: project.path).assignedPromptTemplateNames.contains(prompt.name)
-    }
-
-    func assignedProjects(for prompt: PromptTemplateRecord) -> [DiscoveredProject] {
-        enabledProjects.filter { self.prompt(prompt, isEnabledFor: $0) }
-    }
-
-    func promptIsEnabledGlobally(_ prompt: PromptTemplateRecord) -> Bool {
-        appSettings.defaultPromptTemplateNames.contains(prompt.name)
-    }
-
-    func setPrompt(_ prompt: PromptTemplateRecord, enabled: Bool, for project: DiscoveredProject) throws {
-        projectPreferencesStore.setAssignedPromptTemplate(prompt.name, assigned: enabled, for: project.path)
-        applyProjectPreferenceChanges()
-        // Project assignment only mutates UserDefaults — nothing on disk
-        // changed. Reconcile snapshot-derived state in memory instead of
-        // re-walking the filesystem, so the toggle is instant.
-        reconcileSnapshotsFromPreferences()
-        selectedCommandItemID = allVisiblePromptTemplateRecords.first { $0.name == prompt.name }?.id ?? selectedCommandItemID
-    }
-
-    func enablePromptGlobally(_ prompt: PromptTemplateRecord) throws {
-        guard appSettingsController.setDefaultPromptTemplate(prompt.name, enabled: true) else { return }
-        settings.publish()
-        refresh(includeModels: false)
-    }
-
-    func disablePromptGlobally(_ prompt: PromptTemplateRecord) throws {
-        guard appSettingsController.setDefaultPromptTemplate(prompt.name, enabled: false) else { return }
-        settings.publish()
-        refresh(includeModels: false)
-    }
-
-    func bundledPromptIsDisabled(_ prompt: PromptTemplateRecord) -> Bool {
-        prompt.source.kind == .builtin && appSettings.disabledBundledPromptNames.contains(prompt.name)
-    }
-
-    func setBundledPromptDisabled(_ isDisabled: Bool, for prompt: PromptTemplateRecord) {
-        guard prompt.source.kind == .builtin else { return }
-        guard appSettingsController.setBundledPromptDisabled(prompt.name, isDisabled: isDisabled) else { return }
-        settings.publish()
-        refresh(includeModels: false)
+    func explicitSkillVisibilityIssues(for agent: EffectiveAgentRecord) -> [AgentSkillVisibilityIssue] {
+        cachedSkillVisibilityIssuesByAgentID[agent.id] ?? []
     }
 
     func bundledSkillIsDisabled(_ skill: SkillRecord) -> Bool {
@@ -1683,52 +1645,6 @@ final class AppViewModel: NSObject {
         guard appSettingsController.setBundledSkillDisabled(skill.name, isDisabled: isDisabled) else { return }
         settings.publish()
         refresh(includeModels: false)
-    }
-
-    func movePromptToLibrary(_ prompt: PromptTemplateRecord) throws {
-        _ = try ensureLibraryPrompt(for: prompt)
-        refresh(includeModels: false)
-    }
-
-    func canDeletePrompt(_ prompt: PromptTemplateRecord) -> Bool {
-        switch prompt.source.kind {
-        case .package:
-            return false
-        case .builtin, .global, .project, .legacyProject, .override, .library:
-            return true
-        }
-    }
-
-    func deletePrompt(_ prompt: PromptTemplateRecord) throws {
-        guard canDeletePrompt(prompt) else { throw CocoaError(.fileWriteNoPermission) }
-
-        // Throwing filesystem work first — optimistic hiding must not happen
-        // unless it succeeds (the view shows an alert on throw).
-        if prompt.discoveryKind == .externalReference {
-            // Imported prompts are referenced in place — removing one only
-            // un-registers the path. The user's original file is never trashed.
-            try removePromptReferences(named: prompt.name)
-            _ = appSettingsController.removeExternalPromptPaths([prompt.filePath])
-            settings.publish()
-        } else {
-            try removePromptReferences(named: prompt.name)
-            let fileURL = URL(fileURLWithPath: prompt.filePath).standardizedFileURL
-            try FileManager.default.trashItem(at: fileURL, resultingItemURL: nil)
-            try replacePromptSettingsPaths(oldURLs: [fileURL], newURL: nil)
-            settings.publish()
-        }
-
-        // Hide the row immediately — no blocking rescan. The background refresh
-        // prunes the pending id once the fresh snapshot confirms it's gone.
-        withAnimation(.snappy(duration: 0.18)) {
-            _ = pendingDeletedPromptIDs.insert(prompt.id)
-        }
-        selectedCommandItemID = allVisiblePromptTemplateRecords.first?.id
-        refresh(includeModels: false, scanAllProjects: true)
-    }
-
-    func explicitSkillVisibilityIssues(for agent: EffectiveAgentRecord) -> [AgentSkillVisibilityIssue] {
-        cachedSkillVisibilityIssuesByAgentID[agent.id] ?? []
     }
 
     private func skillNamed(_ skillName: String, isRuntimeVisibleIn project: DiscoveredProject) -> Bool {
@@ -1778,16 +1694,6 @@ final class AppViewModel: NSObject {
         cachedStandardizedExternalSkillPaths = Set(
             appSettings.externalSkillPaths.map { URL(fileURLWithPath: $0).standardizedFileURL.path }
         )
-    }
-
-    private func removePromptReferences(named promptName: String) throws {
-        _ = appSettingsController.setDefaultPromptTemplate(promptName, enabled: false)
-        settings.publish()
-
-        for projectPath in projectPreferencesStore.preferencesByPath.keys {
-            projectPreferencesStore.setAssignedPromptTemplate(promptName, assigned: false, for: projectPath)
-        }
-        applyProjectPreferenceChanges()
     }
 
     func addSkillToSelectedProject(_ skill: SkillRecord) throws {
@@ -2192,24 +2098,6 @@ final class AppViewModel: NSObject {
         settings.publish()
     }
 
-    private func ensureLibraryPrompt(for prompt: PromptTemplateRecord) throws -> URL {
-        let libraryRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".pi/agent/prompt-library", isDirectory: true)
-        let libraryURL = libraryRoot.appendingPathComponent("\(prompt.name).md")
-        let fileManager = FileManager.default
-        try fileManager.createDirectory(at: libraryRoot, withIntermediateDirectories: true)
-        if fileManager.fileExists(atPath: libraryURL.path) { return libraryURL }
-
-        let sourceURL = URL(fileURLWithPath: prompt.filePath)
-        if prompt.source.kind == .global {
-            try fileManager.moveItem(at: sourceURL, to: libraryURL)
-        } else if prompt.source.kind == .library {
-            return sourceURL
-        } else {
-            try fileManager.copyItem(at: sourceURL, to: libraryURL)
-        }
-        return libraryURL
-    }
-
     func makeEnvDraft(for record: EnvKeyRecord) -> EnvEditorDraft {
         envPersistence.makeDraft(for: record)
     }
@@ -2552,6 +2440,12 @@ final class AppViewModel: NSObject {
     private func deduplicateByID<T: Identifiable>(_ values: [T]) -> [T] where T.ID: Hashable {
         var seen: Set<T.ID> = []
         return values.filter { seen.insert($0.id).inserted }
+    }
+
+    func markPromptPendingDeletion(_ prompt: PromptTemplateRecord) {
+        withAnimation(.snappy(duration: 0.18)) {
+            _ = pendingDeletedPromptIDs.insert(prompt.id)
+        }
     }
 
 }
