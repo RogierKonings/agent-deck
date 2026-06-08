@@ -116,6 +116,7 @@ nonisolated struct AppRefreshService: Sendable {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let globalAgentRoot = home.appendingPathComponent(".pi/agent", isDirectory: true)
         let legacyGlobalAgentRoot = home.appendingPathComponent(".agents", isDirectory: true)
+        let legacySkillLibrariesRoot = home.appendingPathComponent(".agents-skill-libraries", isDirectory: true)
         var urls: [URL] = [
             globalAgentRoot.appendingPathComponent("agents", isDirectory: true),
             globalAgentRoot.appendingPathComponent("agent-library/agents", isDirectory: true),
@@ -128,11 +129,15 @@ nonisolated struct AppRefreshService: Sendable {
             legacyGlobalAgentRoot.appendingPathComponent("skills", isDirectory: true)
         ]
 
-        // Watch the skill-repositories root as a single recursive watch. Every
-        // cloned repo lives under it, so this one entry covers all their skills
-        // once `watchPaths(for:)` prunes the now-redundant per-skill directories.
-        // Without it, each imported skill becomes its own watch path and the
-        // FSEventStream exhausts the process file-descriptor limit (EMFILE).
+        // Watch known skill-library roots as single recursive watches. Every
+        // cloned repo or shared-library category lives under one of these roots,
+        // so these entries cover all their skills once `watchPaths(for:)` prunes
+        // the now-redundant per-skill directories. Without them, each imported
+        // skill becomes its own watch path and the FSEventStream exhausts the
+        // process file-descriptor limit (EMFILE).
+        if FileManager.default.fileExists(atPath: legacySkillLibrariesRoot.path) {
+            urls.append(legacySkillLibrariesRoot)
+        }
         let skillRepositoriesRoot = SkillRepositorySyncService.repositoriesDirectoryURL()
         if FileManager.default.fileExists(atPath: skillRepositoriesRoot.path) {
             urls.append(skillRepositoriesRoot)
@@ -314,12 +319,14 @@ nonisolated final class FileWatchEventMonitor {
         // descriptor per skill subdirectory. Hundreds of imported-repo skills
         // would otherwise exhaust the process fd limit (EMFILE), which then
         // breaks font loading, asset catalogs, and dlopen across the whole app.
-        // `directories` is sorted, so each path's ancestor — if watched — is
-        // the most recently kept entry.
+        // Do not only compare with the most recently kept path: siblings such
+        // as `.agents-skill-libraries` sort between `.agents` and
+        // `.agents/skills`, so a descendant's ancestor is not always `last`.
         var collapsed: [String] = []
         for path in directories {
-            if let ancestor = collapsed.last,
-               path == ancestor || path.hasPrefix(ancestor + "/") {
+            if collapsed.contains(where: { ancestor in
+                path == ancestor || path.hasPrefix(ancestor + "/")
+            }) {
                 continue
             }
             collapsed.append(path)
