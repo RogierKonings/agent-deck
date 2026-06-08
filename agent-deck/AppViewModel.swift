@@ -112,14 +112,12 @@ final class AppViewModel: NSObject {
     @ObservationIgnored private lazy var githubWorkspace = GitHubWorkspace(gitRepositoryService: gitRepositoryService)
     var github: GitHubWorkspace { githubWorkspace }
     private var shipService: PiAgentShipService { environment.shipService }
-    /// Tag-and-push release flow, scoped to the agent-deck repo itself.
-    var agentDeckReleaseService: ReleaseService { ReleaseService(gitRepositoryService: gitRepositoryService) }
     let piRuntime: PiRuntimeSettingsCoordinator
     let modelCatalog: ModelCatalogCoordinator
     let piTerminal: PiTerminalCoordinator
     let projectServer: ProjectServerCoordinator
+    let agentDeckRelease: AgentDeckReleaseCoordinator
     let automation: AutomationCoordinator
-    private var releaseNotesGenerator: ReleaseNotesGenerationService { environment.releaseNotesGenerator }
     private var sessionWorktreeService: PiAgentSessionWorktreeService { environment.sessionWorktreeService }
     /// Memoizes `selectableAgentUniverse(forProjectPath:)` so the subagent
     /// picker (and `catalogAgents(for:)` / `sessionHasSelectableAgents`) read
@@ -182,6 +180,10 @@ final class AppViewModel: NSObject {
         modelCatalog = ModelCatalogCoordinator()
         piTerminal = PiTerminalCoordinator(sessionStore: sessionStore)
         projectServer = ProjectServerCoordinator()
+        agentDeckRelease = AgentDeckReleaseCoordinator(
+            gitRepositoryService: environment.gitRepositoryService,
+            releaseNotesGenerator: environment.releaseNotesGenerator
+        )
         super.init()
         projects.host = self
         githubWorkspace.host = self
@@ -197,6 +199,7 @@ final class AppViewModel: NSObject {
         modelCatalog.attach(host: self)
         piTerminal.attach(host: self)
         projectServer.attach(host: self)
+        agentDeckRelease.attach(host: self)
 
         settings.bootstrapFromController()
         #if DEBUG
@@ -731,64 +734,6 @@ final class AppViewModel: NSObject {
 
     func togglePiAgentSessionPinned(_ id: UUID) {
         piAgentSessionStore.togglePinned(id)
-    }
-
-    /// Whether the dedicated "Release" toolbar button should appear: only when the
-    /// selected session's repo is agent-deck itself. Matches the session's recorded
-    /// `repository` (owner/repo), falling back to the project's GitHub remote.
-    var shouldShowAgentDeckReleaseAction: Bool {
-        guard let session = piAgentSessionStore.selectedSession else { return false }
-        let target = ReleaseService.repository
-        if let repository = session.repository,
-           repository.caseInsensitiveCompare(target) == .orderedSame {
-            return true
-        }
-        if let remote = projectByPath[session.projectPath]?.gitHubRemote?.nameWithOwner,
-           remote.caseInsensitiveCompare(target) == .orderedSame {
-            return true
-        }
-        return false
-    }
-
-    /// The main checkout to tag against — the project path, never a worktree, so the
-    /// release lands on `main` rather than a session's feature branch.
-    var agentDeckReleaseProjectURL: URL? {
-        guard let session = piAgentSessionStore.selectedSession else { return nil }
-        return URL(fileURLWithPath: session.projectPath, isDirectory: true)
-    }
-
-    /// Draft friendly release notes for the pending Agent Deck release using the
-    /// default model (thinking off), from the commits since `sinceTag`. The
-    /// returned markdown body is shown — and editable — in the release sheet, then
-    /// rides the annotated tag into CI. Throws if no default model/project is
-    /// available; the sheet treats that as "fall back to CI commit listing".
-    func generateAgentDeckReleaseNotes(version: String, sinceTag: String?) async throws -> String {
-        guard let model = defaultPiAgentModel() else {
-            throw ReleaseNotesGenerationService.GenerationError.rpc("No default model is configured.")
-        }
-        guard let projectURL = agentDeckReleaseProjectURL else {
-            throw ReleaseNotesGenerationService.GenerationError.rpc("No project is selected.")
-        }
-        let commits = try await gitRepositoryService.commitSubjects(sinceTag: sinceTag, in: projectURL)
-        let environment = EnvRuntimeEnvironment().environment(projectRoot: projectURL)
-        return try await releaseNotesGenerator.generate(
-            version: version,
-            commitSubjects: commits,
-            model: model,
-            projectURL: projectURL,
-            environment: environment
-        )
-    }
-
-    /// Record a successful release in the selected session's transcript.
-    func recordAgentDeckReleaseSucceeded(tag: String) {
-        guard let session = piAgentSessionStore.selectedSession else { return }
-        piAgentSessionStore.append(.init(
-            sessionID: session.id,
-            role: .status,
-            title: "Release Pushed",
-            text: "Tagged and pushed \(tag). CI build is now running."
-        ))
     }
 
     private func registerAppNotificationObservers() {
