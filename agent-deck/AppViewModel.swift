@@ -86,7 +86,7 @@ final class AppViewModel: NSObject {
     var cachedSkillReferenceWarnings: [SkillReferenceWarning] { resourceCatalog.skillReferenceWarnings }
     var cachedSkillVisibilityIssuesByAgentID: [String: [AgentSkillVisibilityIssue]] { resourceCatalog.skillVisibilityIssuesByAgentID }
     var enabledAvailableModels: [AvailableModel] {
-        modelCatalog.availableModels.filter { isModelAvailable($0) }
+        modelCatalog.availableModels.filter { modelCatalog.isModelAvailable($0) }
     }
 
     var foundationAutomationModel: AvailableModel? { cachedFoundationAutomationModel }
@@ -659,30 +659,6 @@ final class AppViewModel: NSObject {
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
         addProject(url, selectingAfterAdd: true)
-    }
-
-    func isProviderEnabled(_ provider: String) -> Bool {
-        !appSettings.disabledProviders.contains(provider)
-    }
-
-    func isModelEnabled(_ model: AvailableModel) -> Bool {
-        !appSettings.disabledModelIdentifiers.contains(model.identifier)
-    }
-
-    func isModelAvailable(_ model: AvailableModel) -> Bool {
-        isProviderEnabled(model.provider) && isModelEnabled(model)
-    }
-
-    /// Bumped by the Extensions toolbar Refresh action; the screen keys its
-    /// off-main discovery `.task` on this so a Refresh re-scans without a project change.
-    private(set) var piExtensionsRefreshToken = 0
-
-    func refreshDiscoveredPiExtensions() {
-        piExtensionsRefreshToken &+= 1
-    }
-
-    func isOpenAIFastModeEnabled(_ model: AvailableModel) -> Bool {
-        appSettings.openAIFastModeModelIdentifiers.contains(model.identifier)
     }
 
     private func settingsSummary(for scope: AgentEditingTarget.OverrideScope) -> SettingsSummary? {

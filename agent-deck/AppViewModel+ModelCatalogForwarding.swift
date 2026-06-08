@@ -61,4 +61,20 @@ extension AppViewModel {
     func refreshAvailableModels() {
         modelCatalog.refreshAvailableModels()
     }
+
+    func isProviderEnabled(_ provider: String) -> Bool {
+        modelCatalog.isProviderEnabled(provider)
+    }
+
+    func isModelEnabled(_ model: AvailableModel) -> Bool {
+        modelCatalog.isModelEnabled(model)
+    }
+
+    func isModelAvailable(_ model: AvailableModel) -> Bool {
+        modelCatalog.isModelAvailable(model)
+    }
+
+    func isOpenAIFastModeEnabled(_ model: AvailableModel) -> Bool {
+        modelCatalog.isOpenAIFastModeEnabled(model)
+    }
 }

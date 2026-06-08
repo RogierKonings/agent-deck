@@ -169,6 +169,14 @@ final class AppSettingsCoordinator {
     var piAgentTerminalApplicationOptions: [TerminalApplicationOption] { controller.piAgentTerminalApplicationOptions }
     var piAgentLaunchPreview: String { controller.piAgentLaunchPreview }
 
+    /// Bumped by the Extensions toolbar Refresh action; the screen keys its
+    /// off-main discovery `.task` on this so a Refresh re-scans without a project change.
+    private(set) var piExtensionsRefreshToken = 0
+
+    func refreshDiscoveredPiExtensions() {
+        piExtensionsRefreshToken &+= 1
+    }
+
     func isPiExtensionEnabled(_ candidate: PiExtensionCandidate) -> Bool {
         controller.isPiExtensionEnabled(candidate)
     }

@@ -93,6 +93,25 @@ final class ModelCatalogCoordinator {
         refreshAvailableModels()
     }
 
+    func isProviderEnabled(_ provider: String) -> Bool {
+        guard let host else { return false }
+        return !host.appSettings.disabledProviders.contains(provider)
+    }
+
+    func isModelEnabled(_ model: AvailableModel) -> Bool {
+        guard let host else { return false }
+        return !host.appSettings.disabledModelIdentifiers.contains(model.identifier)
+    }
+
+    func isModelAvailable(_ model: AvailableModel) -> Bool {
+        isProviderEnabled(model.provider) && isModelEnabled(model)
+    }
+
+    func isOpenAIFastModeEnabled(_ model: AvailableModel) -> Bool {
+        guard let host else { return false }
+        return host.appSettings.openAIFastModeModelIdentifiers.contains(model.identifier)
+    }
+
     private func applyProviderAuthState(_ types: [String: String]) {
         providerAuthTypes = types
         signedInProviders = Set(types.keys)

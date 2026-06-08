@@ -150,6 +150,12 @@ extension AppViewModel {
         settings.prunePiExtensionSelection(to: candidates)
     }
 
+    var piExtensionsRefreshToken: Int { settings.piExtensionsRefreshToken }
+
+    func refreshDiscoveredPiExtensions() {
+        settings.refreshDiscoveredPiExtensions()
+    }
+
     func setPiAgentTerminalApplicationSelection(_ selectionID: String) {
         settings.setPiAgentTerminalApplicationSelection(selectionID)
     }
