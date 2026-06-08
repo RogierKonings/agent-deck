@@ -111,7 +111,7 @@ struct MemoryScreen: View {
                             }, onDelete: {
                                 deleteMemory(selectedRecord)
                             }, onReinforce: {
-                                try? memoryStore.reinforceMemory(id: selectedRecord.id)
+                                _ = try? memoryStore.reinforceMemory(id: selectedRecord.id)
                             })
                             .frame(maxWidth: .infinity, minHeight: 430, alignment: .topLeading)
                         }
@@ -153,7 +153,7 @@ struct MemoryScreen: View {
                     .listRowBackground(Color.clear)
                     .contextMenu {
                         Button { editingRecord = record; isEditorPresented = true } label: { Label("Edit", systemImage: "pencil") }
-                        Button { try? memoryStore.reinforceMemory(id: record.id) } label: { Label("Reinforce", systemImage: "plus.circle") }
+                        Button { _ = try? memoryStore.reinforceMemory(id: record.id) } label: { Label("Reinforce", systemImage: "plus.circle") }
                         Divider()
                         Button(role: .destructive) { deleteMemory(record) } label: { Label("Delete Memory", systemImage: "trash") }
                     }

@@ -48,7 +48,7 @@ final class AgentMemoryStore: ObservableObject {
     private let scanner = AgentMemorySecretScanner()
     private let sqlitePath = "/usr/bin/sqlite3"
 
-    init(rootURL: URL? = nil, databaseURL: URL? = nil, fileManager: FileManager = .default) {
+    init(rootURL: URL? = nil, databaseURL: URL? = nil, fileManager: FileManager = .default, autoRefresh: Bool = true) {
         self.fileManager = fileManager
         if let databaseURL {
             self.databaseURL = databaseURL
@@ -57,8 +57,10 @@ final class AgentMemoryStore: ObservableObject {
         } else {
             self.databaseURL = Self.defaultDatabaseURL(fileManager: fileManager)
         }
-        Task { @MainActor [weak self] in
-            self?.refresh()
+        if autoRefresh {
+            Task { @MainActor [weak self] in
+                self?.refresh()
+            }
         }
     }
 
@@ -272,6 +274,10 @@ final class AgentMemoryStore: ObservableObject {
     }
 
     func retrieve(projectPath: String?, query: String, maxItems: Int = 5, maxCharacters: Int = 6_000, includeSuperseded: Bool = false, projectOverride: String? = nil, type: AgentMemoryKind? = nil) async -> AgentMemoryRetrieval? {
+        retrieveNow(projectPath: projectPath, query: query, maxItems: maxItems, maxCharacters: maxCharacters, includeSuperseded: includeSuperseded, projectOverride: projectOverride, type: type)
+    }
+
+    func retrieveNow(projectPath: String?, query: String, maxItems: Int = 5, maxCharacters: Int = 6_000, includeSuperseded: Bool = false, projectOverride: String? = nil, type: AgentMemoryKind? = nil) -> AgentMemoryRetrieval? {
         let candidates: [AgentMemoryRecord]
         if let projectOverride, !projectOverride.isEmpty {
             candidates = records.filter { $0.projectID == projectOverride }

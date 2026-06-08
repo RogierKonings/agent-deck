@@ -3,9 +3,9 @@ import Foundation
 struct PiMemoryDreamService {
     func propose(memories: [AgentMemoryRecord], progress: @escaping @MainActor (String) -> Void = { _ in }) async -> PiMemoryDreamCycleResult {
         let started = Date()
-        await progress("Loading current memories…")
+        progress("Loading current memories…")
         let current = memories.filter { $0.isInjectable }
-        await progress("Clustering \(current.count) memories…")
+        progress("Clustering \(current.count) memories…")
 
         var proposals: [PiMemoryDreamProposal] = []
         let groups = Dictionary(grouping: current) { record in
@@ -29,7 +29,7 @@ struct PiMemoryDreamService {
             ))
         }
 
-        await progress("Reviewing weights…")
+        progress("Reviewing weights…")
         let reweights = Dictionary(uniqueKeysWithValues: current.filter { $0.useCount >= 2 && $0.weight < 0.9 }.prefix(8).map { record in
             (record.id, min(1.0, record.weight + 0.1))
         })
@@ -48,7 +48,7 @@ struct PiMemoryDreamService {
             ))
         }
 
-        await progress("Looking for patterns…")
+        progress("Looking for patterns…")
         let tagGroups = Dictionary(grouping: current.flatMap { record in record.tags.map { ($0, record) } }, by: { $0.0 })
         if let cluster = tagGroups.values.first(where: { $0.count >= 3 }) {
             let source = Array(cluster.map(\.1).prefix(6))
@@ -66,7 +66,7 @@ struct PiMemoryDreamService {
             ))
         }
 
-        await progress(proposals.isEmpty ? "No useful mutations found." : "Prepared \(proposals.count) proposal(s).")
+        progress(proposals.isEmpty ? "No useful mutations found." : "Prepared \(proposals.count) proposal(s).")
         return PiMemoryDreamCycleResult(
             id: UUID().uuidString,
             startedAt: started,

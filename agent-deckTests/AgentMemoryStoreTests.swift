@@ -4,7 +4,7 @@ import XCTest
 @MainActor
 final class AgentMemoryStoreTests: XCTestCase {
     func testLoadsGeneralAndCurrentProjectNewestFirst() throws {
-        let store = AgentMemoryStore(databaseURL: try temporaryDatabase())
+        let store = AgentMemoryStore(databaseURL: try temporaryDatabase(), autoRefresh: false)
         let old = try store.createMemory(kind: .insight, title: "General note", summary: "General content", body: "General content", reasoning: "Useful globally", scope: .general, projectPath: nil, tags: ["general"])
         Thread.sleep(forTimeInterval: 0.01)
         let newest = try store.createMemory(kind: .fact, title: "Project fact", summary: "Project content", body: "Project content", reasoning: "Useful here", scope: .project, projectPath: "/tmp/agent-deck", tags: ["project"])
@@ -17,7 +17,7 @@ final class AgentMemoryStoreTests: XCTestCase {
     }
 
     func testUpdateMetadataAndReinforce() throws {
-        let store = AgentMemoryStore(databaseURL: try temporaryDatabase())
+        let store = AgentMemoryStore(databaseURL: try temporaryDatabase(), autoRefresh: false)
         let record = try store.createMemory(kind: .insight, title: "Original", summary: "Body", body: "Body", reasoning: "Why", scope: .general, projectPath: nil, tags: [])
         try store.updateMemory(id: record.id, title: "Updated", body: "New body", reasoning: "Better reason", kind: .procedure, scope: .general, tags: ["swift"], weight: 0.9)
         let updated = try XCTUnwrap(store.records.first(where: { $0.id == record.id }))
@@ -32,7 +32,7 @@ final class AgentMemoryStoreTests: XCTestCase {
     }
 
     func testTitleOnlyUpdatePreservesSupersedesLink() throws {
-        let store = AgentMemoryStore(databaseURL: try temporaryDatabase())
+        let store = AgentMemoryStore(databaseURL: try temporaryDatabase(), autoRefresh: false)
         let old = try store.createMemory(kind: .fact, title: "v1", summary: "one", body: "one", reasoning: "one", scope: .general, projectPath: nil, tags: [])
         let newer = try store.createMemory(kind: .fact, title: "v2", summary: "two", body: "two", reasoning: "two", scope: .general, projectPath: nil, tags: [], supersedes: old.id)
 
@@ -43,7 +43,7 @@ final class AgentMemoryStoreTests: XCTestCase {
     }
 
     func testExplicitClearAndRelinkSupersedes() throws {
-        let store = AgentMemoryStore(databaseURL: try temporaryDatabase())
+        let store = AgentMemoryStore(databaseURL: try temporaryDatabase(), autoRefresh: false)
         let first = try store.createMemory(kind: .fact, title: "v1", summary: "one", body: "one", reasoning: "one", scope: .general, projectPath: nil, tags: [])
         let second = try store.createMemory(kind: .fact, title: "v2", summary: "two", body: "two", reasoning: "two", scope: .general, projectPath: nil, tags: [])
         let third = try store.createMemory(kind: .fact, title: "v3", summary: "three", body: "three", reasoning: "three", scope: .general, projectPath: nil, tags: [], supersedes: first.id)
@@ -58,7 +58,7 @@ final class AgentMemoryStoreTests: XCTestCase {
     }
 
     func testSupersessionValidationRejectsInvalidLinks() throws {
-        let store = AgentMemoryStore(databaseURL: try temporaryDatabase())
+        let store = AgentMemoryStore(databaseURL: try temporaryDatabase(), autoRefresh: false)
         let first = try store.createMemory(kind: .fact, title: "v1", summary: "one", body: "one", reasoning: "one", scope: .general, projectPath: nil, tags: [])
         let second = try store.createMemory(kind: .fact, title: "v2", summary: "two", body: "two", reasoning: "two", scope: .general, projectPath: nil, tags: [], supersedes: first.id)
         let third = try store.createMemory(kind: .fact, title: "v3", summary: "three", body: "three", reasoning: "three", scope: .general, projectPath: nil, tags: [])
@@ -70,7 +70,7 @@ final class AgentMemoryStoreTests: XCTestCase {
     }
 
     func testDeleteRepairsSupersessionChainAndThrowsForMissingID() throws {
-        let store = AgentMemoryStore(databaseURL: try temporaryDatabase())
+        let store = AgentMemoryStore(databaseURL: try temporaryDatabase(), autoRefresh: false)
         let first = try store.createMemory(kind: .fact, title: "v1", summary: "one", body: "one", reasoning: "one", scope: .general, projectPath: nil, tags: [])
         let second = try store.createMemory(kind: .fact, title: "v2", summary: "two", body: "two", reasoning: "two", scope: .general, projectPath: nil, tags: [], supersedes: first.id)
         let third = try store.createMemory(kind: .fact, title: "v3", summary: "three", body: "three", reasoning: "three", scope: .general, projectPath: nil, tags: [], supersedes: second.id)
@@ -84,20 +84,20 @@ final class AgentMemoryStoreTests: XCTestCase {
         XCTAssertThrowsError(try store.deleteMemory(id: second.id))
     }
 
-    func testRecallExcludesSupersededByDefault() async throws {
-        let store = AgentMemoryStore(databaseURL: try temporaryDatabase())
+    func testRecallExcludesSupersededByDefault() throws {
+        let store = AgentMemoryStore(databaseURL: try temporaryDatabase(), autoRefresh: false)
         let old = try store.createMemory(kind: .fact, title: "Build command", summary: "Use npm test", body: "Use npm test", reasoning: "Old", scope: .general, projectPath: nil, tags: ["build"])
         _ = try store.createMemory(kind: .fact, title: "Build command", summary: "Use xcodebuild", body: "Use xcodebuild", reasoning: "New", scope: .general, projectPath: nil, tags: ["build"], supersedes: old.id)
 
-        let current = await store.retrieve(projectPath: "/tmp/agent-deck", query: "build command", maxItems: 10)
+        let current = store.retrieveNow(projectPath: "/tmp/agent-deck", query: "build command", maxItems: 10)
         XCTAssertFalse(current?.records.contains(where: { $0.id == old.id }) ?? true)
-        let withHistory = await store.retrieve(projectPath: "/tmp/agent-deck", query: "build command", maxItems: 10, includeSuperseded: true)
+        let withHistory = store.retrieveNow(projectPath: "/tmp/agent-deck", query: "build command", maxItems: 10, includeSuperseded: true)
         XCTAssertTrue(withHistory?.records.contains(where: { $0.id == old.id }) ?? false)
     }
 
     func testFreshDatabaseFTSTriggersStaySynchronized() throws {
         let db = try temporaryDatabase()
-        let store = AgentMemoryStore(databaseURL: db)
+        let store = AgentMemoryStore(databaseURL: db, autoRefresh: false)
         let record = try store.createMemory(kind: .insight, title: "FTS topic", summary: "needle original", body: "needle original", reasoning: "searchable", scope: .general, projectPath: nil, tags: ["needle"])
         XCTAssertEqual(try sqliteScalar(db, "SELECT count(*) FROM memories_fts WHERE memories_fts MATCH 'needle';"), "1")
 
@@ -110,7 +110,7 @@ final class AgentMemoryStoreTests: XCTestCase {
     }
 
     func testDreamApplyCreatesMergedMemory() throws {
-        let store = AgentMemoryStore(databaseURL: try temporaryDatabase())
+        let store = AgentMemoryStore(databaseURL: try temporaryDatabase(), autoRefresh: false)
         let a = try store.createMemory(kind: .insight, title: "Same topic", summary: "A", body: "A", reasoning: "A", scope: .general, projectPath: nil, tags: ["same"])
         let b = try store.createMemory(kind: .insight, title: "Same topic", summary: "B", body: "B", reasoning: "B", scope: .general, projectPath: nil, tags: ["same"])
         let proposal = PiMemoryDreamProposal(id: UUID().uuidString, action: .merge, sourceMemoryIDs: [a.id, b.id], title: "Same topic merged", content: "Merged", reasoning: "Test", tags: ["same"], weight: 0.8, type: .insight, weightChanges: [:])
@@ -121,7 +121,7 @@ final class AgentMemoryStoreTests: XCTestCase {
     }
 
     func testSecretScannerBlocksSensitiveMemory() throws {
-        let store = AgentMemoryStore(databaseURL: try temporaryDatabase())
+        let store = AgentMemoryStore(databaseURL: try temporaryDatabase(), autoRefresh: false)
         XCTAssertThrowsError(try store.createMemory(kind: .fact, title: "Token", summary: "Do not save", body: "OPENAI_API_KEY=sk-123456789012345678901234567890", reasoning: "No", scope: .general, projectPath: nil, tags: []))
     }
 
