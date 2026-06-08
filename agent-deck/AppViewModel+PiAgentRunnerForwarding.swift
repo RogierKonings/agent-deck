@@ -94,7 +94,7 @@ extension AppViewModel: PiAgentRunnerHost {
     func disabledModelIdentifiers() -> Set<String> { appSettings.disabledModelIdentifiers }
 
     func piRuntimeDefaults() -> (provider: String?, model: String?, thinkingLevel: String?) {
-        readPiRuntimeDefaults()
+        piRuntime.readDefaults()
     }
 
     func refreshModelCatalog() {

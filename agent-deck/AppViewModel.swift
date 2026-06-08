@@ -50,26 +50,6 @@ final class AppViewModel: NSObject {
     var allProjectSnapshots: [String: ScanSnapshot] = [:] {
         didSet { clearAgentUniverseCache() }
     }
-    var availableModels: [AvailableModel] = [] {
-        didSet { rebuildAutomationModelCaches() }
-    }
-    var modelsLastUpdatedAt: Date?
-    // Manual invalidation token for Pi runtime defaults — bumped by
-    // setDefaultPiAgentModel/setDefaultPiAgentThinkingLevel writers, read via
-    // `_ = piRuntimeSettingsRevision` inside defaultPiAgentModel() and
-    // piRuntimeDefaultThinkingLevel(). Must be observable so the "Set as
-    // default" button (and any other consumer in a view body) re-renders
-    // after a write — otherwise body reads stay stuck on the prior value.
-    // No cycle risk: only mutated by explicit writers, never during a read.
-    var piRuntimeSettingsRevision = 0
-    // Internal caches for the on-disk Pi runtime settings file. Not tracked:
-    // they're written during the same call that reads them (the stat-check
-    // throttle), and they're consumed by methods like defaultPiAgentModel() /
-    // piRuntimeDefaultThinkingLevel() that get called inside view bodies — so
-    // tracking would create a read→write AttributeGraph cycle.
-    @ObservationIgnored private var cachedPiRuntimeSettingsObject: [String: Any]?
-    @ObservationIgnored private var cachedPiRuntimeSettingsModificationDate: Date?
-    @ObservationIgnored private var lastPiRuntimeSettingsStatCheck: Date?
     var appSettings: AppSettings = AppSettings() {
         didSet {
             rebuildAutomationModelCaches()
@@ -106,7 +86,7 @@ final class AppViewModel: NSObject {
     var cachedSkillReferenceWarnings: [SkillReferenceWarning] { resourceCatalog.skillReferenceWarnings }
     var cachedSkillVisibilityIssuesByAgentID: [String: [AgentSkillVisibilityIssue]] { resourceCatalog.skillVisibilityIssuesByAgentID }
     var enabledAvailableModels: [AvailableModel] {
-        availableModels.filter { isModelAvailable($0) }
+        modelCatalog.availableModels.filter { isModelAvailable($0) }
     }
 
     var foundationAutomationModel: AvailableModel? { cachedFoundationAutomationModel }
@@ -134,6 +114,8 @@ final class AppViewModel: NSObject {
     private var shipService: PiAgentShipService { environment.shipService }
     /// Tag-and-push release flow, scoped to the agent-deck repo itself.
     var agentDeckReleaseService: ReleaseService { ReleaseService(gitRepositoryService: gitRepositoryService) }
+    let piRuntime: PiRuntimeSettingsCoordinator
+    let modelCatalog: ModelCatalogCoordinator
     let automation: AutomationCoordinator
     private var releaseNotesGenerator: ReleaseNotesGenerationService { environment.releaseNotesGenerator }
     private var sessionWorktreeService: PiAgentSessionWorktreeService { environment.sessionWorktreeService }
@@ -154,7 +136,6 @@ final class AppViewModel: NSObject {
     private var lastWatchFingerprint: String = ""
     private var watchedURLsForAutoRefresh: [URL] = []
     let refreshCoordinator = RefreshCoordinator()
-    private var isRefreshingModels = false
     private let watchEventDebounceNanoseconds: UInt64 = 1_000_000_000
     private let fallbackAutoRefreshInterval: TimeInterval = 300
     private var didShutdown = false
@@ -196,6 +177,8 @@ final class AppViewModel: NSObject {
             avatarPromptService: environment.agentAvatarPromptService,
             skillDescriptionService: environment.skillDescriptionService
         )
+        piRuntime = PiRuntimeSettingsCoordinator()
+        modelCatalog = ModelCatalogCoordinator()
         super.init()
         projects.host = self
         githubWorkspace.host = self
@@ -207,6 +190,8 @@ final class AppViewModel: NSObject {
         memory.attach(host: self)
         skillRepositories.attach(host: self)
         automation.attach(host: self)
+        piRuntime.attach(host: self)
+        modelCatalog.attach(host: self)
 
         settings.bootstrapFromController()
         #if DEBUG
@@ -802,66 +787,6 @@ final class AppViewModel: NSObject {
         isProviderEnabled(model.provider) && isModelEnabled(model)
     }
 
-    // MARK: - Provider sign-in
-
-    /// Providers with a credential in `~/.pi/agent/auth.json` (== signed in).
-    private(set) var signedInProviders: Set<String> = []
-    /// Provider id → credential type (`"api_key"`/`"oauth"`) for UI labelling.
-    private(set) var providerAuthTypes: [String: String] = [:]
-    /// Every provider PI can connect to (from pi-ai `getProviders()`), powering
-    /// the Add Provider picker — independent of what the model catalog shows.
-    private(set) var connectableProviders: [String] = []
-    /// Drives the Add Provider picker sheet (opened from the Models toolbar `+`).
-    var isAddProviderPresented = false
-
-    /// Loads the full connectable-provider list once (cached).
-    func ensureConnectableProvidersLoaded() {
-        guard connectableProviders.isEmpty else { return }
-        Task.detached(priority: .utility) {
-            let providers = await PiProviderCatalogService().loadConnectableProviders()
-            await MainActor.run { [weak self] in
-                self?.connectableProviders = providers
-            }
-        }
-    }
-
-    /// Reloads sign-in state from auth.json off the main thread.
-    func refreshProviderAuthState() {
-        Task.detached(priority: .utility) {
-            let types = PiAuthCredentialStore().signedInTypes()
-            await MainActor.run { [weak self] in
-                self?.applyProviderAuthState(types)
-            }
-        }
-    }
-
-    private func applyProviderAuthState(_ types: [String: String]) {
-        providerAuthTypes = types
-        signedInProviders = Set(types.keys)
-    }
-
-    /// Writes an API key into auth.json, then refreshes auth + catalog. Throws
-    /// surface as an inline error in the sign-in sheet.
-    func signInWithAPIKey(_ key: String, provider: String) throws {
-        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        try PiAuthCredentialStore().setAPIKey(trimmed, provider: provider)
-        reloadAfterProviderAuthChange()
-    }
-
-    func signOutProvider(_ provider: String) throws {
-        try PiAuthCredentialStore().removeProvider(provider)
-        reloadAfterProviderAuthChange()
-    }
-
-    /// Re-reads sign-in state and re-queries the model catalog so newly
-    /// authorized (or removed) providers appear/disappear. Called after an
-    /// API-key write and on OAuth login completion.
-    func reloadAfterProviderAuthChange() {
-        refreshProviderAuthState()
-        refreshAvailableModels()
-    }
-
     /// Bumped by the Extensions toolbar Refresh action; the screen keys its
     /// off-main discovery `.task` on this so a Refresh re-scans without a project change.
     private(set) var piExtensionsRefreshToken = 0
@@ -872,16 +797,6 @@ final class AppViewModel: NSObject {
 
     func isOpenAIFastModeEnabled(_ model: AvailableModel) -> Bool {
         appSettings.openAIFastModeModelIdentifiers.contains(model.identifier)
-    }
-
-    func setDefaultPiAgentModel(_ model: AvailableModel?) {
-        guard writePiRuntimeDefaults(provider: model?.provider, model: model?.model, thinkingLevel: nil) else { return }
-        piRuntimeSettingsRevision += 1
-    }
-
-    func setDefaultPiAgentThinkingLevel(_ level: String) {
-        guard writePiRuntimeDefaults(provider: nil, model: nil, thinkingLevel: level) else { return }
-        piRuntimeSettingsRevision += 1
     }
 
     var canOpenSelectedPiAgentSessionInTerminal: Bool {
@@ -1309,94 +1224,6 @@ final class AppViewModel: NSObject {
         projectServerService.restart(server)
         piAgentSessionStore.append(.init(sessionID: session.id, role: .status, title: "Dev Server Restarted", text: "Restarted dev server."))
     }
-
-    func readPiRuntimeDefaults() -> (provider: String?, model: String?, thinkingLevel: String?) {
-        guard let object = piRuntimeSettingsObject() else { return (nil, nil, nil) }
-        let provider = nonEmptyPiSetting(object["defaultProvider"])
-        var model = nonEmptyPiSetting(object["defaultModel"])
-        var parsedProvider = provider
-        if let rawModel = model, rawModel.contains("/") {
-            let parts = rawModel.split(separator: "/", maxSplits: 1).map(String.init)
-            if parts.count == 2 {
-                parsedProvider = parsedProvider ?? parts[0]
-                model = parts[1]
-            }
-        }
-        let rawThinking = nonEmptyPiSetting(object["defaultThinkingLevel"])
-        let thinking = (rawThinking ?? "medium") == "none"
-            ? "off"
-            : rawThinking
-        return (parsedProvider, model, thinking)
-    }
-
-    private func writePiRuntimeDefaults(provider: String?, model: String?, thinkingLevel: String?) -> Bool {
-        var object = piRuntimeSettingsObject() ?? [:]
-        if let provider, let model {
-            object["defaultProvider"] = provider
-            object["defaultModel"] = model
-        }
-        if let thinkingLevel {
-            let normalized = thinkingLevel == "none" ? "off" : thinkingLevel.trimmingCharacters(in: .whitespacesAndNewlines)
-            object["defaultThinkingLevel"] = normalized.isEmpty ? "medium" : normalized
-        }
-        do {
-            let url = piRuntimeSettingsURL
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
-            try data.write(to: url, options: .atomic)
-            cachedPiRuntimeSettingsObject = object
-            cachedPiRuntimeSettingsModificationDate = piRuntimeSettingsModificationDate(force: true)
-            lastPiRuntimeSettingsStatCheck = Date()
-            return true
-        } catch {
-            github.githubLastError = "Could not update Pi settings: \(error.localizedDescription)"
-            return false
-        }
-    }
-
-    private func piRuntimeSettingsObject() -> [String: Any]? {
-        let modificationDate = piRuntimeSettingsModificationDate()
-        guard let modificationDate else {
-            cachedPiRuntimeSettingsObject = nil
-            cachedPiRuntimeSettingsModificationDate = nil
-            return nil
-        }
-        if cachedPiRuntimeSettingsModificationDate == modificationDate {
-            return cachedPiRuntimeSettingsObject
-        }
-        guard let data = try? Data(contentsOf: piRuntimeSettingsURL),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            cachedPiRuntimeSettingsObject = nil
-            cachedPiRuntimeSettingsModificationDate = modificationDate
-            return nil
-        }
-        cachedPiRuntimeSettingsObject = object
-        cachedPiRuntimeSettingsModificationDate = modificationDate
-        return object
-    }
-
-    private func piRuntimeSettingsModificationDate(force: Bool = false) -> Date? {
-        let now = Date()
-        if !force,
-           let lastPiRuntimeSettingsStatCheck,
-           now.timeIntervalSince(lastPiRuntimeSettingsStatCheck) < 1,
-           let cachedPiRuntimeSettingsModificationDate {
-            return cachedPiRuntimeSettingsModificationDate
-        }
-        lastPiRuntimeSettingsStatCheck = now
-        return (try? FileManager.default.attributesOfItem(atPath: piRuntimeSettingsURL.path)[.modificationDate]) as? Date
-    }
-
-    private var piRuntimeSettingsURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".pi/agent/settings.json")
-    }
-
-    private func nonEmptyPiSetting(_ value: Any?) -> String? {
-        guard let string = value as? String else { return nil }
-        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
 
     private func registerAppNotificationObservers() {
         let center = NotificationCenter.default
@@ -2813,9 +2640,9 @@ final class AppViewModel: NSObject {
     /// Recomputes the cached automation-model lookup. Called only at real
     /// boundaries — app launch / activation, a model-list reload, a settings
     /// change — never per `ContentView.body` eval. Mirrors `rebuildWarningCaches`.
-    /// Triggered by the `didSet` on `availableModels` and `appSettings`, which
-    /// also covers app launch (init assigns `appSettings`).
-    private func rebuildAutomationModelCaches() {
+    /// Triggered when the model catalog reloads and when `appSettings` changes,
+    /// which also covers app launch (init assigns `appSettings`).
+    func rebuildAutomationModelCaches() {
         let foundation = FoundationModelAutomationService.availableModel()
         var models = enabledAvailableModels
         if let foundation,
@@ -3907,37 +3734,6 @@ final class AppViewModel: NSObject {
             return globalSnapshot
         }
         return projectSnapshot
-    }
-
-    func refreshModels() {
-        refreshAvailableModels()
-    }
-
-    func ensureAvailableModelsLoaded() {
-        ensurePiAgentModelCatalogLoaded()
-    }
-
-    private func refreshAvailableModels() {
-        guard !isRefreshingModels else { return }
-        isRefreshingModels = true
-
-        Task.detached(priority: .utility) { [weak self] in
-            let models = await PiModelDiscoveryService().loadAvailableModels()
-            await self?.applyAvailableModelsRefresh(models, markRefreshComplete: true)
-        }
-    }
-
-    func ensurePiAgentModelCatalogLoaded() {
-        guard availableModels.isEmpty else { return }
-        refreshAvailableModels()
-    }
-
-    private func applyAvailableModelsRefresh(_ models: [AvailableModel], markRefreshComplete: Bool) {
-        availableModels = models
-        modelsLastUpdatedAt = Date()
-        if markRefreshComplete {
-            isRefreshingModels = false
-        }
     }
 
     private func skillVisible(to agent: EffectiveAgentRecord, skill: SkillRecord) -> Bool {
