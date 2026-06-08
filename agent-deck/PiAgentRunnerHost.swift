@@ -19,8 +19,6 @@ protocol PiAgentRunnerHost: AnyObject {
 
     func supervisorRequestsList(parentSessionID: UUID) -> String
     func answerSupervisorRequest(parentSessionID: UUID, requestID: String, response: String) -> String
-    func applySessionPlan(sessionID: UUID, request: PiSessionPlanSetBridgeRequest) -> String
-    func applySessionPlanUpdate(sessionID: UUID, request: PiSessionPlanUpdateBridgeRequest) -> String
 
     func resolveNativeSubagentCatalogPrompt(for session: PiAgentSessionRecord) -> String?
     func resolveParentSkillArguments(for projectURL: URL) throws -> [String]

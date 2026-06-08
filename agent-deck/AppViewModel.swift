@@ -117,6 +117,7 @@ final class AppViewModel: NSObject {
     let piRuntime: PiRuntimeSettingsCoordinator
     let modelCatalog: ModelCatalogCoordinator
     let piTerminal: PiTerminalCoordinator
+    let projectServer: ProjectServerCoordinator
     let automation: AutomationCoordinator
     private var releaseNotesGenerator: ReleaseNotesGenerationService { environment.releaseNotesGenerator }
     private var sessionWorktreeService: PiAgentSessionWorktreeService { environment.sessionWorktreeService }
@@ -126,7 +127,6 @@ final class AppViewModel: NSObject {
     /// Cleared in `clearAgentUniverseCache()` whenever a snapshot publishes.
     @ObservationIgnored private var agentUniverseCacheByProjectPath: [String: [EffectiveAgentRecord]] = [:]
     private var piSessionTitleGenerator: PiSessionTitleGenerationService { environment.piSessionTitleGenerator }
-    let projectServerService = ProjectServerService()
     var globalSnapshot: ScanSnapshot = .empty {
         didSet { clearAgentUniverseCache() }
     }
@@ -181,6 +181,7 @@ final class AppViewModel: NSObject {
         piRuntime = PiRuntimeSettingsCoordinator()
         modelCatalog = ModelCatalogCoordinator()
         piTerminal = PiTerminalCoordinator(sessionStore: sessionStore)
+        projectServer = ProjectServerCoordinator()
         super.init()
         projects.host = self
         githubWorkspace.host = self
@@ -195,6 +196,7 @@ final class AppViewModel: NSObject {
         piRuntime.attach(host: self)
         modelCatalog.attach(host: self)
         piTerminal.attach(host: self)
+        projectServer.attach(host: self)
 
         settings.bootstrapFromController()
         #if DEBUG
@@ -245,7 +247,7 @@ final class AppViewModel: NSObject {
         piSessionTitleGenerator.cancelAll()
         piRunner.stopAll(recordTranscript: recordTranscript)
         piSubagents.stopAll(recordTranscript: recordTranscript)
-        projectServerService.terminateAll()
+        projectServer.terminateAll()
     }
 
     /// `silentlyReconcile`: when true, skip toggling `isRefreshingProjects`.
@@ -731,29 +733,6 @@ final class AppViewModel: NSObject {
         piAgentSessionStore.togglePinned(id)
     }
 
-    func setSessionPlanFromParentAgent(sessionID: UUID, request: PiSessionPlanSetBridgeRequest) -> String {
-        let plan = piAgentSessionStore.setSessionPlan(sessionID: sessionID, items: request.items)
-        piRunner.scheduleTitleUpdateIfNeeded(sessionID: sessionID, plan: plan)
-        let rows = plan.items.map { ["id": $0.id, "title": $0.title, "status": $0.status.rawValue] }
-        guard let data = try? JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys]),
-              let text = String(data: data, encoding: .utf8) else {
-            return "Session plan set with \(plan.items.count) item(s)."
-        }
-        return "Session plan set (`\(plan.id.uuidString)`). Use these item ids for updates:\n\(text)"
-    }
-
-    func updateSessionPlanFromParentAgent(sessionID: UUID, request: PiSessionPlanUpdateBridgeRequest) -> String {
-        guard let plan = piAgentSessionStore.updateSessionPlan(sessionID: sessionID, updates: request.updates) else {
-            return "No current session plan exists. Call set_session_plan first."
-        }
-        let rows = plan.items.map { ["id": $0.id, "title": $0.title, "status": $0.status.rawValue] }
-        guard let data = try? JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys]),
-              let text = String(data: data, encoding: .utf8) else {
-            return "Session plan updated."
-        }
-        return "Session plan updated (`\(plan.id.uuidString)`):\n\(text)"
-    }
-
     /// Whether the dedicated "Release" toolbar button should appear: only when the
     /// selected session's repo is agent-deck itself. Matches the session's recorded
     /// `repository` (owner/repo), falling back to the project's GitHub remote.
@@ -810,31 +789,6 @@ final class AppViewModel: NSObject {
             title: "Release Pushed",
             text: "Tagged and pushed \(tag). CI build is now running."
         ))
-    }
-
-    /// Whether the dev-server toolbar control should appear for the selected
-    /// session: its project has a detectable dev server, or one is already
-    /// running for it. Hidden for projects with no dev server (e.g. a Swift app)
-    /// so the toolbar doesn't offer a control that can only report "none found".
-    var shouldShowProjectServerControls: Bool {
-        guard let path = piAgentSessionStore.selectedSession?.projectPath else { return false }
-        if projectServerService.currentServer(forProjectPath: path) != nil { return true }
-        return projectServerService.hasDetectedCommands(forProjectPath: path) == true
-    }
-
-    func startProjectServer(for session: PiAgentSessionRecord, command: ServerCommand) {
-        projectServerService.start(command: command, projectPath: session.projectPath, projectName: session.projectName)
-        piAgentSessionStore.append(.init(sessionID: session.id, role: .status, title: "Dev Server Started", text: "Started dev server."))
-    }
-
-    func stopProjectServer(for session: PiAgentSessionRecord, server: RunningServer) {
-        projectServerService.stop(server)
-        piAgentSessionStore.append(.init(sessionID: session.id, role: .status, title: "Dev Server Stopped", text: "Stopped dev server."))
-    }
-
-    func restartProjectServer(for session: PiAgentSessionRecord, server: RunningServer) {
-        projectServerService.restart(server)
-        piAgentSessionStore.append(.init(sessionID: session.id, role: .status, title: "Dev Server Restarted", text: "Restarted dev server."))
     }
 
     private func registerAppNotificationObservers() {

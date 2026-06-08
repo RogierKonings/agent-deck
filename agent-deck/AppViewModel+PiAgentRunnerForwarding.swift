@@ -31,14 +31,6 @@ extension AppViewModel: PiAgentRunnerHost {
         answerSupervisorRequestFromParentAgent(parentSessionID: parentSessionID, requestID: requestID, response: response)
     }
 
-    func applySessionPlan(sessionID: UUID, request: PiSessionPlanSetBridgeRequest) -> String {
-        setSessionPlanFromParentAgent(sessionID: sessionID, request: request)
-    }
-
-    func applySessionPlanUpdate(sessionID: UUID, request: PiSessionPlanUpdateBridgeRequest) -> String {
-        updateSessionPlanFromParentAgent(sessionID: sessionID, request: request)
-    }
-
     func resolveNativeSubagentCatalogPrompt(for session: PiAgentSessionRecord) -> String? {
         nativeSubagentCatalogPrompt(for: session)
     }

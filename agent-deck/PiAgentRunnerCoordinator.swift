@@ -49,12 +49,12 @@ final class PiAgentRunnerCoordinator {
             host?.answerSupervisorRequest(parentSessionID: sessionID, requestID: requestID, response: response)
                 ?? "\(brand) could not route the supervisor response."
         }
-        runner.onSessionPlanSet = { [weak host] sessionID, request in
-            host?.applySessionPlan(sessionID: sessionID, request: request)
+        runner.onSessionPlanSet = { [weak self] sessionID, request in
+            self?.applySessionPlan(sessionID: sessionID, request: request)
                 ?? "\(brand) could not update the session plan."
         }
-        runner.onSessionPlanUpdate = { [weak host] sessionID, request in
-            host?.applySessionPlanUpdate(sessionID: sessionID, request: request)
+        runner.onSessionPlanUpdate = { [weak self] sessionID, request in
+            self?.applySessionPlanUpdate(sessionID: sessionID, request: request)
                 ?? "\(brand) could not update the session plan."
         }
         runner.nativeSubagentCatalogProvider = { [weak host] session in
@@ -187,6 +187,29 @@ final class PiAgentRunnerCoordinator {
             pasteAttachments: pasteAttachments,
             issueAttachment: issueAttachment
         )
+    }
+
+    func applySessionPlan(sessionID: UUID, request: PiSessionPlanSetBridgeRequest) -> String {
+        let plan = sessionStore.setSessionPlan(sessionID: sessionID, items: request.items)
+        scheduleTitleUpdateIfNeeded(sessionID: sessionID, plan: plan)
+        let rows = plan.items.map { ["id": $0.id, "title": $0.title, "status": $0.status.rawValue] }
+        guard let data = try? JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys]),
+              let text = String(data: data, encoding: .utf8) else {
+            return "Session plan set with \(plan.items.count) item(s)."
+        }
+        return "Session plan set (`\(plan.id.uuidString)`). Use these item ids for updates:\n\(text)"
+    }
+
+    func applySessionPlanUpdate(sessionID: UUID, request: PiSessionPlanUpdateBridgeRequest) -> String {
+        guard let plan = sessionStore.updateSessionPlan(sessionID: sessionID, updates: request.updates) else {
+            return "No current session plan exists. Call set_session_plan first."
+        }
+        let rows = plan.items.map { ["id": $0.id, "title": $0.title, "status": $0.status.rawValue] }
+        guard let data = try? JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys]),
+              let text = String(data: data, encoding: .utf8) else {
+            return "Session plan updated."
+        }
+        return "Session plan updated (`\(plan.id.uuidString)`):\n\(text)"
     }
 
     func scheduleTitleUpdateIfNeeded(sessionID: UUID, plan: PiSessionPlanRecord) {
