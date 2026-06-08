@@ -131,3 +131,9 @@ The current Dream implementation is intentionally native and deterministic. It f
 - Review bridge routing behavior in a real parent Pi session and native subagent run.
 - Review Memory Library UI with an existing real `~/.pi/agent/memories/memories.db`.
 - Review deterministic Dream v1 scope against product expectations before final approval.
+
+## WIP checkpoint — full native Dream pipeline
+
+Parent/product rejected the deterministic Dream approximation. Current WIP replaces it with a fuller native Dream pipeline shape: phase/action models, reviewer seam, canonical prompt builders/parsers, LLM reviewer scaffold using Agent Deck model infrastructure, global/non-superseded memory analysis flow, grouped proposal metadata, apply semantics for merge/synthesis/reweight/pattern/report-only contradiction, and dream-cycle log/event persistence scaffolding.
+
+This is committed as WIP and is not ready for merge. Remaining work includes build fixes if any, UI grouping adjustments, Dream parity tests, bounded validation, and final report cleanup.

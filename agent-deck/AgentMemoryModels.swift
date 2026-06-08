@@ -249,6 +249,26 @@ struct AgentMemorySearchBridgeRequest: Codable, Hashable {
     var limit: Int?
 }
 
+enum PiMemoryDreamPhase: String, Codable, CaseIterable, Identifiable, Sendable {
+    case clusterReview = "cluster-review"
+    case schemaSynthesis = "schema-synthesis"
+    case weightRebalance = "weight-rebalance"
+    case contradictionScan = "contradiction-scan"
+    case temporalPatterns = "temporal-patterns"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .clusterReview: return "Cluster Review"
+        case .schemaSynthesis: return "Schema Synthesis"
+        case .weightRebalance: return "Weight Rebalance"
+        case .contradictionScan: return "Contradiction Scan"
+        case .temporalPatterns: return "Temporal Patterns"
+        }
+    }
+}
+
 enum PiMemoryDreamActionKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case merge
     case synthesize
@@ -273,6 +293,7 @@ enum PiMemoryDreamActionKind: String, Codable, CaseIterable, Identifiable, Senda
 
 struct PiMemoryDreamProposal: Identifiable, Codable, Hashable, Sendable {
     var id: String
+    var phase: PiMemoryDreamPhase
     var action: PiMemoryDreamActionKind
     var sourceMemoryIDs: [String]
     var title: String
@@ -282,6 +303,24 @@ struct PiMemoryDreamProposal: Identifiable, Codable, Hashable, Sendable {
     var weight: Double?
     var type: AgentMemoryKind?
     var weightChanges: [String: Double]
+    var contradictionPairs: [[String]]
+    var reviewerRawResponse: String?
+
+    init(id: String, phase: PiMemoryDreamPhase = .clusterReview, action: PiMemoryDreamActionKind, sourceMemoryIDs: [String], title: String, content: String, reasoning: String, tags: [String], weight: Double?, type: AgentMemoryKind?, weightChanges: [String: Double], contradictionPairs: [[String]] = [], reviewerRawResponse: String? = nil) {
+        self.id = id
+        self.phase = phase
+        self.action = action
+        self.sourceMemoryIDs = sourceMemoryIDs
+        self.title = title
+        self.content = content
+        self.reasoning = reasoning
+        self.tags = tags
+        self.weight = weight
+        self.type = type
+        self.weightChanges = weightChanges
+        self.contradictionPairs = contradictionPairs
+        self.reviewerRawResponse = reviewerRawResponse
+    }
 }
 
 struct PiMemoryDreamCycleResult: Codable, Hashable, Sendable {

@@ -349,8 +349,9 @@ final class AgentMemoryStore: ObservableObject {
     }
 
     func applyDreamProposals(_ proposals: [PiMemoryDreamProposal]) throws {
+        let approved = proposals.filter { $0.action != .skip }
         let byID = Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
-        for proposal in proposals {
+        for proposal in approved {
             switch proposal.action {
             case .merge:
                 guard !proposal.sourceMemoryIDs.isEmpty else { continue }
@@ -380,7 +381,7 @@ final class AgentMemoryStore: ObservableObject {
                 let first = proposal.sourceMemoryIDs.compactMap { byID[$0] }.first
                 let scope: AgentMemoryScope = first?.projectID == "general" || first == nil ? .general : .project
                 _ = try createMemory(
-                    kind: proposal.type ?? (proposal.action == .discoverPattern ? .event : .insight),
+                    kind: proposal.type ?? (proposal.action == .discoverPattern ? .insight : .insight),
                     title: proposal.title,
                     summary: proposal.content,
                     body: proposal.content,
@@ -393,6 +394,12 @@ final class AgentMemoryStore: ObservableObject {
                     tags: proposal.tags,
                     synthesizedFrom: proposal.sourceMemoryIDs
                 )
+                if proposal.action == .synthesize {
+                    for sourceID in proposal.sourceMemoryIDs {
+                        guard let source = byID[sourceID] else { continue }
+                        try updateMemory(id: sourceID, weight: max(0.3, source.weight * 0.85), supersession: .noChange)
+                    }
+                }
             case .reweight:
                 for (id, weight) in proposal.weightChanges {
                     if records.contains(where: { $0.id == id }) {
@@ -403,6 +410,22 @@ final class AgentMemoryStore: ObservableObject {
                 continue
             }
         }
+        try persistDreamCycleLog(approved: approved, allProposals: proposals)
+        if !approved.isEmpty {
+            _ = try createMemory(
+                kind: .event,
+                title: "Dream cycle — \(Self.dateFormatter.string(from: Date()))",
+                summary: "Applied \(approved.count) approved dream action\(approved.count == 1 ? "" : "s"): \(approved.map { $0.action.rawValue }.joined(separator: ", ")).",
+                body: "Applied dream actions:\n" + approved.map { "- [\($0.phase.rawValue)/\($0.action.rawValue)] \($0.title): \($0.reasoning)" }.joined(separator: "\n"),
+                reasoning: "Records a completed native memory-consolidation run for audit/history.",
+                weight: 0.3,
+                scope: .general,
+                projectPath: nil,
+                sourceAgentName: "dream-cycle",
+                tags: ["dream-cycle", "consolidation", "meta"],
+                synthesizedFrom: approved.flatMap(\.sourceMemoryIDs)
+            )
+        }
         refresh()
     }
 
@@ -411,6 +434,41 @@ final class AgentMemoryStore: ObservableObject {
         let pieces = name.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
         return pieces.joined(separator: "-").nilIfBlank ?? "project"
     }
+
+    private func persistDreamCycleLog(approved: [PiMemoryDreamProposal], allProposals: [PiMemoryDreamProposal]) throws {
+        let url = dreamLogURL()
+        try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let payload: [String: Any] = [
+            "id": UUID().uuidString,
+            "createdAt": Self.epochMilliseconds(Date()),
+            "approvedCount": approved.count,
+            "proposalCount": allProposals.count,
+            "approved": approved.map { $0.id },
+            "actions": approved.map { ["id": $0.id, "phase": $0.phase.rawValue, "action": $0.action.rawValue, "sources": $0.sourceMemoryIDs, "title": $0.title] }
+        ]
+        let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+        if fileManager.fileExists(atPath: url.path), let handle = try? FileHandle(forWritingTo: url) {
+            try handle.seekToEnd()
+            try handle.write(contentsOf: data + Data("\n".utf8))
+            try handle.close()
+        } else {
+            try (data + Data("\n".utf8)).write(to: url, options: .atomic)
+        }
+    }
+
+    private func dreamLogURL() -> URL {
+        URL.applicationSupportDirectory
+            .appendingPathComponent(AppBrand.displayName, isDirectory: true)
+            .appendingPathComponent("Memory", isDirectory: true)
+            .appendingPathComponent("dream-cycles.jsonl")
+    }
+
+    private static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
 
     static func defaultDatabaseURL(fileManager: FileManager = .default) -> URL {
         let home = fileManager.homeDirectoryForCurrentUser
