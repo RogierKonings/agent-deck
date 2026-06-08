@@ -4,7 +4,10 @@ import Foundation
 @MainActor
 protocol SkillRepositoryHost: AnyObject {
     var importedSkillRepositories: [ImportedSkillRepository] { get }
-    func addExternalSkillPaths(_ paths: [String])
+    var externalSkillPaths: Set<String> { get }
+    var suggestedExternalSkillsDirectoryURL: URL { get }
+    @discardableResult
+    func addExternalSkillPaths(_ paths: [String]) -> Bool
     func upsertImportedSkillRepository(_ record: ImportedSkillRepository)
     func removeImportedSkillRepository(id: UUID)
     func publishImportedSkillRepositorySettings()

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 
@@ -17,6 +18,70 @@ final class SkillRepositoryCoordinator {
 
     func attach(host: SkillRepositoryHost) {
         self.host = host
+    }
+
+    // MARK: - Local external skill folders
+
+    /// The folder the skill-import picker opens to: the selected project's
+    /// `.pi/skills` folder, or pi's global skills folder when no project is
+    /// selected. Falls back to a parent that exists so the open panel always
+    /// lands on a real directory; nothing is created on disk.
+    var suggestedExternalSkillsDirectoryURL: URL {
+        host?.suggestedExternalSkillsDirectoryURL
+            ?? FileManager.default.homeDirectoryForCurrentUser
+    }
+
+    func chooseExternalSkillsDirectory(startingAt url: URL? = nil, completion: @escaping (URL?) -> Void) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose Skills Folder"
+        panel.message = "Choose a skill root or a folder to search recursively for SKILL.md files you want to add to the \(AppBrand.displayName) skill catalog."
+        panel.directoryURL = url ?? suggestedExternalSkillsDirectoryURL
+
+        let handler: (NSApplication.ModalResponse) -> Void = { response in
+            DispatchQueue.main.async {
+                guard response == .OK,
+                      let selectedURL = panel.url?.standardizedFileURL else {
+                    completion(nil)
+                    return
+                }
+                completion(selectedURL)
+            }
+        }
+
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            panel.beginSheetModal(for: window, completionHandler: handler)
+        } else {
+            panel.begin(completionHandler: handler)
+        }
+    }
+
+    func importExternalSkills(_ candidates: [ExternalSkillCandidate]) throws -> SkillImportResult {
+        var importedNames: [String] = []
+        var skippedNames: [String] = []
+        var importedPaths: [String] = []
+        let existingPaths = host?.externalSkillPaths ?? []
+
+        for candidate in candidates {
+            let sourcePath = URL(fileURLWithPath: candidate.sourceRootPath).standardizedFileURL.path
+            if existingPaths.contains(sourcePath) {
+                skippedNames.append(candidate.name)
+                continue
+            }
+            importedPaths.append(sourcePath)
+            importedNames.append(candidate.name)
+        }
+
+        if host?.addExternalSkillPaths(importedPaths) == true {
+            host?.publishImportedSkillRepositorySettings()
+        }
+        host?.refreshSkillCatalog()
+        if let firstImported = importedNames.first {
+            host?.selectImportedSkill(named: firstImported)
+        }
+        return SkillImportResult(importedNames: importedNames, skippedNames: skippedNames)
     }
 
     // MARK: - Remote skill repositories

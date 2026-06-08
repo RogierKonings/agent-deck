@@ -7,7 +7,31 @@ extension AppViewModel: SkillRepositoryHost {
         appSettings.importedSkillRepositories
     }
 
-    func addExternalSkillPaths(_ paths: [String]) {
+    var externalSkillPaths: Set<String> { appSettings.externalSkillPaths }
+
+    /// The folder the skill-import picker opens to: the selected project's
+    /// `.pi/skills` folder, or pi's global skills folder when no project is
+    /// selected. Falls back to a parent that exists so the open panel always
+    /// lands on a real directory; nothing is created on disk.
+    var suggestedExternalSkillsDirectoryURL: URL {
+        let fileManager = FileManager.default
+        func isDirectory(_ url: URL) -> Bool {
+            var isDir: ObjCBool = false
+            return fileManager.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue
+        }
+
+        if let projectURL = selectedDiscoveredProject?.url {
+            let projectSkills = projectURL.appendingPathComponent(".pi/skills", isDirectory: true)
+            return isDirectory(projectSkills) ? projectSkills : projectURL
+        }
+
+        let globalSkills = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent(".pi/agent/skills", isDirectory: true)
+        return isDirectory(globalSkills) ? globalSkills : fileManager.homeDirectoryForCurrentUser
+    }
+
+    @discardableResult
+    func addExternalSkillPaths(_ paths: [String]) -> Bool {
         settings.controller.addExternalSkillPaths(paths)
     }
 
@@ -94,5 +118,13 @@ extension AppViewModel {
 
     func readRemoteSkillFile(directory: String, inCloneAt clonePath: URL) async throws -> String {
         try await skillRepositories.readRemoteSkillFile(directory: directory, inCloneAt: clonePath)
+    }
+
+    func chooseExternalSkillsDirectory(startingAt url: URL? = nil, completion: @escaping (URL?) -> Void) {
+        skillRepositories.chooseExternalSkillsDirectory(startingAt: url, completion: completion)
+    }
+
+    func importExternalSkills(_ candidates: [ExternalSkillCandidate]) throws -> SkillImportResult {
+        try skillRepositories.importExternalSkills(candidates)
     }
 }
