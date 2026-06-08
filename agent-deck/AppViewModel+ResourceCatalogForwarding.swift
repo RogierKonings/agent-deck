@@ -4,7 +4,7 @@ import Foundation
 
 extension AppViewModel: ResourceCatalogHost {
     func catalogFilteredAgents() -> [EffectiveAgentRecord] {
-        filteredAgents
+        agentUniverse.filteredAgents()
     }
 }
 

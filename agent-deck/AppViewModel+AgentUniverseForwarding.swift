@@ -10,6 +10,10 @@ extension AppViewModel: AgentUniverseHost {
     var globalEffectiveAgents: [EffectiveAgentRecord] { globalSnapshot.effectiveAgents }
 
     var selectedSnapshotProjectRoot: String? { snapshot.projectRoot }
+
+    func agentWarnings(for agent: EffectiveAgentRecord) -> [DiagnosticWarning] {
+        resourceCatalog.warnings(for: agent)
+    }
 }
 
 // MARK: - Agent universe view/API compatibility
@@ -37,5 +41,21 @@ extension AppViewModel {
 
     func sessionHasSelectableAgents(_ session: PiAgentSessionRecord) -> Bool {
         agentUniverse.sessionHasSelectableAgents(session)
+    }
+
+    func agentCatalog(forProjectPath projectPath: String?) -> [AgentRecord] {
+        agentUniverse.agentCatalog(forProjectPath: projectPath)
+    }
+
+    func computeAllDisplayAgents() -> [EffectiveAgentRecord] {
+        agentUniverse.computeAllDisplayAgents()
+    }
+
+    var filteredAgents: [EffectiveAgentRecord] {
+        agentUniverse.filteredAgents()
+    }
+
+    var allVisibleAgentRecords: [AgentRecord] {
+        agentUniverse.allVisibleAgentRecords()
     }
 }

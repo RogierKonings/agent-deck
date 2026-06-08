@@ -702,42 +702,6 @@ final class AppViewModel: NSObject {
     /// Cached — see `cachedAllDisplayAgents`. Rebuilt by `resourceCatalog.rebuildWarningCaches()`.
     var allDisplayAgents: [EffectiveAgentRecord] { cachedAllDisplayAgents }
 
-    /// The actual merge+sort. Called only from `resourceCatalog.rebuildWarningCaches()`.
-    func computeAllDisplayAgents() -> [EffectiveAgentRecord] {
-        var byID: [EffectiveAgentRecord.ID: EffectiveAgentRecord] = [:]
-        for agent in snapshot.effectiveAgents { byID[agent.id] = agent }
-        for agent in catalogOnlyEffectiveAgents { byID[agent.id] = agent }
-        for agent in libraryOnlyEffectiveAgents { byID[agent.id] = agent }
-        for agent in projectAssignedLibraryAgentsForAggregateView { byID[agent.id] = agent }
-        return Array(byID.values)
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-    }
-
-    var filteredAgents: [EffectiveAgentRecord] {
-        allDisplayAgents.filter { agent in
-            switch selectedAgentFilter {
-            case .all:
-                return true
-            case .builtin:
-                return agent.builtin != nil && agent.globalCustom == nil && agent.projectCustom == nil
-            case .global:
-                return agent.globalCustom?.source.kind == .global
-            case .project:
-                return agent.projectCustom != nil
-            case .overriddenBuiltins:
-                return agent.builtin != nil && (agent.userOverride != nil || agent.projectOverride != nil)
-            case .replacedBuiltins:
-                return agent.builtin != nil && (agent.globalCustom != nil || agent.projectCustom != nil)
-            case .customOnly:
-                return agent.globalCustom != nil || agent.projectCustom != nil
-            case .disabled:
-                return agent.resolved.disabled == true
-            case .needsAttention:
-                return !warnings(for: agent).isEmpty
-            }
-        }
-    }
-
     var selectedAgent: EffectiveAgentRecord? {
         // O(1) lookup over `cachedDisplayAgentByID`. The cache is sourced from
         // `cachedAllDisplayAgents` (a superset of `snapshot.effectiveAgents`,
@@ -746,64 +710,6 @@ final class AppViewModel: NSObject {
         // body read.
         guard let id = selectedAgentID else { return nil }
         return cachedDisplayAgentByID[id]
-    }
-
-    private var catalogOnlyEffectiveAgents: [EffectiveAgentRecord] {
-        let effectivePaths = Set(snapshot.effectiveAgents.compactMap(\.sourcePath).map(standardizedPath))
-        return agentCatalog(forProjectPath: selectedProjectPath)
-            .filter { $0.source.kind != .builtin }
-            .filter { !effectivePaths.contains(standardizedPath($0.filePath)) }
-            .filter { $0.source.kind != .library }
-            .map { agentUniverse.catalogDisplayAgent(from: $0, projectRoot: snapshot.projectRoot) }
-    }
-
-    private var libraryOnlyEffectiveAgents: [EffectiveAgentRecord] {
-        // In the global view, project-local agents should not hide reusable library
-        // agents with the same name. Global/custom winners still hide library duplicates.
-        let agentsThatHideLibrary = snapshot.projectRoot == nil
-            ? snapshot.effectiveAgents.filter { $0.projectCustom == nil && $0.projectOverride == nil }
-            : snapshot.effectiveAgents
-        let effectiveNames = Set(agentsThatHideLibrary.map(\.name))
-        return snapshot.libraryAgents
-            .filter { !effectiveNames.contains($0.name) }
-            .map { agentUniverse.libraryDisplayAgent(from: $0, projectRoot: snapshot.projectRoot) }
-    }
-
-    private var projectAssignedLibraryAgentsForAggregateView: [EffectiveAgentRecord] {
-        guard snapshot.projectRoot == nil else { return [] }
-        let effectiveNames = Set(snapshot.effectiveAgents.map(\.name))
-        let libraryByName = Dictionary(uniqueKeysWithValues: snapshot.libraryAgents.map { ($0.name, $0) })
-        let assignedNames = Set(projectPreferencesByPath.values.flatMap(\.assignedAgentNames))
-        let libraryNames = Set(snapshot.libraryAgents.map(\.name))
-        return assignedNames
-            .filter { !effectiveNames.contains($0) && libraryNames.contains($0) }
-            .compactMap { libraryByName[$0] }
-            .map { agentUniverse.libraryDisplayAgent(from: $0, projectRoot: nil) }
-    }
-
-    var allVisibleAgentRecords: [AgentRecord] {
-        agentCatalog(forProjectPath: selectedProjectPath)
-            .filter { $0.source.kind != .builtin }
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-    }
-
-    func agentCatalog(forProjectPath projectPath: String?) -> [AgentRecord] {
-        var records = globalSnapshot.globalAgents + globalSnapshot.libraryAgents
-        for projectSnapshot in allProjectSnapshots.values {
-            records += projectSnapshot.projectAgents + projectSnapshot.legacyProjectAgents + projectSnapshot.libraryAgents
-        }
-        if selectedProjectPath == projectPath {
-            records += snapshot.projectAgents + snapshot.legacyProjectAgents + snapshot.libraryAgents
-        }
-        return deduplicateByID(records)
-    }
-
-    private func agentCatalog(globalSnapshot: ScanSnapshot, catalogProjectSnapshots: [ScanSnapshot]) -> [AgentRecord] {
-        deduplicateByID(
-            globalSnapshot.globalAgents +
-            globalSnapshot.libraryAgents +
-            catalogProjectSnapshots.flatMap { $0.projectAgents + $0.legacyProjectAgents + $0.libraryAgents }
-        )
     }
 
     private func scopedAgentSnapshot(_ base: ScanSnapshot, projectPath: String?, globalCatalogSnapshot: ScanSnapshot, catalogProjectSnapshots: [ScanSnapshot]) -> ScanSnapshot {
@@ -818,7 +724,7 @@ final class AppViewModel: NSObject {
                 defaultAgentNames: appSettings.defaultAgentNames,
                 projectAgentNames: projectAgentNames,
                 snapshot: base,
-                catalog: agentCatalog(globalSnapshot: globalCatalogSnapshot, catalogProjectSnapshots: catalogProjectSnapshots)
+                catalog: agentUniverse.agentCatalog(globalSnapshot: globalCatalogSnapshot, catalogProjectSnapshots: catalogProjectSnapshots)
             ),
             libraryAgents: base.libraryAgents,
             skills: base.skills,

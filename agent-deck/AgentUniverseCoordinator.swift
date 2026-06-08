@@ -60,7 +60,7 @@ final class AgentUniverseCoordinator {
         let snap = host.startupSnapshot(forProjectPath: path)
         let effective = snap.effectiveAgents
         let effectivePaths = Set(effective.compactMap(\.sourcePath).map(standardizedPath))
-        let catalogOnly = host.agentCatalog(forProjectPath: path)
+        let catalogOnly = agentCatalog(forProjectPath: path)
             .filter { $0.source.kind != .builtin && $0.source.kind != .library }
             .filter { !effectivePaths.contains(standardizedPath($0.filePath)) }
             .map { catalogDisplayAgent(from: $0, projectRoot: snap.projectRoot) }
@@ -134,7 +134,109 @@ final class AgentUniverseCoordinator {
         )
     }
 
+    func agentCatalog(forProjectPath projectPath: String?) -> [AgentRecord] {
+        guard let host else { return [] }
+        var records = host.globalSnapshot.globalAgents + host.globalSnapshot.libraryAgents
+        for projectSnapshot in host.allProjectSnapshots.values {
+            records += projectSnapshot.projectAgents + projectSnapshot.legacyProjectAgents + projectSnapshot.libraryAgents
+        }
+        if host.selectedProjectPath == projectPath {
+            records += host.snapshot.projectAgents + host.snapshot.legacyProjectAgents + host.snapshot.libraryAgents
+        }
+        return deduplicateByID(records)
+    }
+
+    func agentCatalog(globalSnapshot: ScanSnapshot, catalogProjectSnapshots: [ScanSnapshot]) -> [AgentRecord] {
+        deduplicateByID(
+            globalSnapshot.globalAgents +
+            globalSnapshot.libraryAgents +
+            catalogProjectSnapshots.flatMap { $0.projectAgents + $0.legacyProjectAgents + $0.libraryAgents }
+        )
+    }
+
+    /// The actual merge+sort. Called only from `resourceCatalog.rebuildWarningCaches()`.
+    func computeAllDisplayAgents() -> [EffectiveAgentRecord] {
+        guard let host else { return [] }
+        var byID: [EffectiveAgentRecord.ID: EffectiveAgentRecord] = [:]
+        for agent in host.snapshot.effectiveAgents { byID[agent.id] = agent }
+        for agent in catalogOnlyEffectiveAgents { byID[agent.id] = agent }
+        for agent in libraryOnlyEffectiveAgents { byID[agent.id] = agent }
+        for agent in projectAssignedLibraryAgentsForAggregateView { byID[agent.id] = agent }
+        return Array(byID.values)
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    func filteredAgents() -> [EffectiveAgentRecord] {
+        guard let host else { return [] }
+        return host.cachedAllDisplayAgents.filter { agent in
+            switch host.selectedAgentFilter {
+            case .all:
+                return true
+            case .builtin:
+                return agent.builtin != nil && agent.globalCustom == nil && agent.projectCustom == nil
+            case .global:
+                return agent.globalCustom?.source.kind == .global
+            case .project:
+                return agent.projectCustom != nil
+            case .overriddenBuiltins:
+                return agent.builtin != nil && (agent.userOverride != nil || agent.projectOverride != nil)
+            case .replacedBuiltins:
+                return agent.builtin != nil && (agent.globalCustom != nil || agent.projectCustom != nil)
+            case .customOnly:
+                return agent.globalCustom != nil || agent.projectCustom != nil
+            case .disabled:
+                return agent.resolved.disabled == true
+            case .needsAttention:
+                return !host.agentWarnings(for: agent).isEmpty
+            }
+        }
+    }
+
+    func allVisibleAgentRecords() -> [AgentRecord] {
+        agentCatalog(forProjectPath: host?.selectedProjectPath)
+            .filter { $0.source.kind != .builtin }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private var catalogOnlyEffectiveAgents: [EffectiveAgentRecord] {
+        guard let host else { return [] }
+        let effectivePaths = Set(host.snapshot.effectiveAgents.compactMap(\.sourcePath).map(standardizedPath))
+        return agentCatalog(forProjectPath: host.selectedProjectPath)
+            .filter { $0.source.kind != .builtin }
+            .filter { !effectivePaths.contains(standardizedPath($0.filePath)) }
+            .filter { $0.source.kind != .library }
+            .map { catalogDisplayAgent(from: $0, projectRoot: host.snapshot.projectRoot) }
+    }
+
+    private var libraryOnlyEffectiveAgents: [EffectiveAgentRecord] {
+        guard let host else { return [] }
+        let agentsThatHideLibrary = host.snapshot.projectRoot == nil
+            ? host.snapshot.effectiveAgents.filter { $0.projectCustom == nil && $0.projectOverride == nil }
+            : host.snapshot.effectiveAgents
+        let effectiveNames = Set(agentsThatHideLibrary.map(\.name))
+        return host.snapshot.libraryAgents
+            .filter { !effectiveNames.contains($0.name) }
+            .map { libraryDisplayAgent(from: $0, projectRoot: host.snapshot.projectRoot) }
+    }
+
+    private var projectAssignedLibraryAgentsForAggregateView: [EffectiveAgentRecord] {
+        guard let host, host.snapshot.projectRoot == nil else { return [] }
+        let effectiveNames = Set(host.snapshot.effectiveAgents.map(\.name))
+        let libraryByName = Dictionary(uniqueKeysWithValues: host.snapshot.libraryAgents.map { ($0.name, $0) })
+        let assignedNames = Set(host.projectPreferencesByPath.values.flatMap(\.assignedAgentNames))
+        let libraryNames = Set(host.snapshot.libraryAgents.map(\.name))
+        return assignedNames
+            .filter { !effectiveNames.contains($0) && libraryNames.contains($0) }
+            .compactMap { libraryByName[$0] }
+            .map { libraryDisplayAgent(from: $0, projectRoot: nil) }
+    }
+
     private func standardizedPath(_ path: String) -> String {
         URL(fileURLWithPath: path).standardizedFileURL.path
+    }
+
+    private func deduplicateByID<T: Identifiable>(_ values: [T]) -> [T] where T.ID: Hashable {
+        var seen: Set<T.ID> = []
+        return values.filter { seen.insert($0.id).inserted }
     }
 }
