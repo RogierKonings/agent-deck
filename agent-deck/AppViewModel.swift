@@ -120,6 +120,7 @@ final class AppViewModel: NSObject {
     let catalogAutoRefresh: CatalogAutoRefreshCoordinator
     let appLifecycle: AppLifecycleCoordinator
     let agentUniverse: AgentUniverseCoordinator
+    let agentRepository: AgentRepositoryCoordinator
     let composerSlash: ComposerSlashCoordinator
     let automation: AutomationCoordinator
     private var sessionWorktreeService: PiAgentSessionWorktreeService { environment.sessionWorktreeService }
@@ -179,6 +180,7 @@ final class AppViewModel: NSObject {
         catalogAutoRefresh = CatalogAutoRefreshCoordinator()
         appLifecycle = AppLifecycleCoordinator()
         agentUniverse = AgentUniverseCoordinator()
+        agentRepository = AgentRepositoryCoordinator()
         composerSlash = ComposerSlashCoordinator()
         super.init()
         projects.host = self
@@ -199,6 +201,7 @@ final class AppViewModel: NSObject {
         catalogAutoRefresh.attach(host: self)
         appLifecycle.attach(host: self)
         agentUniverse.attach(host: self)
+        agentRepository.attach(host: self)
         composerSlash.attach(host: self)
         resourceCatalog.attach(host: self)
 
@@ -1724,23 +1727,6 @@ final class AppViewModel: NSObject {
         refresh(includeModels: false, scanAllProjects: true)
     }
 
-    func agent(_ agent: AgentRecord, isEnabledFor project: DiscoveredProject) -> Bool {
-        projectPreference(for: project.path).assignedAgentNames.contains(agent.name)
-    }
-
-    func assignedProjects(for agent: AgentRecord) -> [DiscoveredProject] {
-        enabledProjects.filter { self.agent(agent, isEnabledFor: $0) }
-    }
-
-    /// Read-only accessor for the per-agent skill-visibility cache. The full map
-    /// is computed by `buildSkillVisibilityIssuesByAgentID()` at refresh
-    /// boundaries (alongside the other warning caches), so this must NEVER
-    /// recompute or touch disk — it is called from view bodies for every agent
-    /// on every layout pass. Agents without issues are intentionally absent from
-    /// the cache, so a miss means "no issues", not "needs recompute". The old
-    /// recompute-on-miss path fell through to a synchronous `PiScanner().scan()`
-    /// per healthy agent, producing multi-hundred-ms main-thread hangs on tab
-    /// switches.
     func explicitSkillVisibilityIssues(for agent: EffectiveAgentRecord) -> [AgentSkillVisibilityIssue] {
         cachedSkillVisibilityIssuesByAgentID[agent.id] ?? []
     }
@@ -1792,69 +1778,6 @@ final class AppViewModel: NSObject {
         cachedStandardizedExternalSkillPaths = Set(
             appSettings.externalSkillPaths.map { URL(fileURLWithPath: $0).standardizedFileURL.path }
         )
-    }
-
-    func agentIsEnabledGlobally(_ agent: AgentRecord) -> Bool {
-        appSettings.defaultAgentNames.contains(agent.name)
-    }
-
-    func setAgent(_ agent: AgentRecord, enabled: Bool, for project: DiscoveredProject) throws {
-        projectPreferencesStore.setAssignedAgent(agent.name, assigned: enabled, for: project.path)
-        applyProjectPreferenceChanges()
-        // Project assignment only mutates UserDefaults — reconcile the
-        // affected `effectiveAgents` in memory instead of rescanning disk.
-        reconcileSnapshotsFromPreferences()
-    }
-
-    func enableAgentGlobally(_ agent: AgentRecord) throws {
-        guard appSettingsController.setDefaultAgent(agent.name, enabled: true) else { return }
-        settings.publish()
-        refresh(includeModels: false)
-    }
-
-    func disableAgentGlobally(_ agent: AgentRecord) throws {
-        guard appSettingsController.setDefaultAgent(agent.name, enabled: false) else { return }
-        settings.publish()
-        refresh(includeModels: false)
-    }
-
-    func moveAgentToLibrary(_ agent: AgentRecord) throws {
-        _ = try ensureLibraryAgent(for: agent)
-        refresh(includeModels: false)
-    }
-
-    /// Custom and library agents own a real file that can be removed. Builtin and
-    /// package agents are read-only — they are disabled or overridden, not deleted.
-    func canDeleteAgent(_ agent: AgentRecord) -> Bool {
-        switch agent.source.kind {
-        case .builtin, .package:
-            return false
-        case .global, .project, .legacyProject, .override, .library:
-            return true
-        }
-    }
-
-    func deleteAgent(_ agent: AgentRecord) throws {
-        guard canDeleteAgent(agent) else { throw CocoaError(.fileWriteNoPermission) }
-
-        try removeAgentReferences(named: agent.name)
-        let fileURL = URL(fileURLWithPath: agent.filePath).standardizedFileURL
-        try FileManager.default.trashItem(at: fileURL, resultingItemURL: nil)
-        // Reconcile in the background — no blocking rescan. The row updates
-        // when the fresh snapshot lands; a builtin of the same name correctly
-        // reappears instead of the row being wrongly hidden, so agent deletion
-        // is not optimistically hidden the way skill/prompt deletion is.
-        refresh(includeModels: false, scanAllProjects: true)
-    }
-
-    private func removeAgentReferences(named agentName: String) throws {
-        _ = appSettingsController.setDefaultAgent(agentName, enabled: false)
-        settings.publish()
-
-        for projectPath in projectPreferencesStore.preferencesByPath.keys {
-            projectPreferencesStore.setAssignedAgent(agentName, assigned: false, for: projectPath)
-        }
-        applyProjectPreferenceChanges()
     }
 
     private func removePromptReferences(named promptName: String) throws {
@@ -2267,24 +2190,6 @@ final class AppViewModel: NSObject {
         }
         guard appSettingsController.removeExternalSkillPaths(pathsToRemove) else { return }
         settings.publish()
-    }
-
-    private func ensureLibraryAgent(for agent: AgentRecord) throws -> URL {
-        let libraryRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".pi/agent/agent-library/agents", isDirectory: true)
-        let libraryURL = libraryRoot.appendingPathComponent("\(agent.name).md")
-        let fileManager = FileManager.default
-        try fileManager.createDirectory(at: libraryRoot, withIntermediateDirectories: true)
-        if fileManager.fileExists(atPath: libraryURL.path) { return libraryURL }
-
-        let sourceURL = URL(fileURLWithPath: agent.filePath)
-        if agent.source.kind == .global {
-            try fileManager.moveItem(at: sourceURL, to: libraryURL)
-        } else if agent.source.kind == .library {
-            return sourceURL
-        } else {
-            try fileManager.copyItem(at: sourceURL, to: libraryURL)
-        }
-        return libraryURL
     }
 
     private func ensureLibraryPrompt(for prompt: PromptTemplateRecord) throws -> URL {

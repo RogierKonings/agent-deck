@@ -245,6 +245,10 @@ final class ProjectDiscoveryState {
         }
     }
 
+    func setAssignedAgent(_ agentName: String, assigned: Bool, for path: String) {
+        preferencesStore.setAssignedAgent(agentName, assigned: assigned, for: path)
+    }
+
     private func rebuildProjectByPath() {
         projectByPath = Dictionary(uniqueKeysWithValues: discoveredProjects.map { ($0.path, $0) })
     }
