@@ -16,6 +16,10 @@ final class PiSubagentRunService {
     private let fileManager = FileManager.default
     var childMemoryArgumentsProvider: ((PiAgentSessionRecord, EffectiveAgentRecord, String) async throws -> [String])?
     var onMemoryWrite: ((UUID, UUID, String?, AgentMemoryWriteBridgeRequest) -> String)?
+    var onMemoryRecall: ((UUID, UUID, String?, AgentMemoryRecallBridgeRequest) async -> String)?
+    var onMemoryReinforce: ((UUID, UUID, String?, AgentMemoryReinforceBridgeRequest) -> String)?
+    var onMemoryUpdate: ((UUID, UUID, String?, AgentMemoryUpdateBridgeRequest) -> String)?
+    var onMemoryDelete: ((UUID, UUID, String?, AgentMemoryDeleteBridgeRequest) -> String)?
     var onMemoryMarkStale: ((UUID, UUID, String?, AgentMemoryStaleBridgeRequest) async -> String)?
     var onMemorySearch: ((UUID, UUID, String?, AgentMemorySearchBridgeRequest) async -> String)?
 
@@ -1043,8 +1047,24 @@ final class PiSubagentRunService {
             handleSystemPromptAuditBridgeRequest(event, requestID: requestID, rawLine: rawLine, runID: runID, parentSessionID: parentSessionID)
             return
         }
-        if title == "AGENT_DECK_BRIDGE memory_write", let requestID = event.id {
+        if ["AGENT_DECK_BRIDGE memory_write", "AGENT_DECK_BRIDGE store_memory"].contains(title), let requestID = event.id {
             handleMemoryWriteBridgeRequest(event, requestID: requestID, rawLine: rawLine, runID: runID, parentSessionID: parentSessionID)
+            return
+        }
+        if title == "AGENT_DECK_BRIDGE recall_memories", let requestID = event.id {
+            handleMemoryRecallBridgeRequest(event, requestID: requestID, rawLine: rawLine, runID: runID, parentSessionID: parentSessionID)
+            return
+        }
+        if title == "AGENT_DECK_BRIDGE reinforce_memory", let requestID = event.id {
+            handleMemoryReinforceBridgeRequest(event, requestID: requestID, rawLine: rawLine, runID: runID, parentSessionID: parentSessionID)
+            return
+        }
+        if title == "AGENT_DECK_BRIDGE update_memory", let requestID = event.id {
+            handleMemoryUpdateBridgeRequest(event, requestID: requestID, rawLine: rawLine, runID: runID, parentSessionID: parentSessionID)
+            return
+        }
+        if title == "AGENT_DECK_BRIDGE delete_memory", let requestID = event.id {
+            handleMemoryDeleteBridgeRequest(event, requestID: requestID, rawLine: rawLine, runID: runID, parentSessionID: parentSessionID)
             return
         }
         if title == "AGENT_DECK_BRIDGE memory_mark_stale", let requestID = event.id {
@@ -1100,6 +1120,49 @@ final class PiSubagentRunService {
             store.append(.init(sessionID: parentSessionID, role: .status, title: requestTitle, text: message))
             clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: "Acknowledged.")
         }
+    }
+
+    private func handleMemoryRecallBridgeRequest(_ event: PiAgentRPCEvent, requestID: String, rawLine: String, runID: UUID, parentSessionID: UUID) {
+        guard let payload = bridgePayload(from: event), let request = try? JSONDecoder().decode(AgentMemoryRecallBridgeRequest.self, from: Data(payload.utf8)) else {
+            clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: "\(AppBrand.displayName) could not parse the memory recall request.")
+            return
+        }
+        let agentName = store.subagentRuns(for: parentSessionID).first(where: { $0.id == runID })?.agentName
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let result = await self.onMemoryRecall?(parentSessionID, runID, agentName, request) ?? "\(AppBrand.displayName) memory is not available."
+            self.clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: result)
+        }
+    }
+
+    private func handleMemoryReinforceBridgeRequest(_ event: PiAgentRPCEvent, requestID: String, rawLine: String, runID: UUID, parentSessionID: UUID) {
+        guard let payload = bridgePayload(from: event), let request = try? JSONDecoder().decode(AgentMemoryReinforceBridgeRequest.self, from: Data(payload.utf8)) else {
+            clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: "\(AppBrand.displayName) could not parse the memory reinforce request.")
+            return
+        }
+        let agentName = store.subagentRuns(for: parentSessionID).first(where: { $0.id == runID })?.agentName
+        let result = onMemoryReinforce?(parentSessionID, runID, agentName, request) ?? "\(AppBrand.displayName) memory is not available."
+        clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: result)
+    }
+
+    private func handleMemoryUpdateBridgeRequest(_ event: PiAgentRPCEvent, requestID: String, rawLine: String, runID: UUID, parentSessionID: UUID) {
+        guard let payload = bridgePayload(from: event), let request = try? JSONDecoder().decode(AgentMemoryUpdateBridgeRequest.self, from: Data(payload.utf8)) else {
+            clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: "\(AppBrand.displayName) could not parse the memory update request.")
+            return
+        }
+        let agentName = store.subagentRuns(for: parentSessionID).first(where: { $0.id == runID })?.agentName
+        let result = onMemoryUpdate?(parentSessionID, runID, agentName, request) ?? "\(AppBrand.displayName) memory is not available."
+        clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: result)
+    }
+
+    private func handleMemoryDeleteBridgeRequest(_ event: PiAgentRPCEvent, requestID: String, rawLine: String, runID: UUID, parentSessionID: UUID) {
+        guard let payload = bridgePayload(from: event), let request = try? JSONDecoder().decode(AgentMemoryDeleteBridgeRequest.self, from: Data(payload.utf8)) else {
+            clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: "\(AppBrand.displayName) could not parse the memory delete request.")
+            return
+        }
+        let agentName = store.subagentRuns(for: parentSessionID).first(where: { $0.id == runID })?.agentName
+        let result = onMemoryDelete?(parentSessionID, runID, agentName, request) ?? "\(AppBrand.displayName) memory is not available."
+        clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: result)
     }
 
     private func handleMemoryMarkStaleBridgeRequest(_ event: PiAgentRPCEvent, requestID: String, rawLine: String, runID: UUID, parentSessionID: UUID) {

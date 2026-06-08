@@ -1,63 +1,60 @@
 import Foundation
 
 nonisolated enum AgentMemoryScope: String, Codable, CaseIterable, Identifiable, Sendable {
+    case general
     case project
-
-    var id: String { rawValue }
-
-    var displayName: String { "Project" }
-}
-
-nonisolated enum AgentMemoryKind: String, Codable, CaseIterable, Identifiable, Sendable {
-    case context
-    case decision
-    case runbook
-    case failure
-    case preference
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
-        case .context: return "Context"
-        case .decision: return "Decision"
-        case .runbook: return "Runbook"
-        case .failure: return "Failure"
-        case .preference: return "Preference"
+        case .general: return "General"
+        case .project: return "Project"
+        }
+    }
+}
+
+nonisolated enum AgentMemoryKind: String, Codable, CaseIterable, Identifiable, Sendable {
+    case fact
+    case event
+    case procedure
+    case insight
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .fact: return "Fact"
+        case .event: return "Event"
+        case .procedure: return "Procedure"
+        case .insight: return "Insight"
         }
     }
 
     var explanation: String {
         switch self {
-        case .context: return "Durable facts about project structure, architecture, conventions, dependencies, or important files."
-        case .decision: return "A choice that was made for the project, plus the rationale behind it."
-        case .runbook: return "A repeatable procedure for doing project work, such as testing, releasing, deploying, debugging, or validating."
-        case .failure: return "A known failed approach, recurring trap, bug pattern, or correction that should prevent repeated mistakes."
-        case .preference: return "A project-specific user or team preference about style, tooling, commands, or workflow."
+        case .fact: return "Deduplicatable knowledge: preferences, config, decisions, or durable facts."
+        case .event: return "Timestamped occurrences such as crashes, deploys, milestones, or completed runs."
+        case .procedure: return "Versioned workflows or runbooks that evolve by supersession."
+        case .insight: return "General observations, patterns, gotchas, and edge cases."
         }
     }
 }
 
 nonisolated enum AgentMemoryStatus: String, Codable, CaseIterable, Identifiable, Sendable {
     case active
-    case pinned
     case stale
-    case archived
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
-        case .active: return "Active"
-        case .pinned: return "Pinned"
-        case .stale: return "Stale"
-        case .archived: return "Archived"
+        case .active: return "Current"
+        case .stale: return "Superseded"
         }
     }
 
-    var isInjectable: Bool {
-        self == .active || self == .pinned
-    }
+    var isInjectable: Bool { self == .active }
 }
 
 nonisolated struct AgentMemoryRecord: Identifiable, Codable, Hashable, Sendable {
@@ -66,20 +63,30 @@ nonisolated struct AgentMemoryRecord: Identifiable, Codable, Hashable, Sendable 
     var scope: AgentMemoryScope
     var status: AgentMemoryStatus
     var title: String
+    /// Canonical Pi memory content. Kept as `summary` for compatibility with existing Agent Deck transcript/UI call sites.
     var summary: String
     var filePath: String
     var projectPath: String?
     var sourceSessionID: UUID?
     var sourceRunID: UUID?
     var sourceAgentName: String?
+    /// Canonical Pi memory reasoning.
     var writeReason: String?
     var createdAt: Date
     var updatedAt: Date
     var lastUsedAt: Date?
     var useCount: Int
     var tags: [String]
+    var weight: Double
+    var effectiveWeight: Double
+    var projectID: String
+    var supersedes: String?
+    var supersededBy: String?
+    var synthesizedFrom: [String]?
+    var sourceSession: String?
 
     var isInjectable: Bool { status.isInjectable }
+    var isSuperseded: Bool { supersededBy?.isEmpty == false }
 }
 
 struct AgentMemoryDocument: Hashable {
@@ -108,7 +115,7 @@ enum AgentMemoryEventKind: String, Codable, Hashable {
         case .stored: return "Memory Stored"
         case .edited: return "Memory Edited"
         case .archived: return "Memory Archived"
-        case .stale: return "Memory Marked Stale"
+        case .stale: return "Memory Superseded"
         case .blocked: return "Memory Blocked"
         }
     }
@@ -120,7 +127,7 @@ enum AgentMemoryEventKind: String, Codable, Hashable {
         case .stored: return "tray.and.arrow.down"
         case .edited: return "pencil"
         case .archived: return "archivebox"
-        case .stale: return "clock.badge.exclamationmark"
+        case .stale: return "arrow.triangle.2.circlepath"
         case .blocked: return "exclamationmark.shield"
         }
     }
@@ -130,10 +137,6 @@ struct AgentMemoryTranscriptEvent: Codable, Hashable {
     var type: String
     var event: AgentMemoryEventKind
     var memoryIDs: [String]
-    /// Index-aligned with `memoryIDs`: the title of each memory at the moment it
-    /// was injected. Optional so older transcript entries decode as nil (the card
-    /// then falls back to the bare count). A snapshot — a since-renamed memory
-    /// keeps the title it had when injected.
     var memoryTitles: [String]?
     var scope: AgentMemoryScope?
     var title: String
@@ -142,23 +145,98 @@ struct AgentMemoryTranscriptEvent: Codable, Hashable {
     static let rawType = "agent_deck_memory_event"
 }
 
-struct AgentMemoryWriteBridgeRequest: Codable, Hashable {
+struct AgentMemoryStoreBridgeRequest: Codable, Hashable {
     var title: String
-    var summary: String
-    var body: String
-    var kind: AgentMemoryKind?
+    var content: String
+    var reasoning: String
     var tags: [String]?
-    var reason: String?
+    var weight: Double?
+    var scope: AgentMemoryScope?
+    var project: String?
+    var type: AgentMemoryKind?
+    var supersedes: String?
 
     enum CodingKeys: String, CodingKey {
-        case title
-        case summary
-        case body
-        case kind = "kindHint"
-        case tags
-        case reason
+        case title, content, reasoning, tags, weight, scope, project, type, supersedes
     }
 }
+
+struct AgentMemoryRecallBridgeRequest: Codable, Hashable {
+    var query: String?
+    var id: String?
+    var project: String?
+    var type: AgentMemoryKind?
+    var includeSuperseded: Bool?
+    var limit: Int?
+}
+
+struct AgentMemoryReinforceBridgeRequest: Codable, Hashable {
+    var id: String
+}
+
+struct AgentMemoryUpdateBridgeRequest: Codable, Hashable {
+    var id: String
+    var title: String?
+    var content: String?
+    var reasoning: String?
+    var tags: [String]?
+    var weight: Double?
+    var type: AgentMemoryKind?
+    var supersedes: String?
+    var supersedesWasProvided: Bool
+    var project: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, content, reasoning, tags, weight, type, supersedes, project
+    }
+
+    init(id: String, title: String? = nil, content: String? = nil, reasoning: String? = nil, tags: [String]? = nil, weight: Double? = nil, type: AgentMemoryKind? = nil, supersedes: String? = nil, supersedesWasProvided: Bool = false, project: String? = nil) {
+        self.id = id
+        self.title = title
+        self.content = content
+        self.reasoning = reasoning
+        self.tags = tags
+        self.weight = weight
+        self.type = type
+        self.supersedes = supersedes
+        self.supersedesWasProvided = supersedesWasProvided
+        self.project = project
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        content = try container.decodeIfPresent(String.self, forKey: .content)
+        reasoning = try container.decodeIfPresent(String.self, forKey: .reasoning)
+        tags = try container.decodeIfPresent([String].self, forKey: .tags)
+        weight = try container.decodeIfPresent(Double.self, forKey: .weight)
+        type = try container.decodeIfPresent(AgentMemoryKind.self, forKey: .type)
+        supersedesWasProvided = container.contains(.supersedes)
+        supersedes = try container.decodeIfPresent(String.self, forKey: .supersedes)
+        project = try container.decodeIfPresent(String.self, forKey: .project)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encodeIfPresent(title, forKey: .title)
+        try container.encodeIfPresent(content, forKey: .content)
+        try container.encodeIfPresent(reasoning, forKey: .reasoning)
+        try container.encodeIfPresent(tags, forKey: .tags)
+        try container.encodeIfPresent(weight, forKey: .weight)
+        try container.encodeIfPresent(type, forKey: .type)
+        if supersedesWasProvided { try container.encodeIfPresent(supersedes, forKey: .supersedes) }
+        try container.encodeIfPresent(project, forKey: .project)
+    }
+}
+
+struct AgentMemoryDeleteBridgeRequest: Codable, Hashable {
+    var id: String
+}
+
+// Compatibility DTOs retained so older generated bridge payloads and tests decode while the model-facing tools use canonical Pi names.
+typealias AgentMemoryWriteBridgeRequest = AgentMemoryStoreBridgeRequest
 
 struct AgentMemoryStaleBridgeRequest: Codable, Hashable {
     var memoryIDs: [String]?
@@ -169,4 +247,54 @@ struct AgentMemoryStaleBridgeRequest: Codable, Hashable {
 struct AgentMemorySearchBridgeRequest: Codable, Hashable {
     var query: String
     var limit: Int?
+}
+
+enum PiMemoryDreamActionKind: String, Codable, CaseIterable, Identifiable, Sendable {
+    case merge
+    case synthesize
+    case reweight
+    case flagContradiction = "flag-contradiction"
+    case discoverPattern = "discover-pattern"
+    case skip
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .merge: return "Merge"
+        case .synthesize: return "Synthesize"
+        case .reweight: return "Reweight"
+        case .flagContradiction: return "Flag Contradiction"
+        case .discoverPattern: return "Discover Pattern"
+        case .skip: return "Skip"
+        }
+    }
+}
+
+struct PiMemoryDreamProposal: Identifiable, Codable, Hashable, Sendable {
+    var id: String
+    var action: PiMemoryDreamActionKind
+    var sourceMemoryIDs: [String]
+    var title: String
+    var content: String
+    var reasoning: String
+    var tags: [String]
+    var weight: Double?
+    var type: AgentMemoryKind?
+    var weightChanges: [String: Double]
+}
+
+struct PiMemoryDreamCycleResult: Codable, Hashable, Sendable {
+    var id: String
+    var startedAt: Date
+    var finishedAt: Date
+    var trigger: String
+    var phase: String
+    var clustersReviewed: Int
+    var memoriesMerged: Int
+    var schemasCreated: Int
+    var weightsAdjusted: Int
+    var contradictionsFound: Int
+    var patternsDiscovered: Int
+    var proposals: [PiMemoryDreamProposal]
 }

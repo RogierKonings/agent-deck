@@ -1434,13 +1434,28 @@ struct ContentView: View {
                 }
 
                 Button {
+                    NotificationCenter.default.post(name: .agentDeckRefreshMemoryRequested, object: nil)
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .toolbarNeutralChrome()
+                .help("Refresh Pi memory")
+
+                Button {
+                    NotificationCenter.default.post(name: .agentDeckDreamMemoryRequested, object: nil)
+                } label: {
+                    Label("Dream", systemImage: "moon.stars")
+                }
+                .toolbarNeutralChrome()
+                .help("Analyze memory and propose mutations")
+
+                Button {
                     NotificationCenter.default.post(name: .agentDeckNewMemoryRequested, object: nil)
                 } label: {
                     Label("New Memory", systemImage: "plus")
                 }
                 .toolbarPrimaryActionChrome()
-                .help(viewModel.selectedProjectPath == nil ? "Select a project before creating memory." : "Create a project memory")
-                .disabled(viewModel.selectedProjectPath == nil)
+                .help("Create a memory")
             }
         }
     }
