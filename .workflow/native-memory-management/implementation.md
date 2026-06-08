@@ -6,7 +6,7 @@ Status: continuation complete on `side-agent/dream-parity`; ready for parent/rev
 
 - Implementation commit: `6ea3850 Complete native dream parity`.
 - Report update commit: `e7268d2 Update native memory report`.
-- Project-scope Dream apply fix: pending this follow-up commit.
+- Project-scope Dream apply fix: `bc120d9 Fix project-scoped dream apply`.
 
 ## Behavior implemented
 
