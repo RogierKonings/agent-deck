@@ -108,6 +108,29 @@ final class AgentMemoryStoreTests: XCTestCase {
         _ = try store.deleteMemory(id: record.id)
         XCTAssertEqual(try sqliteScalar(db, "SELECT count(*) FROM memories_fts WHERE memories_fts MATCH 'haystack';"), "0")
     }
+    func testRefreshHandlesLargeCanonicalDatabaseOutputWithoutSqlitePipeDeadlock() throws {
+        let db = try temporaryDatabase()
+        let store = AgentMemoryStore(databaseURL: db, autoRefresh: false)
+        store.refresh()
+
+        let largeContent = String(repeating: "large memory body ", count: 220)
+        var sql = "BEGIN;\n"
+        for index in 0..<180 {
+            let id = "mem_large_\(index)"
+            sql += """
+            INSERT INTO memories (id,title,content,reasoning,tags,weight,created_at,last_accessed,access_count,source_session,project,type)
+            VALUES ('\(id)', '\(Self.sqlEscape("Large memory \(index)"))', '\(Self.sqlEscape(largeContent))', 'reason', '[]', 0.6, \(1_700_000_000_000 + index), \(1_700_000_000_000 + index), 0, 'test', 'general', 'insight');
+            """
+        }
+        sql += "COMMIT;\n"
+        try runSQLite(db, sql)
+
+        store.refresh()
+
+        XCTAssertNil(store.lastError)
+        XCTAssertEqual(store.records.count, 180)
+    }
+
 
     func testDreamApplyCreatesMergedMemory() throws {
         let store = AgentMemoryStore(databaseURL: try temporaryDatabase(), autoRefresh: false)
@@ -323,6 +346,26 @@ final class AgentMemoryStoreTests: XCTestCase {
             synthesizedFrom: nil,
             sourceSession: nil
         )
+    }
+
+    private static func sqlEscape(_ value: String) -> String {
+        value.replacingOccurrences(of: "'", with: "''")
+    }
+
+    private func runSQLite(_ db: URL, _ sql: String) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        process.arguments = [db.path]
+        let input = Pipe()
+        let error = Pipe()
+        process.standardInput = input
+        process.standardError = error
+        try process.run()
+        input.fileHandleForWriting.write(Data(sql.utf8))
+        input.fileHandleForWriting.closeFile()
+        process.waitUntilExit()
+        let stderr = String(data: error.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        XCTAssertEqual(process.terminationStatus, 0, stderr)
     }
 
     private func sqliteScalar(_ db: URL, _ sql: String) throws -> String {

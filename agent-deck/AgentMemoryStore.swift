@@ -677,17 +677,39 @@ final class AgentMemoryStore: ObservableObject {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: sqlitePath)
         process.arguments = [databaseURL.path]
+
         let input = Pipe()
-        let output = Pipe()
-        let error = Pipe()
         process.standardInput = input
-        process.standardOutput = output
-        process.standardError = error
+
+        // Do not pipe sqlite stdout/stderr while synchronously waiting for exit.
+        // The real Pi memory DB can produce hundreds of KB of hex-encoded rows;
+        // if stdout is a Pipe and the parent does not drain it until after
+        // waitUntilExit(), sqlite3 blocks on a full pipe and our watchdog reports
+        // a false timeout. File-backed output lets sqlite3 finish normally.
+        let tempDir = fileManager.temporaryDirectory
+            .appendingPathComponent("AgentMemorySQLite-")
+            .appendingPathExtension(UUID().uuidString)
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let outputURL = tempDir.appendingPathComponent("stdout.txt")
+        let errorURL = tempDir.appendingPathComponent("stderr.txt")
+        fileManager.createFile(atPath: outputURL.path, contents: nil)
+        fileManager.createFile(atPath: errorURL.path, contents: nil)
+        let outputHandle = try FileHandle(forWritingTo: outputURL)
+        let errorHandle = try FileHandle(forWritingTo: errorURL)
+        process.standardOutput = outputHandle
+        process.standardError = errorHandle
+        defer {
+            try? outputHandle.close()
+            try? errorHandle.close()
+            try? fileManager.removeItem(at: tempDir)
+        }
+
         let startedAt = Date()
         try process.run()
         let boundedSQL = ".timeout 5000\nPRAGMA busy_timeout=5000;\n" + sql + "\n"
         input.fileHandleForWriting.write(Data(boundedSQL.utf8))
         input.fileHandleForWriting.closeFile()
+
         var didTimeout = false
         while process.isRunning {
             if Date().timeIntervalSince(startedAt) >= 5 {
@@ -698,12 +720,15 @@ final class AgentMemoryStore: ObservableObject {
             Thread.sleep(forTimeInterval: 0.01)
         }
         process.waitUntilExit()
-        let errorText = String(data: error.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        try outputHandle.close()
+        try errorHandle.close()
+
+        let errorText = (try? String(contentsOf: errorURL, encoding: .utf8)) ?? ""
         guard process.terminationStatus == 0 else {
             if didTimeout { throw AgentMemoryError.sqlite("sqlite3 timed out after 5 seconds for \(databaseURL.path).") }
             throw AgentMemoryError.sqlite(errorText.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank ?? "sqlite3 exited with code \(process.terminationStatus).")
         }
-        return (String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return ((try? String(contentsOf: outputURL, encoding: .utf8)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func sqlString(_ value: String) -> String { "'\(value.replacingOccurrences(of: "'", with: "''"))'" }
