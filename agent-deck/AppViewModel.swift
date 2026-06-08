@@ -134,8 +134,7 @@ final class AppViewModel: NSObject {
     private var shipService: PiAgentShipService { environment.shipService }
     /// Tag-and-push release flow, scoped to the agent-deck repo itself.
     var agentDeckReleaseService: ReleaseService { ReleaseService(gitRepositoryService: gitRepositoryService) }
-    private var agentAvatarPromptService: AgentAvatarPromptGenerationService { environment.agentAvatarPromptService }
-    private var skillDescriptionService: SkillDescriptionGenerationService { environment.skillDescriptionService }
+    let automation: AutomationCoordinator
     private var releaseNotesGenerator: ReleaseNotesGenerationService { environment.releaseNotesGenerator }
     private var sessionWorktreeService: PiAgentSessionWorktreeService { environment.sessionWorktreeService }
     /// Memoizes `selectableAgentUniverse(forProjectPath:)` so the subagent
@@ -193,6 +192,10 @@ final class AppViewModel: NSObject {
         )
         settings = AppSettingsCoordinator(controller: environment.appSettingsController)
         memory = AgentMemoryCoordinator()
+        automation = AutomationCoordinator(
+            avatarPromptService: environment.agentAvatarPromptService,
+            skillDescriptionService: environment.skillDescriptionService
+        )
         super.init()
         projects.host = self
         githubWorkspace.host = self
@@ -203,6 +206,7 @@ final class AppViewModel: NSObject {
         settings.attach(host: self)
         memory.attach(host: self)
         skillRepositories.attach(host: self)
+        automation.attach(host: self)
 
         settings.bootstrapFromController()
         #if DEBUG
@@ -1391,78 +1395,6 @@ final class AppViewModel: NSObject {
         guard let string = value as? String else { return nil }
         let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
-    }
-
-
-    func piAgentTitleGenerationModel() -> AvailableModel? {
-        if let identifier = appSettings.piAgentTitleGenerationModelIdentifier,
-           let selected = automationAvailableModels.first(where: { $0.identifier == identifier }) {
-            return selected
-        }
-        return foundationAutomationModel ?? defaultPiAgentModel() ?? enabledAvailableModels.first
-    }
-
-    func piAgentCommitMessageModel() -> AvailableModel? {
-        guard appSettings.piAgentGitAutomationEnabled,
-              let identifier = appSettings.piAgentCommitMessageModelIdentifier,
-              let selected = automationAvailableModels.first(where: { $0.identifier == identifier }) else { return nil }
-        return selected
-    }
-
-    func agentAvatarPromptGenerationModel() -> AvailableModel? {
-        if let identifier = appSettings.agentAvatarPromptModelIdentifier,
-           let selected = automationAvailableModels.first(where: { $0.identifier == identifier }) {
-            return selected
-        }
-        return foundationAutomationModel ?? defaultPiAgentModel() ?? enabledAvailableModels.first
-    }
-
-    func generateAgentAvatarPrompt(for agent: EffectiveAgentRecord) async throws -> String {
-        guard let model = agentAvatarPromptGenerationModel() else {
-            throw PiAgentShipService.ShipError.noModel
-        }
-        let projectPath = agent.projectRoot ?? selectedProjectPath ?? primaryProjectsRootPath
-        let projectURL = URL(fileURLWithPath: projectPath, isDirectory: true)
-        let environment = EnvRuntimeEnvironment().environment(projectRoot: projectURL)
-        return try await agentAvatarPromptService.generatePrompt(for: agent, model: model, projectURL: projectURL, environment: environment)
-    }
-
-    /// Resolves the model used for AI skill summaries. An explicit pick in
-    /// Automations wins; otherwise we use Apple Foundation Models when
-    /// available. Returns `nil` when neither is available — callers should
-    /// hide the magic-button UI rather than fall back silently.
-    func skillDescriptionGenerationModel() -> AvailableModel? {
-        if let identifier = appSettings.skillDescriptionModelIdentifier,
-           let selected = automationAvailableModels.first(where: { $0.identifier == identifier }) {
-            return selected
-        }
-        return foundationAutomationModel
-    }
-
-    /// Read full SKILL.md bytes from a discovery clone (git mode).
-
-    /// Cache-aware summary generation: returns a previously stored entry when
-    /// the SKILL.md byte hash matches, otherwise dispatches to the service and
-    /// writes the result back into the on-disk cache.
-    func generateSkillDescription(skillContent: String) async throws -> String {
-        guard let model = skillDescriptionGenerationModel() else {
-            throw SkillDescriptionGenerationService.GenerationError.rpc("No model is configured for skill summaries.")
-        }
-        let hash = SkillDescriptionCache.sha256(of: Data(skillContent.utf8))
-        if let cached = SkillDescriptionCache.get(hash: hash) {
-            return cached.summary
-        }
-        let projectPath = selectedProjectPath ?? primaryProjectsRootPath
-        let projectURL = URL(fileURLWithPath: projectPath, isDirectory: true)
-        let environment = EnvRuntimeEnvironment().environment(projectRoot: projectURL)
-        let summary = try await skillDescriptionService.generate(
-            skillContent: skillContent,
-            model: model,
-            projectURL: projectURL,
-            environment: environment
-        )
-        SkillDescriptionCache.put(hash: hash, summary: summary, modelIdentifier: model.identifier)
-        return summary
     }
 
 
