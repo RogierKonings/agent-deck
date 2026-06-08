@@ -118,6 +118,7 @@ final class AppViewModel: NSObject {
     let piSessions: PiAgentSessionLifecycleCoordinator
     let piRunner: PiAgentRunnerCoordinator
     let piSubagents: PiNativeSubagentCoordinator
+    let settings: AppSettingsCoordinator
     let agentMemoryStore = AgentMemoryStore()
     let agentImageStore = AgentImageStore()
     let skillRepositorySyncService: SkillRepositorySyncService
@@ -129,7 +130,7 @@ final class AppViewModel: NSObject {
     private var agentPersistence: AgentPersistence { environment.agentPersistence }
     private var envPersistence: EnvPersistence { environment.envPersistence }
     private var projectPreferencesStore: ProjectPreferencesStore { environment.projectPreferencesStore }
-    private var appSettingsController: AppSettingsController { environment.appSettingsController }
+    private var appSettingsController: AppSettingsController { settings.controller }
     private var gitRepositoryService: GitRepositoryService { environment.gitRepositoryService }
     @ObservationIgnored private lazy var githubWorkspace = GitHubWorkspace(gitRepositoryService: gitRepositoryService)
     var github: GitHubWorkspace { githubWorkspace }
@@ -193,6 +194,7 @@ final class AppViewModel: NSObject {
             sessionStore: sessionStore,
             worktreeService: environment.subagentWorktreeService
         )
+        settings = AppSettingsCoordinator(controller: environment.appSettingsController)
         super.init()
         projects.host = self
         githubWorkspace.host = self
@@ -200,10 +202,9 @@ final class AppViewModel: NSObject {
         piSessions.host = self
         piRunner.attach(host: self)
         piSubagents.attach(host: self)
+        settings.attach(host: self)
 
-        appSettings = appSettingsController.settings
-        ThemeManager.shared.apply(appSettingsController.resolvedActiveTheme)
-        ThemeManager.shared.setMarkdownHighlightingEnabled(appSettingsController.settings.piAgentMarkdownHighlightingEnabled)
+        settings.bootstrapFromController()
         #if DEBUG
         // Xcode Previews: stop here so preview view models stay empty (no models,
         // no projects, no GitHub) and never spawn pi/gh subprocesses — giving a
@@ -212,7 +213,6 @@ final class AppViewModel: NSObject {
         #endif
         projects.loadPersistedSelection()
         piAgentSessionStore.newSessionSubagentsEnabled = appSettings.nativeSubagentsEnabledForNewSessions
-        writeOpenAIFastModeConfig()
         piSessions.configureIdleParking()
         refreshAvailableModels()
         // First-frame refresh: only scan global + the last-selected project
@@ -733,7 +733,7 @@ final class AppViewModel: NSObject {
         }
 
         if appSettingsController.addExternalSkillPaths(importedPaths) {
-            appSettings = appSettingsController.settings
+            settings.publish()
         }
         refresh(includeModels: false, scanAllProjects: true)
         if let firstImported = importedNames.first {
@@ -824,7 +824,7 @@ final class AppViewModel: NSObject {
             latestKnownRemoteCommit: context.existingRepository?.latestKnownRemoteCommit
         )
         appSettingsController.upsertImportedSkillRepository(record)
-        appSettings = appSettingsController.settings
+        settings.publish()
 
         refresh(includeModels: false, scanAllProjects: true)
         if let firstName = selectedCandidates.first?.name {
@@ -869,7 +869,7 @@ final class AppViewModel: NSObject {
             updated.latestKnownRemoteCommit = remoteCommit
         }
         appSettingsController.upsertImportedSkillRepository(updated)
-        appSettings = appSettingsController.settings
+        settings.publish()
         return status
     }
 
@@ -923,7 +923,7 @@ final class AppViewModel: NSObject {
         if commitChanged { updated.lastSyncedDate = Date() }
         updated.lastCheckedDate = Date()
         appSettingsController.upsertImportedSkillRepository(updated)
-        appSettings = appSettingsController.settings
+        settings.publish()
         if didChangeFiles { refresh(includeModels: false, scanAllProjects: true) }
     }
 
@@ -1058,11 +1058,6 @@ final class AppViewModel: NSObject {
         isProviderEnabled(model.provider) && isModelEnabled(model)
     }
 
-    func setProviderEnabled(_ provider: String, isEnabled: Bool) {
-        guard appSettingsController.setProviderEnabled(provider, isEnabled: isEnabled) else { return }
-        appSettings = appSettingsController.settings
-    }
-
     // MARK: - Provider sign-in
 
     /// Providers with a credential in `~/.pi/agent/auth.json` (== signed in).
@@ -1123,24 +1118,16 @@ final class AppViewModel: NSObject {
         refreshAvailableModels()
     }
 
-    func setModelEnabled(_ model: AvailableModel, isEnabled: Bool) {
-        guard appSettingsController.setModelEnabled(identifier: model.identifier, isEnabled: isEnabled) else { return }
-        appSettings = appSettingsController.settings
+    /// Bumped by the Extensions toolbar Refresh action; the screen keys its
+    /// off-main discovery `.task` on this so a Refresh re-scans without a project change.
+    private(set) var piExtensionsRefreshToken = 0
+
+    func refreshDiscoveredPiExtensions() {
+        piExtensionsRefreshToken &+= 1
     }
 
     func isOpenAIFastModeEnabled(_ model: AvailableModel) -> Bool {
         appSettings.openAIFastModeModelIdentifiers.contains(model.identifier)
-    }
-
-    func setOpenAIFastMode(_ model: AvailableModel, isEnabled: Bool) {
-        guard PiNativeSubagentBridgeExtensions.isOpenAIFastEligibleModel(provider: model.provider, modelID: model.model) else { return }
-        guard appSettingsController.setOpenAIFastMode(identifier: model.identifier, isEnabled: isEnabled) else { return }
-        syncAppSettings()
-    }
-
-    func enableAllModels() {
-        guard appSettingsController.enableAllModels() else { return }
-        appSettings = appSettingsController.settings
     }
 
     func setDefaultPiAgentModel(_ model: AvailableModel?) {
@@ -1666,230 +1653,6 @@ final class AppViewModel: NSObject {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    var gitHubBoardCacheLifetimeMinutes: Int {
-        appSettingsController.gitHubBoardCacheLifetimeMinutes
-    }
-
-    var piAgentNotificationDelayMinutes: Int {
-        appSettingsController.piAgentNotificationDelayMinutes
-    }
-
-    var piAgentIdleParkingTimeoutMinutes: Int {
-        appSettingsController.piAgentIdleParkingTimeoutMinutes
-    }
-
-    var isPiAgentIdleParkingEnabled: Bool {
-        appSettingsController.isPiAgentIdleParkingEnabled
-    }
-
-    func setPiAgentNotificationDelayMinutes(_ minutes: Int) {
-        guard appSettingsController.setPiAgentNotificationDelayMinutes(minutes) else { return }
-        syncAppSettings()
-    }
-
-    func setPiAgentIdleParkingEnabled(_ isEnabled: Bool) {
-        guard appSettingsController.setPiAgentIdleParkingEnabled(isEnabled) else { return }
-        syncAppSettings()
-    }
-
-    func setPiAgentIdleParkingTimeoutMinutes(_ minutes: Int) {
-        guard appSettingsController.setPiAgentIdleParkingTimeoutMinutes(minutes) else { return }
-        syncAppSettings()
-    }
-
-    func setGitHubBoardCacheLifetimeMinutes(_ minutes: Int) {
-        guard appSettingsController.setGitHubBoardCacheLifetimeMinutes(minutes) else { return }
-        syncAppSettings()
-    }
-
-    // MARK: - Color themes
-    //
-    // Theme state is read by the UI straight off `appSettings` (the observable
-    // store) — `appSettings.selectedThemeID` / `appSettings.customThemes` — so a
-    // change reliably re-renders the Settings tab. These mutators apply the
-    // change to `ThemeManager` whenever the *active* theme is affected.
-
-    func selectTheme(id: UUID) {
-        guard appSettingsController.selectTheme(id: id) else { return }
-        syncAppSettings()
-        ThemeManager.shared.apply(appSettingsController.resolvedActiveTheme)
-    }
-
-    func setPiAgentMarkdownHighlightingEnabled(_ isEnabled: Bool) {
-        guard appSettingsController.setPiAgentMarkdownHighlightingEnabled(isEnabled) else { return }
-        syncAppSettings()
-        ThemeManager.shared.setMarkdownHighlightingEnabled(isEnabled)
-    }
-
-    func addCustomTheme(_ theme: Theme) {
-        guard appSettingsController.addCustomTheme(theme) else { return }
-        syncAppSettings()
-    }
-
-    func updateCustomTheme(_ theme: Theme) {
-        guard appSettingsController.updateCustomTheme(theme) else { return }
-        syncAppSettings()
-        if appSettingsController.resolvedActiveTheme.id == theme.id {
-            ThemeManager.shared.apply(appSettingsController.resolvedActiveTheme)
-        }
-    }
-
-    func deleteCustomTheme(id: UUID) {
-        guard appSettingsController.deleteCustomTheme(id: id) else { return }
-        syncAppSettings()
-        ThemeManager.shared.apply(appSettingsController.resolvedActiveTheme)
-    }
-
-    /// Duplicates any theme into a new editable custom theme and returns it.
-    @discardableResult
-    func duplicateTheme(id: UUID) -> Theme? {
-        guard let copy = appSettingsController.duplicateTheme(id: id) else { return nil }
-        syncAppSettings()
-        return copy
-    }
-
-    // MARK: - App icon
-
-    var selectedAppIcon: AppIconChoice {
-        appSettingsController.selectedAppIcon
-    }
-
-    func selectAppIcon(_ choice: AppIconChoice) {
-        guard appSettingsController.selectAppIcon(choice) else { return }
-        syncAppSettings()
-        AppIconChoice.apply(choice)
-    }
-
-    func chooseProjectsRootDirectory(replacingExisting: Bool = false) {
-        guard appSettingsController.chooseProjectsRootDirectory(replacingExisting: replacingExisting) else { return }
-        handleProjectsRootSettingsChange()
-    }
-
-    func useSuggestedProjectsRootDirectory(replacingExisting: Bool = false) {
-        guard appSettingsController.useSuggestedProjectsRootDirectory(replacingExisting: replacingExisting) else { return }
-        handleProjectsRootSettingsChange()
-    }
-
-    func addProjectsRootPaths(_ paths: [String]) {
-        guard appSettingsController.addProjectsRootPaths(paths) else { return }
-        handleProjectsRootSettingsChange()
-    }
-
-    func removeProjectsRootPath(_ path: String) {
-        guard appSettingsController.removeProjectsRootPath(path) else { return }
-        handleProjectsRootSettingsChange()
-    }
-
-    func replaceProjectsRootPath(at index: Int, with path: String) {
-        guard appSettingsController.replaceProjectsRootPath(at: index, with: path) else { return }
-        handleProjectsRootSettingsChange()
-    }
-
-    func resetProjectsRootPathsToDefault() {
-        guard appSettingsController.resetProjectsRootPathsToDefault() else { return }
-        handleProjectsRootSettingsChange()
-    }
-
-    var piAgentTerminalApplicationDisplayName: String {
-        appSettingsController.piAgentTerminalApplicationDisplayName
-    }
-
-    var piAgentTerminalApplicationSelectionID: String {
-        appSettingsController.piAgentTerminalApplicationSelectionID
-    }
-
-    var piAgentTerminalApplicationOptions: [TerminalApplicationOption] {
-        appSettingsController.piAgentTerminalApplicationOptions
-    }
-
-    var piAgentLaunchPreview: String {
-        appSettingsController.piAgentLaunchPreview
-    }
-
-    /// Bumped by the Extensions toolbar Refresh action; the screen keys its
-    /// off-main discovery `.task` on this so a Refresh re-scans without a project change.
-    private(set) var piExtensionsRefreshToken = 0
-
-    func refreshDiscoveredPiExtensions() {
-        piExtensionsRefreshToken &+= 1
-    }
-
-    func isPiExtensionEnabled(_ candidate: PiExtensionCandidate) -> Bool {
-        appSettingsController.isPiExtensionEnabled(candidate)
-    }
-
-    func setPiAgentExtensionLoadingMode(_ mode: PiAgentExtensionLoadingMode) {
-        guard appSettingsController.setPiAgentExtensionLoadingMode(mode) else { return }
-        syncAppSettings()
-    }
-
-    func setPiExtension(_ candidate: PiExtensionCandidate, enabled: Bool) {
-        guard appSettingsController.setPiExtension(candidate, enabled: enabled) else { return }
-        syncAppSettings()
-    }
-
-    /// Caller passes the already-discovered candidate list (the Extensions screen
-    /// discovers off-main and caches) so this never triggers filesystem I/O.
-    func setAllPiExtensions(_ candidates: [PiExtensionCandidate], enabled: Bool) {
-        guard appSettingsController.setAllPiExtensions(candidates, enabled: enabled) else { return }
-        syncAppSettings()
-    }
-
-    func prunePiExtensionSelection(to candidates: [PiExtensionCandidate]) {
-        guard appSettingsController.prunePiExtensionSelection(to: candidates) else { return }
-        syncAppSettings()
-    }
-
-    func setPiAgentTerminalApplicationSelection(_ selectionID: String) {
-        appSettingsController.setPiAgentTerminalApplicationSelection(selectionID)
-        syncAppSettings()
-    }
-
-    func choosePiAgentTerminalApplication() {
-        guard appSettingsController.choosePiAgentTerminalApplication() else { return }
-        syncAppSettings()
-    }
-
-    func setPiAgentTerminalApplicationPath(_ path: String?) {
-        guard appSettingsController.setPiAgentTerminalApplicationPath(path) else { return }
-        syncAppSettings()
-    }
-
-    func resetPiAgentTerminalApplicationToDefault() {
-        guard appSettingsController.resetPiAgentTerminalApplicationToDefault() else { return }
-        syncAppSettings()
-    }
-
-    func togglePiAgentThinkingBlocksVisibility() {
-        guard appSettingsController.togglePiAgentThinkingBlocksVisibility() else { return }
-        syncAppSettings()
-    }
-
-    func setPiAgentTranscriptVisibility(_ keyPath: WritableKeyPath<PiAgentTranscriptVisibilitySettings, Bool>, to value: Bool) {
-        guard appSettingsController.setPiAgentTranscriptVisibility(keyPath, to: value) else { return }
-        syncAppSettings()
-    }
-
-    func setAgentMemoryEnabled(_ isEnabled: Bool) {
-        guard appSettingsController.setAgentMemoryEnabled(isEnabled) else { return }
-        syncAppSettings()
-    }
-
-    func setAgentMemorySubagentsEnabled(_ isEnabled: Bool) {
-        guard appSettingsController.setAgentMemorySubagentsEnabled(isEnabled) else { return }
-        syncAppSettings()
-    }
-
-    func setAgentMemoryShowTranscriptCards(_ isEnabled: Bool) {
-        guard appSettingsController.setAgentMemoryShowTranscriptCards(isEnabled) else { return }
-        syncAppSettings()
-    }
-
-    func setAgentMemoryInjectionCharacterBudget(_ budget: Int) {
-        guard appSettingsController.setAgentMemoryInjectionCharacterBudget(budget) else { return }
-        syncAppSettings()
-    }
-
     func createAgentMemory(title: String, content: String, reasoning: String, kind: AgentMemoryKind, scope: AgentMemoryScope, tags: [String], weight: Double, supersedes: String?) {
         do {
             let record = try agentMemoryStore.createMemory(
@@ -1969,97 +1732,6 @@ final class AppViewModel: NSObject {
         }
     }
 
-    func setShowContextSmartZoneHint(_ isEnabled: Bool) {
-        guard appSettingsController.setShowContextSmartZoneHint(isEnabled) else { return }
-        syncAppSettings()
-    }
-
-    func setAutoGeneratePiAgentSessionTitles(_ isEnabled: Bool) {
-        guard appSettingsController.setAutoGeneratePiAgentSessionTitles(isEnabled) else { return }
-        syncAppSettings()
-    }
-
-    func setAutoUpdatePiAgentSessionTitles(_ isEnabled: Bool) {
-        guard appSettingsController.setAutoUpdatePiAgentSessionTitles(isEnabled) else { return }
-        syncAppSettings()
-    }
-
-    func setPiAgentTitleGenerationModelIdentifier(_ identifier: String?) {
-        guard appSettingsController.setPiAgentTitleGenerationModelIdentifier(identifier) else { return }
-        syncAppSettings()
-    }
-
-    func setPiAgentGitAutomationEnabled(_ isEnabled: Bool) {
-        guard appSettingsController.setPiAgentGitAutomationEnabled(isEnabled) else { return }
-        if isEnabled,
-           appSettingsController.piAgentCommitMessageModelIdentifier == nil,
-           foundationAutomationModel != nil {
-            _ = appSettingsController.setPiAgentCommitMessageModelIdentifier(FoundationModelAutomationService.identifier)
-        }
-        syncAppSettings()
-    }
-
-    func setPiAgentGitAutomationRequiresConfirmation(_ isEnabled: Bool) {
-        guard appSettingsController.setPiAgentGitAutomationRequiresConfirmation(isEnabled) else { return }
-        syncAppSettings()
-    }
-
-    func setPiAgentCommitMessageModelIdentifier(_ identifier: String?) {
-        guard appSettingsController.setPiAgentCommitMessageModelIdentifier(identifier) else { return }
-        syncAppSettings()
-    }
-
-    func setPiAgentSessionsUseWorktree(_ isEnabled: Bool) {
-        guard appSettingsController.setPiAgentSessionsUseWorktree(isEnabled) else { return }
-        syncAppSettings()
-    }
-
-    func setPiAgentSessionsKeepWorktreeAfterMerge(_ isEnabled: Bool) {
-        guard appSettingsController.setPiAgentSessionsKeepWorktreeAfterMerge(isEnabled) else { return }
-        syncAppSettings()
-    }
-
-    func setAutoGenerateAgentAvatarPrompts(_ isEnabled: Bool) {
-        guard appSettingsController.setAutoGenerateAgentAvatarPrompts(isEnabled) else { return }
-        if isEnabled,
-           appSettingsController.agentAvatarPromptModelIdentifier == nil,
-           foundationAutomationModel != nil {
-            _ = appSettingsController.setAgentAvatarPromptModelIdentifier(FoundationModelAutomationService.identifier)
-        }
-        syncAppSettings()
-    }
-
-    func setAgentAvatarPromptModelIdentifier(_ identifier: String?) {
-        guard appSettingsController.setAgentAvatarPromptModelIdentifier(identifier) else { return }
-        syncAppSettings()
-    }
-
-    func setSkillDescriptionModelIdentifier(_ identifier: String?) {
-        guard appSettingsController.setSkillDescriptionModelIdentifier(identifier) else { return }
-        syncAppSettings()
-    }
-
-    func isInjectedCommandEnabled(_ command: PiInjectedCommand) -> Bool {
-        PiInjectedCommandCatalog.isEnabled(command, settings: appSettings)
-    }
-
-    func setInjectedCommandEnabled(_ command: PiInjectedCommand, isEnabled: Bool) {
-        guard appSettingsController.setInjectedCommandEnabled(command, isEnabled: isEnabled) else { return }
-        syncAppSettings()
-    }
-
-    func importCommandFile() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.sourceCode, .javaScript]
-        panel.message = "Choose a Pi extension file containing pi.registerCommand(...)."
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        try? PiInjectedCommandCatalog.importCommandFile(url)
-        syncAppSettings()
-    }
-
     func piAgentTitleGenerationModel() -> AvailableModel? {
         if let identifier = appSettings.piAgentTitleGenerationModelIdentifier,
            let selected = automationAvailableModels.first(where: { $0.identifier == identifier }) {
@@ -2132,21 +1804,6 @@ final class AppViewModel: NSObject {
         )
         SkillDescriptionCache.put(hash: hash, summary: summary, modelIdentifier: model.identifier)
         return summary
-    }
-
-    private func syncAppSettings() {
-        appSettings = appSettingsController.settings
-        writeOpenAIFastModeConfig()
-        piSessions.configureIdleParking()
-    }
-
-    private func writeOpenAIFastModeConfig() {
-        let identifiers = appSettings.openAIFastModeModelIdentifiers
-        Task.detached(priority: .utility) {
-            PiNativeSubagentBridgeExtensions.writeOpenAIFastConfig(
-                enabledModelIdentifiers: identifiers
-            )
-        }
     }
 
     /// Returns the memory append prompt texts (policy guidance, then recalled memory)
@@ -2457,12 +2114,6 @@ final class AppViewModel: NSObject {
         piAgentSessionStore.append(.init(sessionID: sessionID, role: .status, title: event.title, text: event.summary, rawJSON: rawJSON))
     }
 
-    private func handleProjectsRootSettingsChange() {
-        syncAppSettings()
-        refresh(includeModels: false)
-        github.resetProjectScopedState()
-    }
-
     private func registerAppNotificationObservers() {
         let center = NotificationCenter.default
         center.addObserver(self, selector: #selector(handlePiAgentNotificationResponse(_:)), name: .piAgentNotificationResponse, object: nil)
@@ -2510,27 +2161,6 @@ final class AppViewModel: NSObject {
     @objc private func handleAppWillTerminateNotification(_ notification: Notification) {
         shutdown(recordTranscript: false)
         piAgentSessionStore.flushPendingSave()
-    }
-
-    var areSubagentsEnabledForNewSessions: Bool {
-        appSettingsController.areSubagentsEnabledForNewSessions
-    }
-
-    func setSubagentsEnabledForNewSessions(_ isEnabled: Bool) {
-        guard appSettingsController.setSubagentsEnabledForNewSessions(isEnabled) else { return }
-        syncAppSettings()
-        piAgentSessionStore.newSessionSubagentsEnabled = isEnabled
-    }
-
-    func setNativeSubagentDelegationPolicy(_ policy: NativeSubagentDelegationPolicy) {
-        guard appSettingsController.setNativeSubagentDelegationPolicy(policy) else { return }
-        syncAppSettings()
-    }
-
-    func toggleSubagentsForNewSessions() {
-        guard appSettingsController.toggleSubagentsForNewSessions() else { return }
-        syncAppSettings()
-        piAgentSessionStore.newSessionSubagentsEnabled = appSettings.nativeSubagentsEnabledForNewSessions
     }
 
     func setSubagentsEnabledForSelectedSession(_ isEnabled: Bool) {
@@ -2847,7 +2477,7 @@ final class AppViewModel: NSObject {
             }
         }
         _ = appSettingsController.markAgentAssignmentsMigratedFromDiscoveredFiles()
-        appSettings = appSettingsController.settings
+        settings.publish()
         projectPreferencesByPath = projectPreferencesStore.preferencesByPath
     }
 
@@ -2953,30 +2583,6 @@ final class AppViewModel: NSObject {
 
     var selectedProjectName: String {
         projectRootURL?.lastPathComponent ?? "No Project Selected"
-    }
-
-    var configuredProjectsRootURLs: [URL] {
-        appSettingsController.configuredProjectsRootURLs
-    }
-
-    var configuredProjectsRootPaths: [String] {
-        appSettingsController.configuredProjectsRootPaths
-    }
-
-    var primaryProjectsRootURL: URL {
-        appSettingsController.primaryProjectsRootURL
-    }
-
-    var primaryProjectsRootPath: String {
-        appSettingsController.primaryProjectsRootPath
-    }
-
-    var suggestedProjectsRootPath: String? {
-        appSettingsController.suggestedProjectsRootURL?.path
-    }
-
-    var hasConfirmedProjectsRootPaths: Bool {
-        appSettingsController.hasConfirmedProjectsRootPaths
     }
 
     var shouldWarnDoctor: Bool {
@@ -3222,7 +2828,7 @@ final class AppViewModel: NSObject {
         _ = appSettingsController.renameDefaultAgent(from: oldName, to: newName)
         projectPreferencesStore.renameAssignedAgent(from: oldName, to: newName)
         applyProjectPreferenceChanges()
-        appSettings = appSettingsController.settings
+        settings.publish()
 
         // Drop the redundant synchronous rescan; the async refresh reconciles.
         // `pendingSelectAgentName` keeps the selection on the renamed agent
@@ -3288,7 +2894,7 @@ final class AppViewModel: NSObject {
         try replaceSkillReferencesInBuiltinOverrides(from: skill.name, to: newName)
         _ = appSettingsController.replaceExternalSkillPath(from: oldTargetURL.path, to: newTargetURL.path)
         _ = appSettingsController.replaceExternalSkillPath(from: fileURL.path, to: (isSkillFolder ? newTargetURL.appendingPathComponent("SKILL.md") : newTargetURL).path)
-        appSettings = appSettingsController.settings
+        settings.publish()
 
         // Drop the redundant synchronous rescan; the async refresh reconciles.
         // `pendingSelectSkillName` keeps the selection on the renamed skill
@@ -3333,7 +2939,7 @@ final class AppViewModel: NSObject {
         projectPreferencesStore.renameAssignedPromptTemplate(from: prompt.name, to: newName)
         applyProjectPreferenceChanges()
         try replacePromptSettingsPaths(oldURLs: [fileURL], newURL: destinationURL)
-        appSettings = appSettingsController.settings
+        settings.publish()
 
         refresh(includeModels: false, scanAllProjects: true)
         selectedCommandItemID = allVisiblePromptTemplateRecords.first { $0.name == newName }?.id ?? selectedCommandItemID
@@ -3645,7 +3251,7 @@ final class AppViewModel: NSObject {
             throw CocoaError(.fileNoSuchFile)
         }
         if appSettingsController.addExternalPromptPaths([standardizedURL.path]) {
-            appSettings = appSettingsController.settings
+            settings.publish()
         }
         refresh(includeModels: false)
         let importedName = standardizedURL.deletingPathExtension().lastPathComponent
@@ -3798,13 +3404,13 @@ final class AppViewModel: NSObject {
 
     func enablePromptGlobally(_ prompt: PromptTemplateRecord) throws {
         guard appSettingsController.setDefaultPromptTemplate(prompt.name, enabled: true) else { return }
-        appSettings = appSettingsController.settings
+        settings.publish()
         refresh(includeModels: false)
     }
 
     func disablePromptGlobally(_ prompt: PromptTemplateRecord) throws {
         guard appSettingsController.setDefaultPromptTemplate(prompt.name, enabled: false) else { return }
-        appSettings = appSettingsController.settings
+        settings.publish()
         refresh(includeModels: false)
     }
 
@@ -3815,7 +3421,7 @@ final class AppViewModel: NSObject {
     func setBundledPromptDisabled(_ isDisabled: Bool, for prompt: PromptTemplateRecord) {
         guard prompt.source.kind == .builtin else { return }
         guard appSettingsController.setBundledPromptDisabled(prompt.name, isDisabled: isDisabled) else { return }
-        appSettings = appSettingsController.settings
+        settings.publish()
         refresh(includeModels: false)
     }
 
@@ -3826,7 +3432,7 @@ final class AppViewModel: NSObject {
     func setBundledSkillDisabled(_ isDisabled: Bool, for skill: SkillRecord) {
         guard skill.source.kind == .builtin else { return }
         guard appSettingsController.setBundledSkillDisabled(skill.name, isDisabled: isDisabled) else { return }
-        appSettings = appSettingsController.settings
+        settings.publish()
         refresh(includeModels: false)
     }
 
@@ -3854,13 +3460,13 @@ final class AppViewModel: NSObject {
             // un-registers the path. The user's original file is never trashed.
             try removePromptReferences(named: prompt.name)
             _ = appSettingsController.removeExternalPromptPaths([prompt.filePath])
-            appSettings = appSettingsController.settings
+            settings.publish()
         } else {
             try removePromptReferences(named: prompt.name)
             let fileURL = URL(fileURLWithPath: prompt.filePath).standardizedFileURL
             try FileManager.default.trashItem(at: fileURL, resultingItemURL: nil)
             try replacePromptSettingsPaths(oldURLs: [fileURL], newURL: nil)
-            appSettings = appSettingsController.settings
+            settings.publish()
         }
 
         // Hide the row immediately — no blocking rescan. The background refresh
@@ -4070,13 +3676,13 @@ final class AppViewModel: NSObject {
 
     func enableAgentGlobally(_ agent: AgentRecord) throws {
         guard appSettingsController.setDefaultAgent(agent.name, enabled: true) else { return }
-        appSettings = appSettingsController.settings
+        settings.publish()
         refresh(includeModels: false)
     }
 
     func disableAgentGlobally(_ agent: AgentRecord) throws {
         guard appSettingsController.setDefaultAgent(agent.name, enabled: false) else { return }
-        appSettings = appSettingsController.settings
+        settings.publish()
         refresh(includeModels: false)
     }
 
@@ -4111,7 +3717,7 @@ final class AppViewModel: NSObject {
 
     private func removeAgentReferences(named agentName: String) throws {
         _ = appSettingsController.setDefaultAgent(agentName, enabled: false)
-        appSettings = appSettingsController.settings
+        settings.publish()
 
         for projectPath in projectPreferencesStore.preferencesByPath.keys {
             projectPreferencesStore.setAssignedAgent(agentName, assigned: false, for: projectPath)
@@ -4121,7 +3727,7 @@ final class AppViewModel: NSObject {
 
     private func removePromptReferences(named promptName: String) throws {
         _ = appSettingsController.setDefaultPromptTemplate(promptName, enabled: false)
-        appSettings = appSettingsController.settings
+        settings.publish()
 
         for projectPath in projectPreferencesStore.preferencesByPath.keys {
             projectPreferencesStore.setAssignedPromptTemplate(promptName, assigned: false, for: projectPath)
@@ -4196,14 +3802,14 @@ final class AppViewModel: NSObject {
             selectedSkillID = allVisibleSkillRecords.first { $0.name == skill.name }?.id ?? selectedSkillID
             return
         }
-        appSettings = appSettingsController.settings
+        settings.publish()
         refresh(includeModels: false, scanAllProjects: true)
         selectedSkillID = allVisibleSkillRecords.first { $0.name == skill.name }?.id ?? selectedSkillID
     }
 
     func disableSkillGlobally(_ skill: SkillRecord) throws {
         guard appSettingsController.setDefaultSkill(skill.name, enabled: false) else { return }
-        appSettings = appSettingsController.settings
+        settings.publish()
         refresh(includeModels: false)
     }
 
@@ -4291,7 +3897,7 @@ final class AppViewModel: NSObject {
             return path == rootURL.path || path == fileURL.path
         }
         if appSettingsController.removeExternalSkillPaths(pathsToRemove) {
-            appSettings = appSettingsController.settings
+            settings.publish()
         }
         unlistSkillFromSyncedRepository(skill)
 
@@ -4352,7 +3958,7 @@ final class AppViewModel: NSObject {
             appSettingsController.upsertImportedSkillRepository(updated)
             reconcileSparseCheckout(for: updated)
         }
-        appSettings = appSettingsController.settings
+        settings.publish()
     }
 
     /// Keep Git's sparse-checkout patterns aligned with Agent Deck's tracked
@@ -4689,7 +4295,7 @@ final class AppViewModel: NSObject {
 
     private func removeSkillReferences(named skillName: String) throws {
         _ = appSettingsController.setDefaultSkill(skillName, enabled: false)
-        appSettings = appSettingsController.settings
+        settings.publish()
 
         for projectPath in projectPreferencesStore.preferencesByPath.keys {
             projectPreferencesStore.setAssignedSkill(skillName, assigned: false, for: projectPath)
@@ -4714,7 +4320,7 @@ final class AppViewModel: NSObject {
             return url.path == fileURL.path || url.path == deletedTargetPath
         }
         guard appSettingsController.removeExternalSkillPaths(pathsToRemove) else { return }
-        appSettings = appSettingsController.settings
+        settings.publish()
     }
 
     private func ensureLibraryAgent(for agent: AgentRecord) throws -> URL {
