@@ -139,6 +139,13 @@ struct MemoryScreen: View {
             .labelsHidden()
             .frame(width: 150)
             Toggle("History", isOn: $includeSuperseded).toggleStyle(.switch)
+            Button {
+                startDream()
+            } label: {
+                Label("Dream", systemImage: "moon.stars")
+            }
+            .appSecondaryButton()
+            .help("Analyze memory and propose mutations")
             Button("Clear") { searchText = ""; selectedKind = nil; selectedScope = nil; includeSuperseded = false; sort = .newest }
                 .appSecondaryButton()
         }
