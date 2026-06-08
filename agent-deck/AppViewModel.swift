@@ -4962,6 +4962,21 @@ final class AppViewModel: NSObject {
         agentMemoryStore.refresh()
     }
 
+    func proposeDreamMemory(memories: [AgentMemoryRecord], progress: @escaping @MainActor (String) -> Void) async throws -> PiMemoryDreamCycleResult {
+        guard let model = defaultPiAgentModel() ?? foundationAutomationModel ?? automationAvailableModels.first else {
+            throw PiMemoryDreamService.DreamError.noReviewer
+        }
+        let projectURL: URL
+        if let selectedProjectPath, !selectedProjectPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            projectURL = URL(fileURLWithPath: selectedProjectPath, isDirectory: true)
+        } else {
+            projectURL = FileManager.default.homeDirectoryForCurrentUser
+        }
+        let environment = EnvRuntimeEnvironment().environment(projectRoot: projectURL)
+        let reviewer = PiMemoryDreamLLMReviewer(model: model, projectURL: projectURL, environment: environment)
+        return try await PiMemoryDreamService(reviewer: reviewer).propose(memories: memories, progress: progress)
+    }
+
     func applyDreamMemoryProposals(_ proposals: [PiMemoryDreamProposal]) {
         do {
             try agentMemoryStore.applyDreamProposals(proposals)

@@ -1,139 +1,66 @@
-# Native Memory Management — Implementation Report
+# Native Memory Management Implementation
 
-Status: stabilization pass complete, committed on `side-agent/native-memory-impl`, **not yet marked ready for merge** pending reviewer/parent approval.
+Status: continuation complete on `side-agent/dream-parity`; ready for parent/reviewer inspection, not self-merged.
 
-Current stabilization commit: this commit (`Stabilize native memory tests`; see `git log --oneline -1` for the exact hash).
-Previous implementation commits:
+## Latest commit
 
-- `381d569 Implement native Pi memory management`
-- `698724e Update native memory implementation report`
+- `3bdbf63 Complete native dream parity`
 
-## Latest stabilization pass
+## Behavior implemented
 
-### AgentMemoryStoreTests hang isolation
-
-The hang was isolated to the app-host XCTest harness interacting with `AgentMemoryStore` initialization and async test execution:
-
-- Prior sample evidence `/tmp/agentdeck-hang-1.txt` showed the main thread inside:
-
-```text
-AgentMemoryStore.init -> refresh -> ensureSchema -> tableColumns -> runWithOutput -> waitUntilExit
-```
-
-- The previous bounded test attempt consistently passed five tests, then hung after starting `testRecallExcludesSupersededByDefault`.
-- Stabilization changes:
-  - Added `autoRefresh: Bool = true` to `AgentMemoryStore.init(...)` and made store tests construct stores with `autoRefresh: false`, creating a deterministic non-autoload seam for tests.
-  - Added synchronous `retrieveNow(...)`; `retrieve(...) async` now delegates to it. The recall test no longer uses XCTest's async test runner for a purely synchronous memory lookup.
-  - Removed the Dream service `await progress(...)` calls that produced `no async operations occur within await` warnings.
-  - Kept sqlite CLI containment: `.timeout 5000`, `PRAGMA busy_timeout=5000`, and a local 5s process watchdog loop.
-
-### Validation after isolation
-
-#### Build for testing
-
-Command:
-
-```sh
-xcodebuild -project agent-deck.xcodeproj -scheme agent-deck \
-  -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build-for-testing
-```
-
-Outcome: passed.
-
-Evidence log: `/tmp/native-memory-stabilize3-build-for-testing.log`
-
-```text
-** TEST BUILD SUCCEEDED **
-```
-
-Only non-actionable AppIntents metadata warnings were emitted.
-
-#### AgentMemoryStoreTests
-
-Command:
-
-```sh
-xcodebuild -project agent-deck.xcodeproj -scheme agent-deck \
-  -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO \
-  -parallel-testing-enabled NO \
-  -only-testing:agent-deckTests/AgentMemoryStoreTests \
-  test-without-building
-```
-
-Outcome: passed in the single bounded attempt after the isolation fix.
-
-Evidence log: `/tmp/native-memory-stabilize3-agent-memory-tests.log`
-
-```text
-Test Suite 'AgentMemoryStoreTests' passed
-Executed 10 tests, with 0 failures (0 unexpected) in 6.177 seconds
-```
-
-The app host still emits macOS `com.apple.linkd.autoShortcut` connection warnings before tests begin, but those no longer block this targeted suite.
-
-## Duplicate-tool launch smoke
-
-A live parent/native-subagent launch smoke with the external TS memory extension enabled was not run in this narrow pass. Reason: it requires app-host/Pi launch orchestration beyond the now-fixed store unit seam and risks reintroducing a long-running GUI/RPC validation path.
-
-Best static/source-level evidence gathered:
-
-- Native bridge tool names are canonical only:
-
-```text
-PiNativeSubagentBridgeExtensions.memoryToolNames = [
-  "store_memory", "recall_memories", "reinforce_memory", "update_memory", "delete_memory"
-]
-```
-
-- The generated native memory bridge registers those five names and no longer registers `agent_deck_memory_*` names.
-- Parent launch injects the Swift-owned memory extension when `agentMemoryEnabled` is true:
-
-```text
-PiAgentRunnerService -> memoryExtensionURL() -> extraArguments += ["--extension", memoryURL.path]
-```
-
-- Native subagent launch does the same when memory is enabled:
-
-```text
-PiSubagentRunService -> memoryExtensionURL -> toolArguments(includeMemoryTools: true) -> extraArguments += ["--extension", memoryURL.path]
-```
-
-Reviewer should still run one end-to-end duplicate-tool launch before final approval if feasible: enable Agent Deck memory and the external TS memory extension as a user extension, then verify the process does not fail on duplicate canonical tool registration and that `store_memory` routes to Swift.
-
-## Implemented behavior summary
-
-- Canonical SQLite memory DB at `~/.pi/agent/memories/memories.db` by default.
-- Default Memory Library scope: `general + current project`.
-- Canonical project id derivation from basename (`agent-deck`).
-- Canonical types: `fact`, `event`, `procedure`, `insight`.
-- Editable canonical fields: title, content, reasoning, type, scope/project, tags, weight, supersedes.
-- Canonical effective weight calculation and access reinforcement.
-- Canonical delete with supersession chain repair and throwing failure semantics.
-- Tri-state supersession updates and validation for self/missing/already-superseded/cycles.
-- Fresh DB FTS5 triggers for insert/update/delete synchronization.
-- Canonical model-facing bridge tools:
+- Canonical SQLite memory DB defaults to `~/.pi/agent/memories/memories.db`.
+- Memory Library loads `general + current project` for the table, with search/filter/sort and optional superseded history.
+- Manual memory create/edit/delete/reinforce use canonical fields and supersession behavior.
+- Canonical bridge tools route to Swift:
   - `store_memory`
   - `recall_memories`
   - `reinforce_memory`
   - `update_memory`
   - `delete_memory`
-- Native deterministic Dream v1 with propose/confirm/apply flow.
+- Native Swift Dream button now uses the full `/dream` phase/action pipeline shape without external TypeScript `/dream` delegation:
+  - loads non-superseded memories from the Swift store for analysis,
+  - clusters related memories for merge review,
+  - runs schema synthesis for related-but-distinct clusters,
+  - runs global weight rebalance,
+  - scans factual contradictions,
+  - discovers temporal event patterns,
+  - includes skip/no-op and report-only contradiction proposals,
+  - presents proposed action objects for user confirmation,
+  - applies exactly the selected approved proposal objects without rerunning analysis,
+  - persists an app-owned dream-cycle JSONL audit log and a canonical dream-cycle event memory when approved actions are applied.
 
-## Dream approximation boundary
+## Dream implementation notes
 
-The current Dream implementation is intentionally native and deterministic. It follows the `/dream` action model enough for safe review-gated application (`merge`, `reweight`, `discover-pattern`, plus no-op/skip handling in the model types), but it is not full embedding/LLM parity with the external Pi `/dream` command. It does not launch or delegate to external `/dream`; approved proposal objects are applied directly without rerunning analysis.
+- The Swift implementation has a `PiMemoryDreamReviewing` seam so tests can inject deterministic fake reviewer output while production uses `PiMemoryDreamLLMReviewer` through Agent Deck's model infrastructure.
+- Prompt builders and parsers mirror the canonical `/dream` phases and JSON shapes, including canonical contradiction (`factA`/`factB`) and temporal (`eventIds`) response forms while keeping compatibility with the WIP parser shape.
+- The clustering pass is native Swift and bounded; it uses tags/type/token similarity rather than copying Pi's embedding-cache internals. The full phase/action LLM pipeline and application semantics are present natively.
+- Approved application semantics match the canonical behavior where the Swift store supports it:
+  - merge creates a synthesized memory, supersedes the first source, and marks remaining sources superseded by the merged memory;
+  - synthesize creates a higher-level memory with `synthesizedFrom` and reduces source weights unless an explicit approved reweight for that source is present;
+  - reweight updates exact listed weights;
+  - discover-pattern creates an insight from event IDs;
+  - flag-contradiction is visible/report-only and does not mutate contradiction memories;
+  - skip/no-op proposals are visible but not applied as mutations.
+
+## Validation evidence
+
+Artifacts are under `.pi/agent-runs/native-memory-dream-parity/`.
+
+- `build-for-testing.log` / `build-for-testing.status`
+  - Command: `xcodebuild -project agent-deck.xcodeproj -scheme agent-deck -configuration Debug -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build-for-testing`
+  - Result: exit 0.
+- `AgentMemoryStoreTests-16-47-xcresult-summary.json` / `AgentMemoryStoreTests-16-47-xcresult-summary.status`
+  - Command: `xcodebuild -project agent-deck.xcodeproj -scheme agent-deck -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO -only-testing:agent-deckTests/AgentMemoryStoreTests test-without-building`
+  - Result: exit 0; Xcode xcresult summary reports 14 passed, 0 failed, 0 skipped. This includes Dream fake-reviewer phase coverage, approved subset application, canonical action application/audit log, cancel no-op, and existing store tests.
+
+Notes on bounded validation:
+- A first targeted `test` attempt without `CODE_SIGNING_ALLOWED=NO` failed due missing local Mac Development signing certificate.
+- A retry with `test` and signing disabled timed out in the build phase; because `build-for-testing` had already succeeded, `test-without-building` was used for targeted execution and passed at 16:47.
+- After final doc/test warning-cleanup edits, `build-for-testing` was rerun and passed. A final `test-without-building` rerun timed out at 180s before test execution started; per bounded-validation guidance, this was not chased further. No app source changed after the passing targeted test; the subsequent code edit was test-only `String(contentsOf:encoding:)` warning cleanup plus documentation.
 
 ## Remaining risks / reviewer focus
 
-- Do not merge until reviewer/parent approves.
-- Live duplicate-tool launch smoke is still outstanding.
-- SQLite work is bounded but still uses `/usr/bin/sqlite3`; a future hardening pass should move DB I/O to a non-MainActor actor/service or direct SQLite binding.
-- Review bridge routing behavior in a real parent Pi session and native subagent run.
-- Review Memory Library UI with an existing real `~/.pi/agent/memories/memories.db`.
-- Review deterministic Dream v1 scope against product expectations before final approval.
-
-## WIP checkpoint — full native Dream pipeline
-
-Parent/product rejected the deterministic Dream approximation. Current WIP replaces it with a fuller native Dream pipeline shape: phase/action models, reviewer seam, canonical prompt builders/parsers, LLM reviewer scaffold using Agent Deck model infrastructure, global/non-superseded memory analysis flow, grouped proposal metadata, apply semantics for merge/synthesis/reweight/pattern/report-only contradiction, and dream-cycle log/event persistence scaffolding.
-
-This is committed as WIP and is not ready for merge. Remaining work includes build fixes if any, UI grouping adjustments, Dream parity tests, bounded validation, and final report cleanup.
+- Production Dream depends on a configured Agent Deck/Pi model; tests use the fake reviewer seam and do not require network/model calls.
+- Native clustering intentionally does not copy Pi's embedding cache internals; reviewer should confirm this is acceptable under the clarified parity criterion now that the full native phase/action pipeline and LLM seams exist.
+- Live duplicate-tool launch smoke is still outstanding: enable Agent Deck memory and the external TS memory extension as a user extension, then verify duplicate canonical tool registration does not break launch and `store_memory` routes to Swift.
+- SQLite work remains `/usr/bin/sqlite3` based and MainActor-bound; a future hardening pass could move DB I/O to a dedicated actor or direct SQLite binding.

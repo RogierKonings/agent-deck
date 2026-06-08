@@ -51,4 +51,4 @@ At session start, Agent Deck appends memory guidance and recalls from `general +
 
 The Memory toolbar includes **Dream**. Dream analyzes current, non-superseded memories and proposes canonical mutations such as merge, synthesize, reweight, flag contradiction, discover pattern, or skip. Agent Deck presents proposals before applying them and never auto-applies Dream output.
 
-The current native implementation uses deterministic Swift clustering/reweighting heuristics as the safe local review seam; approved proposal objects are applied exactly once without rerunning analysis.
+The native implementation uses Swift clustering plus an injectable reviewer seam backed by Agent Deck's model infrastructure. It follows the canonical `/dream` phases (merge review, synthesis, weight rebalance, contradiction scan, temporal pattern discovery), displays report-only/no-op actions, and applies exactly the selected proposal objects without rerunning analysis.

@@ -25,7 +25,7 @@ struct PiMemoryDreamService {
         let current = memories.filter { $0.isInjectable }
         await MainActor.run { progress("Loading \(current.count) current memories…") }
 
-        let clusters = Self.semanticClusters(current)
+        let clusters = Self.semanticClusters(current, threshold: 0.55, maxClusters: 15, minClusterSize: 2)
         var proposals: [PiMemoryDreamProposal] = []
         var clustersReviewed = 0
 
@@ -73,26 +73,75 @@ struct PiMemoryDreamService {
             trigger: "manual",
             phase: "full",
             clustersReviewed: clustersReviewed,
-            memoriesMerged: proposals.filter { $0.action == .merge }.count,
+            memoriesMerged: proposals.filter { $0.action == .merge }.reduce(0) { $0 + $1.sourceMemoryIDs.count },
             schemasCreated: proposals.filter { $0.action == .synthesize }.count,
-            weightsAdjusted: proposals.reduce(0) { $0 + $1.weightChanges.count },
+            weightsAdjusted: proposals.reduce(0) { total, proposal in total + proposal.weightChanges.count + (proposal.action == .synthesize ? proposal.sourceMemoryIDs.count : 0) },
             contradictionsFound: proposals.filter { $0.action == .flagContradiction }.count,
             patternsDiscovered: proposals.filter { $0.action == .discoverPattern }.count,
             proposals: proposals
         )
     }
 
-    static func semanticClusters(_ memories: [AgentMemoryRecord]) -> [[AgentMemoryRecord]] {
-        let grouped = Dictionary(grouping: memories) { memory in
-            let tag = memory.tags.first?.lowercased()
-            return tag ?? normalizedTopic(memory.title)
+    static func semanticClusters(_ memories: [AgentMemoryRecord], threshold: Double = 0.55, maxClusters: Int = 15, minClusterSize: Int = 2) -> [[AgentMemoryRecord]] {
+        let ordered = memories.sorted {
+            if $0.effectiveWeight != $1.effectiveWeight { return $0.effectiveWeight > $1.effectiveWeight }
+            return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
         }
-        return grouped.values
+        var clusters: [[AgentMemoryRecord]] = []
+
+        for memory in ordered {
+            var bestIndex: Int?
+            var bestScore = 0.0
+            for index in clusters.indices {
+                let similarities = clusters[index].map { semanticSimilarity(memory, $0) }
+                let average = similarities.reduce(0, +) / Double(max(1, similarities.count))
+                if average > bestScore {
+                    bestScore = average
+                    bestIndex = index
+                }
+            }
+            if let bestIndex, bestScore >= threshold {
+                clusters[bestIndex].append(memory)
+            } else {
+                clusters.append([memory])
+            }
+        }
+
+        return clusters
             .map { $0.sorted { $0.effectiveWeight > $1.effectiveWeight } }
-            .filter { $0.count >= 2 }
-            .sorted { $0.count == $1.count ? ($0.first?.title ?? "") < ($1.first?.title ?? "") : $0.count > $1.count }
-            .prefix(12)
+            .filter { $0.count >= minClusterSize }
+            .sorted { lhs, rhs in
+                if lhs.count != rhs.count { return lhs.count > rhs.count }
+                let lhsWeight = lhs.reduce(0) { $0 + $1.effectiveWeight }
+                let rhsWeight = rhs.reduce(0) { $0 + $1.effectiveWeight }
+                if lhsWeight != rhsWeight { return lhsWeight > rhsWeight }
+                return (lhs.first?.title ?? "") < (rhs.first?.title ?? "")
+            }
+            .prefix(maxClusters)
             .map(Array.init)
+    }
+
+    private static func semanticSimilarity(_ lhs: AgentMemoryRecord, _ rhs: AgentMemoryRecord) -> Double {
+        let lhsTags = Set(lhs.tags.map { $0.lowercased() })
+        let rhsTags = Set(rhs.tags.map { $0.lowercased() })
+        let tagUnion = lhsTags.union(rhsTags)
+        let tagScore = tagUnion.isEmpty ? 0 : Double(lhsTags.intersection(rhsTags).count) / Double(tagUnion.count)
+
+        let lhsTokens = tokenSet(lhs)
+        let rhsTokens = tokenSet(rhs)
+        let tokenUnion = lhsTokens.union(rhsTokens)
+        let tokenScore = tokenUnion.isEmpty ? 0 : Double(lhsTokens.intersection(rhsTokens).count) / Double(tokenUnion.count)
+
+        let typeScore = lhs.kind == rhs.kind ? 0.1 : 0
+        return min(1.0, (tagScore * 0.45) + (tokenScore * 0.45) + typeScore)
+    }
+
+    private static func tokenSet(_ memory: AgentMemoryRecord) -> Set<String> {
+        let stopwords: Set<String> = ["the", "and", "for", "with", "that", "this", "from", "into", "when", "then", "than", "have", "must", "should", "memory"]
+        return Set((memory.title + " " + memory.summary)
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { $0.count > 2 && !stopwords.contains($0) })
     }
 
     static func weightCandidates(_ memories: [AgentMemoryRecord]) -> [AgentMemoryRecord] {
@@ -129,7 +178,8 @@ struct PiMemoryDreamPromptBuilder {
     }
 
     static let mergeSystem = """
-    You are a memory consolidation agent. Decide whether related memories should be merged into one canonical memory or kept separate. Merge only near-duplicates, evolving facts/procedures, or repeated lessons. Return valid JSON only.
+    You are a memory consolidation agent reviewing clusters of related memories.
+    Merge only when memories overlap substantially in content, topic, and intent: near-duplicate wording, the same fact/procedure updated over time, the same lesson restated with minor variations, or multiple memories that clearly want to become one canonical memory. Keep sibling checklist items, distinct examples, separate milestones, and related-but-different lessons separate so schema synthesis can handle them. Return valid JSON only.
     """
 
     static func mergeUser(cluster: [AgentMemoryRecord]) -> String {
@@ -144,7 +194,7 @@ struct PiMemoryDreamPromptBuilder {
     }
 
     static let synthesisSystem = """
-    You are a knowledge synthesis agent. Extract higher-level principles, checklists, or patterns from related-but-distinct memories. Return valid JSON only.
+    You are a knowledge synthesis agent. Synthesize when related-but-distinct memories imply a higher-level principle, operational checklist, decision rubric, troubleshooting flow, anti-pattern, or reusable pattern that is more useful than the individual examples. Do not synthesize near-duplicates, heterogeneous clusters, or superficial tag matches. Return valid JSON only.
     """
 
     static func synthesisUser(cluster: [AgentMemoryRecord]) -> String {
@@ -174,14 +224,14 @@ struct PiMemoryDreamPromptBuilder {
     }
 
     static let contradictionSystem = """
-    You are a contradiction detector for factual memories. Find same-topic facts that cannot both be true. Return JSON only.
+    You are a consistency auditor for a personal knowledge base. Identify logical contradictions, direct conflicts, or mutually exclusive claims between factual memories. Return JSON only.
     """
 
     static func contradictionUser(facts: [AgentMemoryRecord]) -> String {
         """
-        Response JSON array schema:
-        [{"ids":["id1","id2"],"reasoning":"why these facts contradict","title":"short label"}]
-        Return [] when there are no likely contradictions.
+        Response format — return ONLY a valid JSON array:
+        [{"factA":"id1","factB":"id2","description":"why these facts contradict","suggestedResolution":"how to resolve or reconcile them"}]
+        factA and factB must be IDs from the facts below. Return [] when there are no likely contradictions.
 
         Facts:
         \(memoryBlock(facts))
@@ -189,17 +239,18 @@ struct PiMemoryDreamPromptBuilder {
     }
 
     static let temporalSystem = """
-    You discover temporal patterns in event memories. Find recurring sequences, incidents, or milestones that imply a reusable insight. Return JSON only.
+    You are a pattern analyst for a personal event log. Identify recurring themes, trends, or significant chronological patterns across event memories. Return JSON only.
     """
 
     static func temporalUser(events: [AgentMemoryRecord]) -> String {
-        """
-        Response JSON schema:
-        {"patterns":[{"sourceIds":["..."],"title":"...","content":"...","tags":["..."],"weight":0.3,"reasoning":"..."}]}
-        Return {"patterns":[]} if there is no useful temporal pattern.
+        let chronological = events.sorted { $0.createdAt < $1.createdAt }
+        return """
+        Response format — return ONLY a valid JSON array:
+        [{"eventIds":["id1","id2"],"pattern":"concise description of the pattern or trend","suggestedInsight":"actionable or memorable insight derived from this pattern"}]
+        eventIds must come from the events below. Return [] when there is no useful temporal pattern.
 
-        Events:
-        \(memoryBlock(events))
+        Events in chronological order:
+        \(memoryBlock(chronological))
         """
     }
 }
@@ -259,7 +310,7 @@ struct PiMemoryDreamJSONParser {
                 content: merge["content"] as? String ?? "",
                 reasoning: obj["reasoning"] as? String ?? "Reviewer recommended merge.",
                 tags: merge["tags"] as? [String] ?? [],
-                weight: merge["weight"] as? Double ?? 0.7,
+                weight: number(merge["weight"]) ?? 0.7,
                 type: AgentMemoryKind(rawValue: merge["type"] as? String ?? "insight") ?? .insight,
                 weightChanges: [:],
                 reviewerRawResponse: raw
@@ -281,7 +332,7 @@ struct PiMemoryDreamJSONParser {
             content: synthesis["content"] as? String ?? "",
             reasoning: synthesis["reasoning"] as? String ?? obj["reasoning"] as? String ?? "Reviewer recommended synthesis.",
             tags: synthesis["tags"] as? [String] ?? [],
-            weight: synthesis["weight"] as? Double ?? 0.8,
+            weight: number(synthesis["weight"]) ?? 0.8,
             type: AgentMemoryKind(rawValue: synthesis["type"] as? String ?? "insight") ?? .insight,
             weightChanges: [:],
             reviewerRawResponse: raw
@@ -292,7 +343,7 @@ struct PiMemoryDreamJSONParser {
         let byID = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, $0) })
         let changes = Dictionary(uniqueKeysWithValues: extractArray(raw).compactMap { item -> (String, Double)? in
             guard let id = item["id"] as? String, let record = byID[id] else { return nil }
-            let suggested = (item["suggestedWeight"] as? Double) ?? (item["suggestedWeight"] as? NSNumber)?.doubleValue ?? record.weight
+            let suggested = number(item["suggestedWeight"]) ?? record.weight
             guard abs(suggested - record.weight) >= 0.1 else { return nil }
             return (id, max(0.3, min(1.0, suggested)))
         })
@@ -303,20 +354,73 @@ struct PiMemoryDreamJSONParser {
     static func parseContradictions(raw: String, facts: [AgentMemoryRecord]) -> [PiMemoryDreamProposal] {
         let valid = Set(facts.map(\.id))
         return extractArray(raw).compactMap { item in
-            let ids = (item["ids"] as? [String] ?? []).filter { valid.contains($0) }
+            let canonicalIDs = [item["factA"] as? String, item["factB"] as? String].compactMap { $0 }.filter { valid.contains($0) }
+            let compatibilityIDs = (item["ids"] as? [String] ?? []).filter { valid.contains($0) }
+            let ids = canonicalIDs.count >= 2 ? canonicalIDs : compatibilityIDs
             guard ids.count >= 2 else { return nil }
-            return PiMemoryDreamProposal(id: UUID().uuidString, phase: .contradictionScan, action: .flagContradiction, sourceMemoryIDs: ids, title: item["title"] as? String ?? "Potential memory contradiction", content: item["reasoning"] as? String ?? "Potential contradiction flagged by reviewer.", reasoning: item["reasoning"] as? String ?? "Potential contradiction flagged by reviewer.", tags: ["dream-cycle", "contradiction"], weight: nil, type: nil, weightChanges: [:], contradictionPairs: [ids], reviewerRawResponse: raw)
+            let description = item["description"] as? String ?? item["reasoning"] as? String ?? "Potential contradiction flagged by reviewer."
+            let resolution = item["suggestedResolution"] as? String
+            let content = [description, resolution].compactMap(nonEmpty).joined(separator: "\nResolution: ")
+            return PiMemoryDreamProposal(
+                id: UUID().uuidString,
+                phase: .contradictionScan,
+                action: .flagContradiction,
+                sourceMemoryIDs: ids,
+                title: item["title"] as? String ?? "Potential memory contradiction",
+                content: content.isEmpty ? description : content,
+                reasoning: description,
+                tags: ["dream-cycle", "contradiction"],
+                weight: nil,
+                type: nil,
+                weightChanges: [:],
+                contradictionPairs: [ids],
+                reviewerRawResponse: raw
+            )
         }
     }
 
     static func parseTemporal(raw: String, events: [AgentMemoryRecord]) -> [PiMemoryDreamProposal] {
-        guard let obj = extractObject(raw), let patterns = obj["patterns"] as? [[String: Any]] else { return [] }
+        let patterns: [[String: Any]]
+        if let obj = extractObject(raw), let objectPatterns = obj["patterns"] as? [[String: Any]] {
+            patterns = objectPatterns
+        } else {
+            patterns = extractArray(raw)
+        }
         let valid = Set(events.map(\.id))
         return patterns.compactMap { pattern in
-            let ids = (pattern["sourceIds"] as? [String] ?? []).filter { valid.contains($0) }
-            guard ids.count >= 2 else { return nil }
-            return PiMemoryDreamProposal(id: UUID().uuidString, phase: .temporalPatterns, action: .discoverPattern, sourceMemoryIDs: ids, title: pattern["title"] as? String ?? "Temporal memory pattern", content: pattern["content"] as? String ?? "", reasoning: pattern["reasoning"] as? String ?? "Reviewer found a temporal pattern.", tags: pattern["tags"] as? [String] ?? ["dream-pattern"], weight: pattern["weight"] as? Double ?? 0.7, type: .insight, weightChanges: [:], reviewerRawResponse: raw)
+            let canonicalIDs = (pattern["eventIds"] as? [String] ?? []).filter { valid.contains($0) }
+            let compatibilityIDs = (pattern["sourceIds"] as? [String] ?? []).filter { valid.contains($0) }
+            let ids = canonicalIDs.isEmpty ? compatibilityIDs : canonicalIDs
+            guard !ids.isEmpty else { return nil }
+            let patternText = pattern["pattern"] as? String ?? pattern["title"] as? String ?? "Temporal memory pattern"
+            let insight = pattern["suggestedInsight"] as? String ?? pattern["content"] as? String ?? patternText
+            return PiMemoryDreamProposal(
+                id: UUID().uuidString,
+                phase: .temporalPatterns,
+                action: .discoverPattern,
+                sourceMemoryIDs: ids,
+                title: patternText,
+                content: insight,
+                reasoning: pattern["reasoning"] as? String ?? patternText,
+                tags: pattern["tags"] as? [String] ?? ["dream-pattern"],
+                weight: number(pattern["weight"]) ?? 0.7,
+                type: .insight,
+                weightChanges: [:],
+                reviewerRawResponse: raw
+            )
         }
+    }
+
+    private static func number(_ value: Any?) -> Double? {
+        if let double = value as? Double { return double }
+        if let number = value as? NSNumber { return number.doubleValue }
+        if let string = value as? String { return Double(string) }
+        return nil
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     static func skip(_ phase: PiMemoryDreamPhase, _ memories: [AgentMemoryRecord], _ reasoning: String, _ raw: String? = nil) -> PiMemoryDreamProposal {
@@ -371,19 +475,18 @@ final class PiMemoryDreamLLMReviewer: PiMemoryDreamReviewing {
 
     private func complete(system: String, user: String) async throws -> String {
         if FoundationModelAutomationService.isFoundationModel(model) {
-            return try FoundationModelAutomationService.generateOneShot(prompt: user, systemPrompt: system, temperature: 0.2, maxTokens: 2_000)
+            return try await FoundationModelAutomationService.generateOneShot(prompt: user, systemPrompt: system, temperature: 0.2, maxTokens: 2_000)
         }
         return try await withCheckedThrowingContinuation { continuation in
             startPiHelper(system: system, user: user) { result in continuation.resume(with: result) }
         }
     }
 
-    private func startPiHelper(system: String, user: String, completion: @escaping (Result<String, Error>) -> Void) {
+    private func startPiHelper(system: String, user: String, completion: @escaping @Sendable (Result<String, Error>) -> Void) {
         do {
-            var assistantText = ""
-            var didFinish = false
-            var client: PiRPCClient?
-            let runID = UUID()
+            nonisolated(unsafe) var assistantText = ""
+            nonisolated(unsafe) var didFinish = false
+            nonisolated(unsafe) var client: PiRPCClient?
             client = try PiRPCClient(
                 cwd: projectURL,
                 provider: model.provider,

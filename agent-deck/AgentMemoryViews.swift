@@ -186,14 +186,19 @@ struct MemoryScreen: View {
         dreamError = nil
         dreamProgress = "Starting dream cycle…"
         approvedDreamIDs = []
-        let memories = scopedRecords
+        let memories = memoryStore.activeRecords
         Task {
-            let result = await PiMemoryDreamService().propose(memories: memories) { message in
-                dreamProgress = message
+            do {
+                let result = try await viewModel.proposeDreamMemory(memories: memories) { message in
+                    dreamProgress = message
+                }
+                dreamResult = result
+                approvedDreamIDs = Set(result.proposals.filter { $0.action != .skip }.map(\.id))
+                dreamProgress = result.proposals.filter { $0.action != .skip }.isEmpty ? "No mutations proposed." : "Review proposed mutations before applying."
+            } catch {
+                dreamError = error.localizedDescription
+                dreamProgress = nil
             }
-            dreamResult = result
-            approvedDreamIDs = Set(result.proposals.map(\.id))
-            dreamProgress = result.proposals.isEmpty ? "No mutations proposed." : "Review proposed mutations before applying."
         }
     }
 }
@@ -356,11 +361,86 @@ private struct DreamProposalSheet: View {
             if let error { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red) }
             if let progress { Text(progress).foregroundStyle(AppTheme.mutedText) }
             if let result {
-                if result.proposals.isEmpty { ContentUnavailableView("No Proposals", systemImage: "moon", description: Text("Dream analyzed current memories and found no safe mutations to propose.")) }
-                else { List(result.proposals) { proposal in Toggle(isOn: Binding(get: { approvedIDs.contains(proposal.id) }, set: { isOn in if isOn { approvedIDs.insert(proposal.id) } else { approvedIDs.remove(proposal.id) } })) { VStack(alignment: .leading, spacing: 4) { Text("\(proposal.action.displayName): \(proposal.title)").font(.headline); Text(proposal.reasoning).foregroundStyle(AppTheme.mutedText); Text(proposal.sourceMemoryIDs.joined(separator: ", ")).font(.caption).foregroundStyle(AppTheme.mutedText) } } }.frame(minHeight: 340) }
+                if result.proposals.isEmpty {
+                    ContentUnavailableView("No Proposals", systemImage: "moon", description: Text("Dream analyzed current memories and found no safe mutations to propose."))
+                } else {
+                    List {
+                        ForEach(PiMemoryDreamPhase.allCases) { phase in
+                            let phaseProposals = result.proposals.filter { $0.phase == phase }
+                            if !phaseProposals.isEmpty {
+                                Section(phase.displayName) {
+                                    ForEach(phaseProposals) { proposal in
+                                        DreamProposalToggle(proposal: proposal, isSelected: Binding(get: { approvedIDs.contains(proposal.id) }, set: { isOn in if isOn { approvedIDs.insert(proposal.id) } else { approvedIDs.remove(proposal.id) } }))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .frame(minHeight: 340)
+                }
             }
             HStack { Spacer(); Button("Cancel") { dismiss() }.appSecondaryButton(); Button("Apply Selected") { onApply(approvedIDs) }.buttonStyle(AppPrimaryButtonStyle()).disabled(result == nil || approvedIDs.isEmpty) }
-        }.padding(22).frame(width: 760, height: 560)
+        }.padding(22).frame(width: 820, height: 600)
+    }
+}
+
+private struct DreamProposalToggle: View {
+    let proposal: PiMemoryDreamProposal
+    @Binding var isSelected: Bool
+
+    var body: some View {
+        Toggle(isOn: $isSelected) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: proposal.action.systemImage)
+                    .foregroundStyle(proposal.action.tint)
+                    .frame(width: 22)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text("\(proposal.action.displayName): \(proposal.title)").font(.headline)
+                        if proposal.action == .flagContradiction || proposal.action == .skip {
+                            Text(proposal.action == .flagContradiction ? "Report-only" : "No-op")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(AppTheme.mutedText)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(AppTheme.panelFill, in: Capsule())
+                        }
+                    }
+                    Text(proposal.reasoning).foregroundStyle(AppTheme.mutedText)
+                    if !proposal.content.isEmpty && proposal.content != proposal.reasoning {
+                        Text(proposal.content).font(.caption).foregroundStyle(AppTheme.mutedText).lineLimit(3)
+                    }
+                    if !proposal.sourceMemoryIDs.isEmpty {
+                        Text("Sources: \(proposal.sourceMemoryIDs.joined(separator: ", "))").font(.caption).foregroundStyle(AppTheme.mutedText)
+                    }
+                    if !proposal.weightChanges.isEmpty {
+                        Text("Weights: " + proposal.weightChanges.sorted(by: { $0.key < $1.key }).map { "\($0.key) → \(String(format: "%.2f", $0.value))" }.joined(separator: ", ")).font(.caption).foregroundStyle(AppTheme.mutedText)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private extension PiMemoryDreamActionKind {
+    var systemImage: String {
+        switch self {
+        case .merge: return "arrow.triangle.merge"
+        case .synthesize: return "sparkles"
+        case .reweight: return "slider.horizontal.3"
+        case .flagContradiction: return "exclamationmark.triangle"
+        case .discoverPattern: return "point.3.connected.trianglepath.dotted"
+        case .skip: return "moon"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .merge, .synthesize, .discoverPattern: return AppTheme.brandAccent
+        case .reweight: return .blue
+        case .flagContradiction: return .orange
+        case .skip: return AppTheme.mutedText
+        }
     }
 }
 

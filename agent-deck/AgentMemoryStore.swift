@@ -45,11 +45,13 @@ final class AgentMemoryStore: ObservableObject {
 
     private let fileManager: FileManager
     private let databaseURL: URL
+    private let dreamLogOverrideURL: URL?
     private let scanner = AgentMemorySecretScanner()
     private let sqlitePath = "/usr/bin/sqlite3"
 
-    init(rootURL: URL? = nil, databaseURL: URL? = nil, fileManager: FileManager = .default, autoRefresh: Bool = true) {
+    init(rootURL: URL? = nil, databaseURL: URL? = nil, dreamLogURL: URL? = nil, fileManager: FileManager = .default, autoRefresh: Bool = true) {
         self.fileManager = fileManager
+        self.dreamLogOverrideURL = dreamLogURL
         if let databaseURL {
             self.databaseURL = databaseURL
         } else if let rootURL {
@@ -351,6 +353,9 @@ final class AgentMemoryStore: ObservableObject {
     func applyDreamProposals(_ proposals: [PiMemoryDreamProposal]) throws {
         let approved = proposals.filter { $0.action != .skip }
         let byID = Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
+        let explicitlyReweightedIDs = Set(approved.flatMap { proposal in
+            proposal.action == .reweight ? Array(proposal.weightChanges.keys) : []
+        })
         for proposal in approved {
             switch proposal.action {
             case .merge:
@@ -395,7 +400,7 @@ final class AgentMemoryStore: ObservableObject {
                     synthesizedFrom: proposal.sourceMemoryIDs
                 )
                 if proposal.action == .synthesize {
-                    for sourceID in proposal.sourceMemoryIDs {
+                    for sourceID in proposal.sourceMemoryIDs where !explicitlyReweightedIDs.contains(sourceID) {
                         guard let source = byID[sourceID] else { continue }
                         try updateMemory(id: sourceID, weight: max(0.3, source.weight * 0.85), supersession: .noChange)
                     }
@@ -457,7 +462,8 @@ final class AgentMemoryStore: ObservableObject {
     }
 
     private func dreamLogURL() -> URL {
-        URL.applicationSupportDirectory
+        if let dreamLogOverrideURL { return dreamLogOverrideURL }
+        return URL.applicationSupportDirectory
             .appendingPathComponent(AppBrand.displayName, isDirectory: true)
             .appendingPathComponent("Memory", isDirectory: true)
             .appendingPathComponent("dream-cycles.jsonl")
