@@ -657,54 +657,6 @@ final class AppViewModel: NSObject {
         addProject(url, selectingAfterAdd: true)
     }
 
-    func refreshEverything() {
-        guard !github.githubIsRefreshingEverything else { return }
-
-        github.githubIsRefreshingEverything = true
-        github.githubLastError = nil
-
-        // The outer @MainActor class implicitly bounds this Task to the main
-        // actor, so the inner `await MainActor.run` blocks the previous
-        // implementation used were no-ops. Sync work runs inline; only the
-        // genuinely-async GitHub calls suspend.
-        Task { [weak self] in
-            guard let self else { return }
-            defer {
-                self.github.githubIsRefreshingEverything = false
-            }
-            self.refresh(includeModels: true)
-            await self.github.refreshGitHubStatus()
-            if case .available = self.github.githubConnectionState {
-                await self.github.connectGitHubUsingCLIIfNeeded()
-            }
-            if self.github.authenticatedSession != nil, self.github.githubConnectionState.isConnected {
-                self.github.refreshProjectBoard(force: true)
-            }
-            if self.selectedDiscoveredProject?.isGitRepository == true {
-                self.github.refreshRepositoryChanges(preservingDiffSelection: true)
-            }
-            if let selectedItem = self.github.githubSelectedWorkItem, self.github.authenticatedSession != nil {
-                self.github.loadIssueDetail(for: selectedItem)
-            }
-        }
-    }
-
-
-
-    func ensureComposerIssuesLoaded() {
-        Task { [weak self] in
-            guard let self else { return }
-            await github.prepareGitHubScreen()
-            await MainActor.run {
-                if selectedGitHubProject?.gitHubRemote != nil {
-                    github.refreshProjectBoard(force: false)
-                } else if github.githubAggregateBoard == nil, !gitHubProjects.isEmpty {
-                    github.refreshAggregateBoard()
-                }
-            }
-        }
-    }
-
     func isProviderEnabled(_ provider: String) -> Bool {
         !appSettings.disabledProviders.contains(provider)
     }
@@ -741,14 +693,6 @@ final class AppViewModel: NSObject {
                 .appendingPathComponent(".pi/settings.json").path
             return snapshot.settings.first(where: { $0.path == path })
         }
-    }
-
-    var currentGitHubAccount: GitHubHostAccount? {
-        github.githubConnectionState.account ?? github.authenticatedSession?.account
-    }
-
-    var shouldShowGitHubConnectionCard: Bool {
-        currentGitHubAccount != nil || github.githubLastStatusCheckAt != nil || github.githubIsRefreshingEverything
     }
 
     /// Cached — see `cachedAllDisplayAgents`. Rebuilt by `rebuildWarningCaches()`.
@@ -819,10 +763,6 @@ final class AppViewModel: NSObject {
         return snapshot.libraryAgents
             .filter { !effectiveNames.contains($0.name) }
             .map { agentUniverse.libraryDisplayAgent(from: $0, projectRoot: snapshot.projectRoot) }
-    }
-
-    func piAgentRunnerSurfaceError(message: String) {
-        github.githubLastError = message
     }
 
     private var projectAssignedLibraryAgentsForAggregateView: [EffectiveAgentRecord] {

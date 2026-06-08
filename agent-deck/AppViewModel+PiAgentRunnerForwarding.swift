@@ -101,7 +101,7 @@ extension AppViewModel: PiAgentRunnerHost {
     }
 
     func reportSurfaceError(_ message: String) {
-        piAgentRunnerSurfaceError(message: message)
+        github.reportSurfaceError(message)
     }
 
     func acknowledgeSession(_ id: UUID) {

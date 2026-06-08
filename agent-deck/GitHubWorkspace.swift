@@ -151,6 +151,64 @@ final class GitHubWorkspace {
             await connectGitHubUsingCLIIfNeeded()
         }
     }
+
+    var currentAccount: GitHubHostAccount? {
+        githubConnectionState.account ?? authenticatedSession?.account
+    }
+
+    var shouldShowConnectionCard: Bool {
+        currentAccount != nil || githubLastStatusCheckAt != nil || githubIsRefreshingEverything
+    }
+
+    func reportSurfaceError(_ message: String) {
+        githubLastError = message
+    }
+
+    func refreshEverything() {
+        guard !githubIsRefreshingEverything else { return }
+
+        githubIsRefreshingEverything = true
+        githubLastError = nil
+
+        Task { [weak self] in
+            guard let self else { return }
+            defer {
+                self.githubIsRefreshingEverything = false
+            }
+            self.host?.refreshCatalog(
+                includeModels: true,
+                scanAllProjects: false,
+                extraProjectPathsToScan: [],
+                silentlyReconcile: false
+            )
+            await self.refreshGitHubStatus()
+            if case .available = self.githubConnectionState {
+                await self.connectGitHubUsingCLIIfNeeded()
+            }
+            if self.authenticatedSession != nil, self.githubConnectionState.isConnected {
+                self.refreshProjectBoard(force: true)
+            }
+            if self.selectedDiscoveredProject?.isGitRepository == true {
+                self.refreshRepositoryChanges(preservingDiffSelection: true)
+            }
+            if let selectedItem = self.githubSelectedWorkItem, self.authenticatedSession != nil {
+                self.loadIssueDetail(for: selectedItem)
+            }
+        }
+    }
+
+    func ensureComposerIssuesLoaded() {
+        Task { [weak self] in
+            guard let self else { return }
+            await self.prepareGitHubScreen()
+            if self.selectedGitHubProject?.gitHubRemote != nil {
+                self.refreshProjectBoard(force: false)
+            } else if self.githubAggregateBoard == nil, !self.gitHubProjects.isEmpty {
+                self.refreshAggregateBoard()
+            }
+        }
+    }
+
     func disconnectGitHub() {
         let availableAccount = githubConnectionState.account ?? session?.account
 

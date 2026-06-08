@@ -148,4 +148,20 @@ extension AppViewModel {
     func fetchPiAgentIssueAttachment(for item: GitHubWorkItem, completion: @escaping (Result<PiAgentIssueAttachment, Error>) -> Void) {
         github.fetchPiAgentIssueAttachment(for: item, completion: completion)
     }
+
+    func refreshEverything() {
+        github.refreshEverything()
+    }
+
+    func ensureComposerIssuesLoaded() {
+        github.ensureComposerIssuesLoaded()
+    }
+
+    var currentGitHubAccount: GitHubHostAccount? { github.currentAccount }
+
+    var shouldShowGitHubConnectionCard: Bool { github.shouldShowConnectionCard }
+
+    func piAgentRunnerSurfaceError(message: String) {
+        github.reportSurfaceError(message)
+    }
 }
