@@ -150,6 +150,7 @@ final class AppViewModel: NSObject {
     let piAgentSessionStore: PiAgentSessionStore
     let piWorkspace: PiAgentWorkspaceState
     let piGitShip: PiAgentGitShipCoordinator
+    let piSessions: PiAgentSessionLifecycleCoordinator
     let agentMemoryStore = AgentMemoryStore()
     let agentImageStore = AgentImageStore()
     let skillRepositorySyncService: SkillRepositorySyncService
@@ -173,7 +174,7 @@ final class AppViewModel: NSObject {
     private var releaseNotesGenerator: ReleaseNotesGenerationService { environment.releaseNotesGenerator }
     private var subagentWorktreeService: PiSubagentWorktreeService { environment.subagentWorktreeService }
     private var sessionWorktreeService: PiAgentSessionWorktreeService { environment.sessionWorktreeService }
-    @ObservationIgnored private lazy var piAgentRunner = PiAgentRunnerService(store: piAgentSessionStore)
+    @ObservationIgnored lazy var piAgentRunner = PiAgentRunnerService(store: piAgentSessionStore)
     @ObservationIgnored private lazy var nativeSubagentRunner = PiSubagentRunService(store: piAgentSessionStore)
     /// Memoizes `selectableAgentUniverse(forProjectPath:)` so the subagent
     /// picker (and `catalogAgents(for:)` / `sessionHasSelectableAgents`) read
@@ -196,18 +197,8 @@ final class AppViewModel: NSObject {
     private let watchEventDebounceNanoseconds: UInt64 = 1_000_000_000
     private let fallbackAutoRefreshInterval: TimeInterval = 300
     private var nativeParallelSchedulersByID: [UUID: NativeParallelGraphScheduler] = [:]
-    private var pendingPiAgentNotificationTasks: [UUID: Task<Void, Never>] = [:]
     private var artifactCleanupTask: Task<Void, Never>?
     private var didShutdown = false
-
-    private var piAgentNotificationDelay: TimeInterval {
-        TimeInterval(piAgentNotificationDelayMinutes * 60)
-    }
-
-    private var piAgentIdleParkingTimeout: TimeInterval? {
-        guard isPiAgentIdleParkingEnabled else { return nil }
-        return TimeInterval(piAgentIdleParkingTimeoutMinutes * 60)
-    }
 
     convenience override init() {
         self.init(environment: .live)
@@ -227,10 +218,15 @@ final class AppViewModel: NSObject {
             shipService: environment.shipService,
             sessionWorktreeService: environment.sessionWorktreeService
         )
+        piSessions = PiAgentSessionLifecycleCoordinator(
+            sessionStore: sessionStore,
+            sessionWorktreeService: environment.sessionWorktreeService
+        )
         super.init()
         projects.host = self
         githubWorkspace.host = self
         piGitShip.host = self
+        piSessions.host = self
 
         appSettings = appSettingsController.settings
         ThemeManager.shared.apply(appSettingsController.resolvedActiveTheme)
@@ -244,7 +240,7 @@ final class AppViewModel: NSObject {
         projects.loadPersistedSelection()
         piAgentSessionStore.newSessionSubagentsEnabled = appSettings.nativeSubagentsEnabledForNewSessions
         writeOpenAIFastModeConfig()
-        configurePiAgentIdleParking()
+        piSessions.configureIdleParking()
         refreshAvailableModels()
         // First-frame refresh: only scan global + the last-selected project
         // (cheap). The full-project scan is deferred to after first paint so a
@@ -259,7 +255,7 @@ final class AppViewModel: NSObject {
             self.refresh(includeModels: false, scanAllProjects: true, silentlyReconcile: true)
         }
         piAgentRunner.onTurnFinished = { [weak self] sessionID in
-            Task { @MainActor in self?.handlePiAgentTurnFinished(sessionID) }
+            Task { @MainActor in self?.piSessions.handleTurnFinished(sessionID) }
         }
         piAgentRunner.onManagedSubagentRequest = { [weak self] sessionID, request, completion in
             Task { @MainActor in
@@ -370,10 +366,7 @@ final class AppViewModel: NSObject {
         refreshCoordinator.cancelPendingRefresh()
         artifactCleanupTask?.cancel()
         artifactCleanupTask = nil
-        for task in pendingPiAgentNotificationTasks.values {
-            task.cancel()
-        }
-        pendingPiAgentNotificationTasks.removeAll()
+        piSessions.cancelAllPendingNotifications()
         piSessionTitleGenerator.cancelAll()
         piAgentRunner.stopAll(recordTranscript: recordTranscript)
         nativeSubagentRunner.stopAll(recordTranscript: recordTranscript)
@@ -1197,182 +1190,6 @@ final class AppViewModel: NSObject {
         }
     }
 
-    func openPiAgentForSelectedProject() {
-        selectedSidebarItem = .agent
-        let project = piAgentSessionProjectContext()
-        if piAgentSessionStore.selectedSession?.projectPath != project.path {
-            let existing = piAgentSessionStore.sessions.first { $0.projectPath == project.path && $0.kind == .project }
-            if let existing {
-                selectPiAgentSession(existing.id)
-                ensurePiAgentModelCatalogLoaded()
-            } else {
-                let created = piAgentSessionStore.createSession(
-                    kind: .project,
-                    title: "Project agent · \(project.name)",
-                    project: project,
-                    repository: project.gitHubRemote?.nameWithOwner
-                )
-                provisionWorktreeIfEnabledFireAndForget(for: created.id, project: project)
-                ensurePiAgentModelCatalogLoaded()
-            }
-        } else {
-            acknowledgeVisibleSelectedPiAgentSession()
-        }
-    }
-
-    func createPiAgentDraftForSelectedProject() {
-        createPiAgentDraft(for: piAgentSessionProjectContext())
-    }
-
-    func createPiAgentDraft(for project: DiscoveredProject) {
-        selectedSidebarItem = .agent
-        let created = piAgentSessionStore.createSession(
-            kind: .project,
-            title: "Draft · \(project.name)",
-            project: project,
-            repository: project.gitHubRemote?.nameWithOwner
-        )
-        provisionWorktreeIfEnabledFireAndForget(for: created.id, project: project)
-        ensurePiAgentModelCatalogLoaded()
-    }
-
-    func startPiAgentForSelectedProject(initialInstruction: String) {
-        guard let project = selectedDiscoveredProject else {
-            github.githubLastError = "Select a project before starting Pi Agent."
-            selectedSidebarItem = .agent
-            return
-        }
-        selectedSidebarItem = .agent
-
-        // If worktree isolation is enabled, create the session and provision the
-        // worktree before the runner spawns Pi — otherwise Pi launches in the
-        // project root and won't pick up the worktree path on the first turn.
-        if appSettings.piAgentSessionsUseWorktree, project.isGitRepository {
-            let title = initialInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
-                .split(separator: "\n").first.map(String.init) ?? "Project agent · \(project.name)"
-            let session = piAgentSessionStore.createSession(
-                kind: .project,
-                title: title.isEmpty ? "New Agent Session" : String(title.prefix(80)),
-                project: project,
-                repository: project.gitHubRemote?.nameWithOwner
-            )
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                await self.provisionWorktreeIfEnabled(for: session.id, project: project)
-                guard let refreshed = self.piAgentSessionStore.sessions.first(where: { $0.id == session.id }) else { return }
-                let prompt = PiIssuePromptBuilder.projectPrompt(project: project, initialInstruction: initialInstruction)
-                self.piAgentRunner.resume(session: refreshed, initialPrompt: prompt)
-            }
-            return
-        }
-
-        piAgentRunner.startProjectSession(project: project, initialInstruction: initialInstruction)
-    }
-
-    func startPiAgentForIssue(_ detail: GitHubIssueDetail) {
-        guard let project = selectedDiscoveredProject else {
-            github.githubLastError = "Select the local project for this issue before starting Pi Agent."
-            return
-        }
-        selectedSidebarItem = .agent
-        let created = piAgentSessionStore.createSession(
-            kind: .issue,
-            title: detail.item.title,
-            project: project,
-            repository: detail.item.repository,
-            issueNumber: detail.item.number,
-            issueURL: detail.item.url
-        )
-        provisionWorktreeIfEnabledFireAndForget(for: created.id, project: project)
-        ensurePiAgentModelCatalogLoaded()
-        piWorkspace.setPendingIssueLaunch(
-            composerText: PiIssuePromptBuilder.issueDraft(detail: detail, project: project),
-            attachment: PiAgentIssueAttachment(detail: detail)
-        )
-    }
-
-    /// Context-menu entry point from the issue list: the row only carries a
-    /// `GitHubWorkItem`, so fetch the full detail before handing off to the
-    /// shared `startPiAgentForIssue` flow.
-    func startPiAgentForWorkItem(_ item: GitHubWorkItem) {
-        guard let session = github.authenticatedSession else {
-            github.githubLastError = "Connect GitHub first."
-            return
-        }
-        guard selectedDiscoveredProject != nil else {
-            github.githubLastError = "Select the local project for this issue before starting Pi Agent."
-            return
-        }
-
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                let service = GitHubIssueService(apiClient: GitHubAPIClient(session: session))
-                let detail = try await service.fetchDetail(for: item, bypassCache: false)
-                await MainActor.run {
-                    self.startPiAgentForIssue(detail)
-                }
-            } catch {
-                await MainActor.run {
-                    self.github.githubLastError = error.localizedDescription
-                }
-            }
-        }
-    }
-
-    func openPiAgentScreen() {
-        selectedSidebarItem = .agent
-        if piAgentSessionStore.selectedSession?.id != nil {
-            ensurePiAgentModelCatalogLoaded()
-        }
-        prepareRepoChangesForSelectedPiAgentSession()
-        acknowledgeVisibleSelectedPiAgentSession()
-    }
-
-    func selectPiAgentSession(_ id: UUID) {
-        piAgentSessionStore.select(id)
-        selectedSidebarItem = .agent
-        ensurePiAgentModelCatalogLoaded()
-        prepareRepoChangesForSelectedPiAgentSession()
-        acknowledgePiAgentSession(id)
-    }
-
-    /// Repairs a session's transcript from Pi's session file when it becomes the
-    /// visible session — on click, on keyboard nav, and on the selection restored
-    /// at launch. Cheap and self-guarding (once per session, only when there's
-    /// something missing), so it's safe to call from view appear/selection hooks.
-    func rehydratePiAgentTranscriptIfNeeded(_ sessionID: UUID?) {
-        guard let sessionID,
-              let session = piAgentSessionStore.sessions.first(where: { $0.id == sessionID }) else { return }
-        piAgentRunner.rehydrateTranscriptFromSessionFileIfNeeded(session)
-    }
-
-    /// Move selection by `offset` within the scoped session list, wrapping at
-    /// both ends. No-op when there are no sessions. Used by the ⌘] / ⌘[
-    /// shortcuts and reused as the scroll benchmark's "advance" mechanism.
-    func selectAdjacentPiAgentSession(offset: Int) {
-        let sessions = scopedPiAgentSessionsInOrder()
-        guard !sessions.isEmpty else { return }
-        let currentID = piAgentSessionStore.selectedSessionID
-        let currentIndex = sessions.firstIndex { $0.id == currentID } ?? 0
-        let count = sessions.count
-        let nextIndex = ((currentIndex + offset) % count + count) % count
-        selectPiAgentSession(sessions[nextIndex].id)
-    }
-
-    func selectNextPiAgentSession() { selectAdjacentPiAgentSession(offset: 1) }
-    func selectPreviousPiAgentSession() { selectAdjacentPiAgentSession(offset: -1) }
-
-    var canNavigatePiAgentSessions: Bool {
-        scopedPiAgentSessionsInOrder().count > 1
-    }
-
-    func acknowledgeVisibleSelectedPiAgentSession() {
-        guard let sessionID = piAgentSessionStore.selectedSession?.id,
-              isPiAgentSessionActuallyVisible(sessionID) else { return }
-        acknowledgePiAgentSession(sessionID)
-    }
-
     func isProviderEnabled(_ provider: String) -> Bool {
         !appSettings.disabledProviders.contains(provider)
     }
@@ -1478,103 +1295,6 @@ final class AppViewModel: NSObject {
     func setDefaultPiAgentThinkingLevel(_ level: String) {
         guard writePiRuntimeDefaults(provider: nil, model: nil, thinkingLevel: level) else { return }
         piRuntimeSettingsRevision += 1
-    }
-
-    func acknowledgePiAgentSession(_ id: UUID) {
-        pendingPiAgentNotificationTasks[id]?.cancel()
-        pendingPiAgentNotificationTasks[id] = nil
-        piAgentSessionStore.updateSession(id) { $0.needsAttention = false }
-        let identifier = piAgentNotificationIdentifier(for: id)
-        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [identifier])
-        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier])
-    }
-
-    private func handlePiAgentTurnFinished(_ sessionID: UUID) {
-        guard let session = piAgentSessionStore.sessions.first(where: { $0.id == sessionID }) else { return }
-        if isPiAgentSessionActuallyVisible(sessionID) {
-            acknowledgePiAgentSession(sessionID)
-            // Pi may have changed files during the completed turn. Refresh once at
-            // the turn boundary so Git toolbar actions don't keep reading a clean
-            // cached snapshot until the user changes sessions.
-            if shouldShowPiAgentGitActions,
-               piAgentSessionStore.selectedSession?.id == sessionID {
-                prepareRepoChangesForSelectedPiAgentSession(force: true)
-            }
-            return
-        }
-
-        guard !session.needsAttention else { return }
-        piAgentSessionStore.updateSession(sessionID) { record in
-            record.status = .idle
-            record.needsAttention = true
-        }
-        schedulePiAgentCompletionNotification(for: sessionID)
-    }
-
-    private func isPiAgentSessionActuallyVisible(_ sessionID: UUID) -> Bool {
-        NSApp.isActive
-            && selectedSidebarItem == .agent
-            && piAgentSessionStore.selectedSession?.id == sessionID
-            && (NSApp.keyWindow?.isVisible ?? NSApp.mainWindow?.isVisible ?? false)
-    }
-
-    private func schedulePiAgentCompletionNotification(for sessionID: UUID) {
-        pendingPiAgentNotificationTasks[sessionID]?.cancel()
-        let delay = UInt64(piAgentNotificationDelay * 1_000_000_000)
-        pendingPiAgentNotificationTasks[sessionID] = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: delay)
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                self?.sendPiAgentCompletionNotificationIfNeeded(for: sessionID)
-            }
-        }
-    }
-
-    private func sendPiAgentCompletionNotificationIfNeeded(for sessionID: UUID) {
-        pendingPiAgentNotificationTasks[sessionID] = nil
-        guard let session = piAgentSessionStore.sessions.first(where: { $0.id == sessionID }) else { return }
-        guard session.needsAttention, !isPiAgentSessionActuallyVisible(sessionID), shouldSendPiAgentSystemNotification else { return }
-        sendPiAgentCompletionNotification(for: session)
-    }
-
-    private var shouldSendPiAgentSystemNotification: Bool {
-        !NSApp.isActive || !(NSApp.keyWindow?.isVisible ?? NSApp.mainWindow?.isVisible ?? false)
-    }
-
-    private func piAgentNotificationIdentifier(for sessionID: UUID) -> String {
-        "pi-agent-\(sessionID.uuidString)"
-    }
-
-    private func sendPiAgentCompletionNotification(for session: PiAgentSessionRecord) {
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-
-            do {
-                let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert])
-                guard granted else { return }
-
-                let content = UNMutableNotificationContent()
-                content.title = "Pi Agent needs review"
-                content.body = session.displayTitle
-                content.userInfo = [
-                    "sessionID": session.id.uuidString,
-                    "windowID": windowID.uuidString
-                ]
-
-                let request = UNNotificationRequest(
-                    identifier: "pi-agent-\(session.id.uuidString)",
-                    content: content,
-                    trigger: nil
-                )
-
-                try await UNUserNotificationCenter.current().add(request)
-                self.piAgentSessionStore.updateSession(session.id) { record in
-                    record.lastNotificationAt = Date()
-                }
-            } catch {
-                return
-            }
-        }
     }
 
     func renamePiAgentSession(_ id: UUID, title: String) {
@@ -2553,36 +2273,6 @@ final class AppViewModel: NSObject {
         piAgentSessionStore.append(.init(sessionID: session.id, role: .status, title: "Dev Server Restarted", text: "Restarted dev server."))
     }
 
-    /// Creates a session worktree for the given project if the user opted in via
-    /// settings. Posts a status entry to the session's transcript on success or
-    /// failure. Callers should await this before starting the agent if they want
-    /// Pi to launch in the worktree on the very first turn.
-    func provisionWorktreeIfEnabled(for sessionID: UUID, project: DiscoveredProject) async {
-        guard appSettings.piAgentSessionsUseWorktree else { return }
-        guard project.isGitRepository else {
-            piAgentSessionStore.append(.init(sessionID: sessionID, role: .status, title: "Worktree Skipped", text: "Worktree isolation is enabled, but the project is not a git repository. Running in the project root."))
-            return
-        }
-        do {
-            let creation = try await sessionWorktreeService.createWorktree(for: sessionID, projectURL: project.url)
-            piAgentSessionStore.updateSession(sessionID) { record in
-                record.worktreePath = creation.worktreePath
-                record.branchName = creation.branchName
-                record.sourceBranch = creation.sourceBranch
-            }
-            piAgentSessionStore.append(.init(sessionID: sessionID, role: .status, title: "Worktree Ready", text: "Created branch `\(creation.branchName)` off `\(creation.sourceBranch)` in an isolated worktree."))
-        } catch {
-            piAgentSessionStore.append(.init(sessionID: sessionID, role: .error, title: "Worktree Setup Failed", text: "Could not create a session worktree: \(error.localizedDescription). The session will run in the project root."))
-        }
-    }
-
-    private func provisionWorktreeIfEnabledFireAndForget(for sessionID: UUID, project: DiscoveredProject) {
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            await self.provisionWorktreeIfEnabled(for: sessionID, project: project)
-        }
-    }
-
     func sendPiAgentMessage(_ text: String, mode: PiAgentInputMode, transcriptText: String? = nil, images: [PiAgentImageAttachment] = [], pasteAttachments: [PiAgentPasteAttachment] = [], issueAttachment: PiAgentIssueAttachment? = nil) {
         guard let session = piAgentSessionStore.selectedSession else { return }
         let visibleText = (transcriptText ?? text).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2927,25 +2617,6 @@ final class AppViewModel: NSObject {
         piAgentRunner.setThinkingLevel(sessionID: session.id, level: next)
     }
 
-    func stopSelectedPiAgentSession() {
-        guard let sessionID = piAgentSessionStore.selectedSession?.id else { return }
-        piAgentRunner.stop(sessionID: sessionID)
-        refreshRepositoryChangesForPiAgentSession()
-    }
-
-    func isPiAgentSessionRunning(_ sessionID: UUID) -> Bool {
-        piAgentRunner.isRunning(sessionID: sessionID)
-    }
-
-    private func refreshRepositoryChangesForPiAgentSession() {
-        guard let session = piAgentSessionStore.selectedSession,
-              selectedProjectPath == session.projectPath else { return }
-        github.refreshRepositoryChanges(preservingDiffSelection: true)
-        if session.repositoryRoot != session.projectPath {
-            prepareRepoChangesForSelectedPiAgentSession(force: true)
-        }
-    }
-
     func respondToPiAgentUIRequest(_ request: PiAgentUIRequest, value: String) {
         piAgentRunner.respondToExtensionUI(sessionID: request.sessionID, requestID: request.id, value: value)
     }
@@ -2960,49 +2631,6 @@ final class AppViewModel: NSObject {
 
     func cancelPiAgentUIRequest(_ request: PiAgentUIRequest) {
         piAgentRunner.cancelExtensionUI(sessionID: request.sessionID, requestID: request.id)
-    }
-
-    func deletePiAgentSession(_ sessionID: UUID) {
-        deletePiAgentSessions([sessionID])
-    }
-
-    func deletePiAgentSessions(_ sessionIDs: Set<UUID>) {
-        for sessionID in sessionIDs where piAgentRunner.isRunning(sessionID: sessionID) {
-            piAgentRunner.stop(sessionID: sessionID, recordTranscript: false)
-        }
-
-        // Cancel any pending completion-notification timers for sessions being
-        // deleted. Without this, a 5-minute-deferred notification task keeps the
-        // session ID alive in `pendingPiAgentNotificationTasks` until it fires
-        // and harmlessly no-ops because the session is gone.
-        for sessionID in sessionIDs {
-            pendingPiAgentNotificationTasks[sessionID]?.cancel()
-            pendingPiAgentNotificationTasks.removeValue(forKey: sessionID)
-        }
-
-        // Best-effort worktree cleanup. We capture the metadata before deleting
-        // the session records and then fire-and-forget the git removals.
-        let worktreeCleanups: [(worktreePath: String, projectPath: String, branchName: String?, sourceBranch: String?)] = sessionIDs.compactMap { id in
-            guard let session = piAgentSessionStore.sessions.first(where: { $0.id == id }),
-                  let worktreePath = session.worktreePath else { return nil }
-            return (worktreePath, session.projectPath, session.branchName, session.sourceBranch)
-        }
-
-        piAgentSessionStore.deleteSessions(sessionIDs)
-
-        for cleanup in worktreeCleanups {
-            let projectURL = URL(fileURLWithPath: cleanup.projectPath, isDirectory: true)
-            Task { [weak self] in
-                try? await self?.sessionWorktreeService.removeWorktree(
-                    worktreePath: cleanup.worktreePath,
-                    projectURL: projectURL,
-                    branchName: cleanup.branchName,
-                    sourceBranch: cleanup.sourceBranch,
-                    deleteBranch: true,
-                    force: true
-                )
-            }
-        }
     }
 
     var gitHubBoardCacheLifetimeMinutes: Int {
@@ -3476,7 +3104,7 @@ final class AppViewModel: NSObject {
     private func syncAppSettings() {
         appSettings = appSettingsController.settings
         writeOpenAIFastModeConfig()
-        configurePiAgentIdleParking()
+        piSessions.configureIdleParking()
     }
 
     private func writeOpenAIFastModeConfig() {
@@ -3486,10 +3114,6 @@ final class AppViewModel: NSObject {
                 enabledModelIdentifiers: identifiers
             )
         }
-    }
-
-    private func configurePiAgentIdleParking() {
-        piAgentRunner.configureIdleParking(timeout: piAgentIdleParkingTimeout)
     }
 
     /// Returns the memory append prompt texts (policy guidance, then recalled memory)
@@ -6454,7 +6078,7 @@ final class AppViewModel: NSObject {
         }
     }
 
-    private func ensurePiAgentModelCatalogLoaded() {
+    func ensurePiAgentModelCatalogLoaded() {
         guard availableModels.isEmpty else { return }
         refreshAvailableModels()
     }
