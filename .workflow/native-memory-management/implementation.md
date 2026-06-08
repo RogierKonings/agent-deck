@@ -1,112 +1,130 @@
-# Native Memory Management — Implementation Checkpoint
+# Native Memory Management — Implementation Report
 
-Stopped validation per parent/user request; no further xcodebuild test retries were run.
+Status: continued stabilization completed, committed on `side-agent/native-memory-impl`, **not ready for merge**.
 
-## 1) Implementation changes made
+Implementation commit containing code and this report's baseline: `381d569 Implement native Pi memory management`.
 
-- Replaced Agent Deck memory models with canonical Pi memory concepts:
-  - scopes: `general`, `project`
-  - types: `fact`, `event`, `procedure`, `insight`
-  - canonical metadata: reasoning, tags, weight/effective weight, project id, supersedes/superseded_by, synthesized_from, source session.
-- Reworked `AgentMemoryStore` to use the canonical SQLite DB schema at `~/.pi/agent/memories/memories.db` by default, with injectable test DB path support.
-  - Creates/migrates canonical columns where missing.
-  - Loads current memories for `general + current project`.
-  - Uses basename-derived project ids (`agent-deck`).
-  - Implements create/update/delete/reinforce/recall-ish retrieval and effective weight calculation.
-  - Delete attempts canonical supersession-chain repair.
-- Rebuilt the Memory Library UI around canonical fields:
-  - default current view with optional history/superseded toggle
-  - sort controls for newest, weight/relevance, scope, type, title, updated, created
-  - edit sheet for title/content/reasoning/type/scope/tags/weight/supersedes
-  - refresh and Dream toolbar actions.
-- Added a native deterministic `PiMemoryDreamService`:
-  - proposes merge/reweight/discover-pattern actions
-  - shows proposals in a confirmation sheet
-  - applies only selected proposal objects.
-- Replaced model-facing memory bridge tool names with canonical names:
-  - `store_memory`, `recall_memories`, `reinforce_memory`, `update_memory`, `delete_memory`
-  - Added parent/subagent dispatch plumbing for those bridge payloads.
-- Updated memory documentation to describe canonical SQLite-backed behavior.
-- Updated `AgentMemoryStoreTests` toward canonical DB/sorting/update/delete/recall/Dream seams.
+## Fixes made after parent checkpoint
 
-## 2) Current git status and diff stat
+- Added tri-state supersession update semantics:
+  - omitted supersedes = no change
+  - explicit nil/blank = clear link
+  - explicit id = relink
+- Added canonical supersession validation before writing links:
+  - rejects self-supersession
+  - rejects missing targets
+  - rejects targets already superseded by another memory
+  - rejects cycles
+- Added tests for:
+  - title-only update preserving supersession links
+  - explicit clear and relink
+  - invalid self/missing/already-superseded/cycle links
+  - delete chain repair and missing-id failure
+  - fresh DB FTS trigger synchronization
+- Added canonical FTS5 insert/update/delete triggers for Swift-created schemas.
+- Changed delete to throw/return the deleted record so UI/bridge paths no longer report success for missing IDs or sqlite failures.
+- Added bounded sqlite CLI behavior:
+  - `.timeout 5000`
+  - `PRAGMA busy_timeout=5000`
+  - local 5-second process watchdog loop before terminating sqlite3
+- Kept deterministic native Dream v1 and documented its approximation boundary:
+  - no external `/dream` process
+  - proposes canonical action-model mutations (`merge`, `reweight`, `discover-pattern`) for user confirmation
+  - applies approved proposal objects directly without rerunning analysis
 
-`git status --short`:
+## Changed files
 
-```text
- M agent-deck-documentation/memory.md
- M agent-deck/AgentMemoryModels.swift
- M agent-deck/AgentMemoryStore.swift
- M agent-deck/AgentMemoryViews.swift
- M agent-deck/AppNotifications.swift
- M agent-deck/AppViewModel.swift
- M agent-deck/ContentView.swift
- M agent-deck/PiAgentRunnerService.swift
- M agent-deck/PiNativeSubagentBridgeExtensions.swift
- M agent-deck/PiSubagentRunService.swift
- M agent-deckTests/AgentMemoryStoreTests.swift
-?? agent-deck/PiMemoryDreamService.swift
+- `.workflow/native-memory-management/implementation.md`
+- `agent-deck-documentation/memory.md`
+- `agent-deck/AgentMemoryModels.swift`
+- `agent-deck/AgentMemoryStore.swift`
+- `agent-deck/AgentMemoryViews.swift`
+- `agent-deck/AppNotifications.swift`
+- `agent-deck/AppViewModel.swift`
+- `agent-deck/ContentView.swift`
+- `agent-deck/PiAgentRunnerService.swift`
+- `agent-deck/PiMemoryDreamService.swift`
+- `agent-deck/PiNativeSubagentBridgeExtensions.swift`
+- `agent-deck/PiSubagentRunService.swift`
+- `agent-deckTests/AgentMemoryStoreTests.swift`
+
+## Validation outcomes
+
+### Debug build
+
+Command:
+
+```sh
+xcodebuild -project agent-deck.xcodeproj -scheme agent-deck \
+  -configuration Debug -destination 'platform=macOS' \
+  CODE_SIGNING_ALLOWED=NO build
 ```
 
-`git diff --stat`:
+Outcome: passed.
+
+Evidence log: `/tmp/native-memory-build-stabilize.log`
 
 ```text
-agent-deck-documentation/memory.md                | 298 +------
- agent-deck/AgentMemoryModels.swift                | 167 +++-
- agent-deck/AgentMemoryStore.swift                 | 895 ++++++++++++----------
- agent-deck/AgentMemoryViews.swift                 | 733 ++++++------------
- agent-deck/AppNotifications.swift                 |   2 +
- agent-deck/AppViewModel.swift                     | 177 ++++-
- agent-deck/ContentView.swift                      |  19 +-
- agent-deck/PiAgentRunnerService.swift             |  53 +-
- agent-deck/PiNativeSubagentBridgeExtensions.swift | 116 +--
- agent-deck/PiSubagentRunService.swift             |  65 +-
- agent-deckTests/AgentMemoryStoreTests.swift       | 206 ++---
- 11 files changed, 1201 insertions(+), 1530 deletions(-)
-```
-
-Note: `git diff --stat` does not include the untracked new file `agent-deck/PiMemoryDreamService.swift`.
-
-## 3) Validation status and latest evidence
-
-Validation attempted:
-
-1. `xcodebuild -project agent-deck.xcodeproj -scheme agent-deck -destination 'platform=macOS' -only-testing:agent-deckTests/AgentMemoryStoreTests test`
-   - Failed early due missing local Mac Development signing certificate.
-2. Retried with `CODE_SIGNING_ALLOWED=NO`.
-   - Exposed compile errors; fixed those.
-3. Retried targeted `AgentMemoryStoreTests` several times while fixing store/test issues.
-   - Earlier runs reached tests and exposed store initialization/loading failures.
-   - Later runs became slow/hung around launching/running the app test host, with repeated system `com.apple.linkd.autoShortcut` connection errors and no final `TEST SUCCEEDED`/`TEST FAILED` before timeout.
-4. Final slow command stopped per parent/user instruction:
-
-```text
-xcodebuild -project agent-deck.xcodeproj -scheme agent-deck -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO -parallel-testing-enabled NO -only-testing:agent-deckTests/AgentMemoryStoreTests test
-```
-
-Latest evidence from `/tmp/agent-memory-test9.log` before stop:
-
-```text
-[Connection] Unable to get synchronousRemoteObjectProxy, error: ... connection to service named com.apple.linkd.autoShortcut
-[Connection] Unable to re-register with Process Instance Registry, error: ... connection to service named com.apple.linkd.autoShortcut
-```
-
-Build validation did complete successfully:
-
-```text
-xcodebuild -project agent-deck.xcodeproj -scheme agent-deck -configuration Debug -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build
 ** BUILD SUCCEEDED **
 ```
 
-## 4) Readiness assessment
+### Build for testing
 
-Not ready for merge as-is. It is build-clean, but the targeted test loop did not complete after the latest fixes, and the change is broad enough that it needs reviewer attention before any merge decision.
+Command:
 
-Reviewer focus areas:
+```sh
+xcodebuild -project agent-deck.xcodeproj -scheme agent-deck \
+  -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build-for-testing
+```
 
-- Verify canonical SQLite read/write behavior against an existing real `~/.pi/agent/memories/memories.db`.
-- Check the new sqlite CLI wrapper robustness and async `refresh()` behavior.
-- Review supersession repair semantics carefully.
-- Review native bridge compatibility with Pi RPC extension UI payload routing.
-- Decide whether deterministic Dream v1 is sufficient or should be wired to an LLM reviewer seam before merge.
-- UI review for Memory Library density/style after the large rewrite.
+Outcome: passed.
+
+Evidence log: `/tmp/native-memory-build-for-testing-stabilize.log`
+
+```text
+** TEST BUILD SUCCEEDED **
+```
+
+### Bounded AgentMemoryStoreTests attempt
+
+Command:
+
+```sh
+xcodebuild -project agent-deck.xcodeproj -scheme agent-deck \
+  -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO \
+  -parallel-testing-enabled NO \
+  -only-testing:agent-deckTests/AgentMemoryStoreTests \
+  test-without-building
+```
+
+Outcome: timed out after the single bounded 180s attempt; per parent instruction, I did not retry.
+
+Evidence log: `/tmp/native-memory-agent-memory-tests-stabilize.log`
+
+Latest useful evidence before timeout:
+
+```text
+Test Suite 'AgentMemoryStoreTests' started
+Test Case 'testDeleteRepairsSupersessionChainAndThrowsForMissingID' passed
+Test Case 'testDreamApplyCreatesMergedMemory' passed
+Test Case 'testExplicitClearAndRelinkSupersedes' passed
+Test Case 'testFreshDatabaseFTSTriggersStaySynchronized' passed
+Test Case 'testLoadsGeneralAndCurrentProjectNewestFirst' passed
+Test Case 'testRecallExcludesSupersededByDefault' started
+```
+
+The app-host test process also emitted repeated macOS `com.apple.linkd.autoShortcut` connection errors before tests began. No further retries were run.
+
+## Duplicate-tool launch smoke
+
+Not run. A realistic duplicate-tool launch smoke requires app-host/Pi launch behavior, and the bounded app-host test attempt is still hanging. The bridge now registers canonical native tools (`store_memory`, `recall_memories`, `reinforce_memory`, `update_memory`, `delete_memory`); reviewer should still verify conflict behavior when the external TS memory extension is enabled as a user extension.
+
+## Remaining risks / reviewer focus
+
+- The branch is build-clean but not test-complete; do not merge yet.
+- `AgentMemoryStore` still performs sqlite3 CLI subprocess work from MainActor call sites. It is now bounded with sqlite busy-timeout and process timeout, but a future pass should move DB work behind a non-MainActor actor/service or direct SQLite binding.
+- The bounded store test attempt hung after five passing tests; inspect `/tmp/native-memory-agent-memory-tests-stabilize.log` and consider isolating AgentMemoryStore tests from the full app host if possible.
+- Review supersession semantics against canonical TypeScript behavior, especially relinking and chain repair.
+- Review real DB behavior against `~/.pi/agent/memories/memories.db` with existing memory rows.
+- Review duplicate memory tool conflict behavior with the external TS extension enabled.
+- Dream v1 is deterministic and native. It follows the safe propose/confirm/apply action model but is not embedding/LLM parity with Pi `/dream`.
