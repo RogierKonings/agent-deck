@@ -253,6 +253,10 @@ final class ProjectDiscoveryState {
         preferencesStore.setAssignedPromptTemplate(promptName, assigned: assigned, for: path)
     }
 
+    func setAssignedSkill(_ skillName: String, assigned: Bool, for path: String) {
+        preferencesStore.setAssignedSkill(skillName, assigned: assigned, for: path)
+    }
+
     private func rebuildProjectByPath() {
         projectByPath = Dictionary(uniqueKeysWithValues: discoveredProjects.map { ($0.path, $0) })
     }

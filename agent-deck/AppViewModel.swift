@@ -122,6 +122,7 @@ final class AppViewModel: NSObject {
     let agentUniverse: AgentUniverseCoordinator
     let agentRepository: AgentRepositoryCoordinator
     let promptRepository: PromptRepositoryCoordinator
+    let skillCatalog: SkillCatalogCoordinator
     let composerSlash: ComposerSlashCoordinator
     let automation: AutomationCoordinator
     private var sessionWorktreeService: PiAgentSessionWorktreeService { environment.sessionWorktreeService }
@@ -183,6 +184,7 @@ final class AppViewModel: NSObject {
         agentUniverse = AgentUniverseCoordinator()
         agentRepository = AgentRepositoryCoordinator()
         promptRepository = PromptRepositoryCoordinator()
+        skillCatalog = SkillCatalogCoordinator()
         composerSlash = ComposerSlashCoordinator()
         super.init()
         projects.host = self
@@ -205,6 +207,7 @@ final class AppViewModel: NSObject {
         agentUniverse.attach(host: self)
         agentRepository.attach(host: self)
         promptRepository.attach(host: self)
+        skillCatalog.attach(host: self)
         composerSlash.attach(host: self)
         resourceCatalog.attach(host: self)
 
@@ -1636,17 +1639,6 @@ final class AppViewModel: NSObject {
         cachedSkillVisibilityIssuesByAgentID[agent.id] ?? []
     }
 
-    func bundledSkillIsDisabled(_ skill: SkillRecord) -> Bool {
-        skill.source.kind == .builtin && appSettings.disabledBundledSkillNames.contains(skill.name)
-    }
-
-    func setBundledSkillDisabled(_ isDisabled: Bool, for skill: SkillRecord) {
-        guard skill.source.kind == .builtin else { return }
-        guard appSettingsController.setBundledSkillDisabled(skill.name, isDisabled: isDisabled) else { return }
-        settings.publish()
-        refresh(includeModels: false)
-    }
-
     private func skillNamed(_ skillName: String, isRuntimeVisibleIn project: DiscoveredProject) -> Bool {
         let projectSnapshot = allProjectSnapshots[project.path] ?? PiScanner(externalSkillPaths: appSettings.externalSkillPaths, externalPromptPaths: appSettings.externalPromptPaths).scan(projectRoot: project.url)
         let matches = PiSkillLaunchResolver.catalog(from: projectSnapshot).filter { $0.name == skillName }
@@ -1669,11 +1661,6 @@ final class AppViewModel: NSObject {
             .first
     }
 
-    func moveSkillToGlobalCatalog(_ skill: SkillRecord) throws {
-        try moveSkillToGlobalDirectory(skill)
-        refresh(includeModels: false, scanAllProjects: true)
-    }
-
     /// Recomputes the cached automation-model lookup. Called only at real
     /// boundaries — app launch / activation, a model-list reload, a settings
     /// change — never per `ContentView.body` eval. Mirrors `resourceCatalog.rebuildWarningCaches`.
@@ -1694,260 +1681,6 @@ final class AppViewModel: NSObject {
         cachedStandardizedExternalSkillPaths = Set(
             appSettings.externalSkillPaths.map { URL(fileURLWithPath: $0).standardizedFileURL.path }
         )
-    }
-
-    func addSkillToSelectedProject(_ skill: SkillRecord) throws {
-        guard let selectedProjectPath else { throw CocoaError(.fileNoSuchFile) }
-        try setSkill(skill, enabled: true, forProjectPath: selectedProjectPath)
-    }
-
-    func removeSkillFromSelectedProject(_ skill: SkillRecord) throws {
-        guard let selectedProjectPath else { throw CocoaError(.fileNoSuchFile) }
-        try setSkill(skill, enabled: false, forProjectPath: selectedProjectPath)
-    }
-
-    func setSkill(_ skill: SkillRecord, enabled: Bool, for project: DiscoveredProject) throws {
-        try setSkill(skill, enabled: enabled, forProjectPath: project.path)
-    }
-
-    func skill(_ skill: SkillRecord, isEnabledFor project: DiscoveredProject) -> Bool {
-        projectPreference(for: project.path).assignedSkillNames.contains(skill.name)
-    }
-
-    func assignedProjects(for skill: SkillRecord) -> [DiscoveredProject] {
-        enabledProjects.filter { self.skill(skill, isEnabledFor: $0) }
-    }
-
-    func skill(_ skill: SkillRecord, isAssignedTo agent: EffectiveAgentRecord) -> Bool {
-        agent.resolved.skills.contains(skill.name)
-    }
-
-    func setSkill(_ skill: SkillRecord, enabled: Bool, for agent: EffectiveAgentRecord) throws {
-        guard var draft = makeAgentDraft(for: agent) else { throw CocoaError(.fileNoSuchFile) }
-        var skills = draft.config.skills
-        if enabled {
-            if !skills.contains(skill.name) { skills.append(skill.name) }
-        } else {
-            skills.removeAll { $0 == skill.name }
-        }
-        draft.config.skills = PiSkillLaunchResolver.normalizedNames(skills)
-        try saveAgentDraft(draft, for: agent)
-        // `saveAgentDraft` rewrites the agent `.md` and schedules a background
-        // rescan, but the toggle's checkbox is snapshot-derived. Patch the
-        // in-memory effective agent so the checkbox flips immediately instead
-        // of waiting for that rescan to land.
-        patchEffectiveAgentSkills(agentName: agent.name, skills: draft.config.skills)
-        resourceCatalog.rebuildWarningCaches()
-    }
-
-    func assignedAgents(for skillRecord: SkillRecord) -> [EffectiveAgentRecord] {
-        snapshot.effectiveAgents.filter { skill(skillRecord, isAssignedTo: $0) }
-    }
-
-    private func setSkill(_ skill: SkillRecord, enabled: Bool, forProjectPath projectPath: String) throws {
-        projectPreferencesStore.setAssignedSkill(skill.name, assigned: enabled, for: projectPath)
-        applyProjectPreferenceChanges()
-        // Project assignment only mutates UserDefaults — nothing on disk
-        // changed. Reconcile snapshot-derived state in memory instead of
-        // re-walking the filesystem, so the toggle is instant.
-        reconcileSnapshotsFromPreferences()
-        selectedSkillID = allVisibleSkillRecords.first { $0.name == skill.name }?.id ?? selectedSkillID
-    }
-
-    func enableSkillGlobally(_ skill: SkillRecord) throws {
-        if skill.source.kind == .project || skill.source.kind == .legacyProject {
-            try moveSkillToGlobalDirectory(skill)
-        }
-        guard appSettingsController.setDefaultSkill(skill.name, enabled: true) else {
-            refresh(includeModels: false, scanAllProjects: true)
-            selectedSkillID = allVisibleSkillRecords.first { $0.name == skill.name }?.id ?? selectedSkillID
-            return
-        }
-        settings.publish()
-        refresh(includeModels: false, scanAllProjects: true)
-        selectedSkillID = allVisibleSkillRecords.first { $0.name == skill.name }?.id ?? selectedSkillID
-    }
-
-    func disableSkillGlobally(_ skill: SkillRecord) throws {
-        guard appSettingsController.setDefaultSkill(skill.name, enabled: false) else { return }
-        settings.publish()
-        refresh(includeModels: false)
-    }
-
-    func canDeleteSkill(_ skill: SkillRecord) -> Bool {
-        switch skill.source.kind {
-        case .builtin, .package:
-            return false
-        case .global, .project, .legacyProject, .override, .library:
-            return true
-        }
-    }
-
-    /// Filesystem + state mutations for deleting one skill, WITHOUT triggering
-    /// a refresh. The caller is responsible for calling `refresh()` once after
-    /// all desired deletions — single call sites do it inline, batch call sites
-    /// do it once after the loop.
-    private func performSkillDeletion(_ skill: SkillRecord) throws {
-        guard canDeleteSkill(skill) else { throw CocoaError(.fileWriteNoPermission) }
-
-        // Throwing filesystem work first — optimistic hiding must not happen
-        // unless these succeed (SkillsScreen shows an alert on throw).
-        let targetURL = skillDeletionTargetURL(for: skill)
-        try removeSkillReferences(named: skill.name)
-        try FileManager.default.trashItem(at: targetURL, resultingItemURL: nil)
-        removeExternalSkillCatalogReferences(for: skill, deletedTarget: targetURL)
-        skillRepositories.unlistSkillFromSyncedRepository(skill, deletionTargetURL: skillDeletionTargetURL(for: skill))
-
-        // Hide the row immediately — no blocking rescan. SwiftUI updates the
-        // list the instant the published set changes, like session deletion.
-        withAnimation(.snappy(duration: 0.18)) {
-            _ = pendingDeletedSkillIDs.insert(skill.id)
-        }
-        // Recompute selection AFTER hiding so the deleted skill isn't re-picked.
-        selectedSkillID = allVisibleSkillRecords.first?.id
-    }
-
-    func deleteSkill(_ skill: SkillRecord) throws {
-        try performSkillDeletion(skill)
-        // Reconcile in the background; applyRefreshSnapshot prunes the pending
-        // ID once the fresh snapshot confirms the skill is gone. `silentlyReconcile`
-        // because `pendingDeletedSkillIDs.insert` already hid the row.
-        refresh(includeModels: false, scanAllProjects: true, silentlyReconcile: true)
-    }
-
-    /// Batch delete: filesystem work per skill, then a single refresh. Returns
-    /// the names of skills whose deletion threw (e.g. protected source kinds).
-    /// Avoids the N-refresh storm of looping `deleteSkill(_:)`.
-    func deleteSkills(_ skills: [SkillRecord]) -> [String] {
-        var failed: [String] = []
-        for skill in skills {
-            do { try performSkillDeletion(skill) }
-            catch { failed.append(skill.name) }
-        }
-        if skills.count > failed.count {
-            refresh(includeModels: false, scanAllProjects: true, silentlyReconcile: true)
-        }
-        return failed
-    }
-
-    /// True when `skill` was imported — its root path is tracked in
-    /// `externalSkillPaths` (a local-folder import or a Git-synced repo skill).
-    func isImportedSkill(_ skill: SkillRecord) -> Bool {
-        let paths = cachedStandardizedExternalSkillPaths
-        guard !paths.isEmpty else { return false }
-        let filePath = URL(fileURLWithPath: skill.filePath).standardizedFileURL.path
-        if paths.contains(filePath) { return true }
-        let rootPath = skillDeletionTargetURL(for: skill).standardizedFileURL.path
-        return paths.contains(rootPath)
-    }
-
-    /// Filesystem + state mutations for un-importing one skill, WITHOUT
-    /// triggering a refresh. See `performSkillDeletion(_:)` for rationale.
-    private func performSkillCatalogRemoval(_ skill: SkillRecord) throws {
-        guard isImportedSkill(skill) else { throw CocoaError(.fileWriteNoPermission) }
-
-        let fileURL = URL(fileURLWithPath: skill.filePath).standardizedFileURL
-        let rootURL = skillDeletionTargetURL(for: skill).standardizedFileURL
-
-        // Clear name-based assignments so no dangling missing-skill warning is
-        // left behind — same as deletion, minus the trashing.
-        try removeSkillReferences(named: skill.name)
-
-        let pathsToRemove = appSettings.externalSkillPaths.filter { rawPath in
-            let path = URL(fileURLWithPath: rawPath).standardizedFileURL.path
-            return path == rootURL.path || path == fileURL.path
-        }
-        if appSettingsController.removeExternalSkillPaths(pathsToRemove) {
-            settings.publish()
-        }
-        skillRepositories.unlistSkillFromSyncedRepository(skill, deletionTargetURL: skillDeletionTargetURL(for: skill))
-
-        withAnimation(.snappy(duration: 0.18)) {
-            _ = pendingDeletedSkillIDs.insert(skill.id)
-        }
-        selectedSkillID = allVisibleSkillRecords.first?.id
-    }
-
-    /// Un-import a skill: drop it from the catalog without trashing its files.
-    /// For a Git-synced skill the repository clone is kept; the skill is just
-    /// un-listed from that repository's synced set.
-    func removeSkillFromCatalog(_ skill: SkillRecord) throws {
-        try performSkillCatalogRemoval(skill)
-        refresh(includeModels: false, scanAllProjects: true, silentlyReconcile: true)
-    }
-
-    /// Batch un-import: filesystem work per skill, then a single refresh.
-    /// Returns the names of skills whose removal threw.
-    func removeSkillsFromCatalog(_ skills: [SkillRecord]) -> [String] {
-        var failed: [String] = []
-        for skill in skills {
-            do { try performSkillCatalogRemoval(skill) }
-            catch { failed.append(skill.name) }
-        }
-        if skills.count > failed.count {
-            refresh(includeModels: false, scanAllProjects: true, silentlyReconcile: true)
-        }
-        return failed
-    }
-
-    /// Drop `skill` from its synced repository's tracked set, if it belongs to
-    /// one. When that leaves the repository with no synced skills, the whole
-    /// repository is un-registered — its record is removed (so it is no longer
-    /// polled for updates) and its app-managed clone is deleted.
-
-    func skillIsEnabledGlobally(_ skill: SkillRecord) -> Bool {
-        appSettings.defaultSkillNames.contains(skill.name)
-    }
-
-    private func moveSkillToGlobalDirectory(_ skill: SkillRecord) throws {
-        let fileURL = URL(fileURLWithPath: skill.filePath).standardizedFileURL
-        let sourceURL = skillMoveSourceURL(fileURL: fileURL)
-        let destinationRoot = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".pi/agent/skills", isDirectory: true)
-            .standardizedFileURL
-        let destinationURL = destinationRoot.appendingPathComponent(skill.name, isDirectory: true)
-
-        guard !isSymbolicLink(sourceURL), !isSymbolicLink(fileURL) else {
-            throw ResourceRenameError.unsupportedResource("Symlinked skills cannot be made Default safely in app. Move the real skill folder to ~/.pi/agent/skills instead.")
-        }
-        guard sourceURL.standardizedFileURL.path != destinationURL.standardizedFileURL.path else { return }
-        try ensureGlobalSkillDestinationAvailable(destinationURL, sourceURL: sourceURL)
-        try FileManager.default.createDirectory(at: destinationRoot, withIntermediateDirectories: true, attributes: nil)
-
-        if fileURL.lastPathComponent == "SKILL.md" {
-            try FileManager.default.moveItem(at: sourceURL, to: destinationURL)
-        } else {
-            try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: false, attributes: nil)
-            try FileManager.default.moveItem(at: sourceURL, to: destinationURL.appendingPathComponent("SKILL.md"))
-        }
-    }
-
-    private func skillMoveSourceURL(fileURL: URL) -> URL {
-        if fileURL.lastPathComponent == "SKILL.md" {
-            return fileURL.deletingLastPathComponent().standardizedFileURL
-        }
-        return fileURL.standardizedFileURL
-    }
-
-    private func isSymbolicLink(_ url: URL) -> Bool {
-        (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true ||
-        (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) != nil
-    }
-
-    private func ensureGlobalSkillDestinationAvailable(_ destinationURL: URL, sourceURL: URL) throws {
-        let destination = destinationURL.standardizedFileURL
-        let source = sourceURL.standardizedFileURL
-        guard destination.path.hasPrefix(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".pi/agent/skills", isDirectory: true).standardizedFileURL.path + "/") else {
-            throw ResourceRenameError.unsafePath(destination.path)
-        }
-        if pathExistsOrIsSymlink(destination), destination.path != source.path {
-            throw ResourceRenameError.destinationExists(destination.path)
-        }
-    }
-
-    func skillIsEnabledForSelectedProject(_ skill: SkillRecord) -> Bool {
-        guard let selectedProjectPath else { return false }
-        return projectPreference(for: selectedProjectPath).assignedSkillNames.contains(skill.name)
     }
 
     func skillRecap(for project: DiscoveredProject) -> ProjectSkillRecap {
@@ -2058,44 +1791,6 @@ final class AppViewModel: NSObject {
         return records
             .filter { !($0.source.kind == .builtin && disabledBundled.contains($0.name)) }
             .filter { seen.insert($0.id).inserted }
-    }
-
-    private func skillDeletionTargetURL(for skill: SkillRecord) -> URL {
-        let fileURL = URL(fileURLWithPath: skill.filePath).standardizedFileURL
-        if fileURL.lastPathComponent == "SKILL.md" {
-            return fileURL.deletingLastPathComponent()
-        }
-        return fileURL
-    }
-
-    private func removeSkillReferences(named skillName: String) throws {
-        _ = appSettingsController.setDefaultSkill(skillName, enabled: false)
-        settings.publish()
-
-        for projectPath in projectPreferencesStore.preferencesByPath.keys {
-            projectPreferencesStore.setAssignedSkill(skillName, assigned: false, for: projectPath)
-        }
-        applyProjectPreferenceChanges()
-
-        for agent in snapshot.effectiveAgents where agent.resolved.skills.contains(skillName) {
-            guard var draft = makeAgentDraft(for: agent) else { continue }
-            draft.config.skills.removeAll { $0 == skillName }
-            // Persist without a per-agent refresh — `saveAgentDraft` would
-            // trigger a synchronous rescan per agent. The single trailing
-            // refresh(scanAllProjects:) in deleteSkill picks up every edit.
-            try agentPersistence.save(draft, original: agent, projectRoot: selectedProjectPath)
-        }
-    }
-
-    private func removeExternalSkillCatalogReferences(for skill: SkillRecord, deletedTarget: URL) {
-        let fileURL = URL(fileURLWithPath: skill.filePath).standardizedFileURL
-        let deletedTargetPath = deletedTarget.standardizedFileURL.path
-        let pathsToRemove = appSettings.externalSkillPaths.filter { rawPath in
-            let url = URL(fileURLWithPath: rawPath).standardizedFileURL
-            return url.path == fileURL.path || url.path == deletedTargetPath
-        }
-        guard appSettingsController.removeExternalSkillPaths(pathsToRemove) else { return }
-        settings.publish()
     }
 
     func makeEnvDraft(for record: EnvKeyRecord) -> EnvEditorDraft {
@@ -2446,6 +2141,36 @@ final class AppViewModel: NSObject {
         withAnimation(.snappy(duration: 0.18)) {
             _ = pendingDeletedPromptIDs.insert(prompt.id)
         }
+    }
+
+    func markSkillPendingDeletion(_ skill: SkillRecord) {
+        withAnimation(.snappy(duration: 0.18)) {
+            _ = pendingDeletedSkillIDs.insert(skill.id)
+        }
+    }
+
+    var standardizedExternalSkillPaths: Set<String> { cachedStandardizedExternalSkillPaths }
+
+    func removeSkillFromAgentDrafts(named skillName: String) throws {
+        for agent in snapshot.effectiveAgents where agent.resolved.skills.contains(skillName) {
+            guard var draft = makeAgentDraft(for: agent) else { continue }
+            draft.config.skills.removeAll { $0 == skillName }
+            try agentPersistence.save(draft, original: agent, projectRoot: selectedProjectPath)
+        }
+    }
+
+    func setSkillOnAgent(_ skill: SkillRecord, enabled: Bool, for agent: EffectiveAgentRecord) throws {
+        guard var draft = makeAgentDraft(for: agent) else { throw CocoaError(.fileNoSuchFile) }
+        var skills = draft.config.skills
+        if enabled {
+            if !skills.contains(skill.name) { skills.append(skill.name) }
+        } else {
+            skills.removeAll { $0 == skill.name }
+        }
+        draft.config.skills = PiSkillLaunchResolver.normalizedNames(skills)
+        try saveAgentDraft(draft, for: agent)
+        patchEffectiveAgentSkills(agentName: agent.name, skills: draft.config.skills)
+        resourceCatalog.rebuildWarningCaches()
     }
 
 }
