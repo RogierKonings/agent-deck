@@ -374,4 +374,36 @@ final class PiAgentSessionLifecycleCoordinator {
     private func notificationIdentifier(for sessionID: UUID) -> String {
         "pi-agent-\(sessionID.uuidString)"
     }
+
+    // MARK: - Session preferences
+
+    func togglePinned(_ id: UUID) {
+        sessionStore.togglePinned(id)
+    }
+
+    func setSubagentsEnabledForSelectedSession(_ isEnabled: Bool) {
+        guard let session = sessionStore.selectedSession else { return }
+        sessionStore.updateSession(session.id, bumpUpdatedAt: false) { session in
+            session.subagentsEnabled = isEnabled
+        }
+    }
+
+    /// Draft-only footer control: before the first launch, subagents act like a
+    /// session default. Update both the selected draft and the default for new
+    /// sessions. Once Pi has started, the footer becomes read-only.
+    func setSubagentsEnabledForSelectedDraftAndNewSessions(_ isEnabled: Bool) {
+        host?.applyDefaultSubagentsEnabledForNewSessions(isEnabled)
+        guard let session = sessionStore.selectedSession, session.status == .draft else { return }
+        sessionStore.updateSession(session.id, bumpUpdatedAt: false) { session in
+            session.subagentsEnabled = isEnabled
+        }
+    }
+
+    /// Persists a session's per-session subagent selection. `nil` restores the
+    /// default (all effective agents); a non-nil set pins an explicit choice.
+    func setAgentSelection(_ selection: Set<String>?, for sessionID: UUID) {
+        sessionStore.updateSession(sessionID, bumpUpdatedAt: false) { session in
+            session.agentSelection = selection
+        }
+    }
 }

@@ -33,4 +33,5 @@ protocol PiAgentSessionLifecycleHost: AnyObject {
     var hasAuthenticatedGitHubSession: Bool { get }
     func fetchIssueDetail(for item: GitHubWorkItem) async throws -> GitHubIssueDetail
     func setPendingIssueLaunch(composerText: String, attachment: PiAgentIssueAttachment)
+    func applyDefaultSubagentsEnabledForNewSessions(_ isEnabled: Bool)
 }

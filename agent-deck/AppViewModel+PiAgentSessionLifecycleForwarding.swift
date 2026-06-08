@@ -100,6 +100,10 @@ extension AppViewModel: PiAgentSessionLifecycleHost {
     func setPendingIssueLaunch(composerText: String, attachment: PiAgentIssueAttachment) {
         piWorkspace.setPendingIssueLaunch(composerText: composerText, attachment: attachment)
     }
+
+    func applyDefaultSubagentsEnabledForNewSessions(_ isEnabled: Bool) {
+        settings.setSubagentsEnabledForNewSessions(isEnabled)
+    }
 }
 
 // MARK: - Pi Agent session lifecycle view/API compatibility
@@ -127,5 +131,21 @@ extension AppViewModel {
 
     func provisionWorktreeIfEnabled(for sessionID: UUID, project: DiscoveredProject) async {
         await piSessions.provisionWorktreeIfEnabled(for: sessionID, project: project)
+    }
+
+    func togglePiAgentSessionPinned(_ id: UUID) {
+        piSessions.togglePinned(id)
+    }
+
+    func setSubagentsEnabledForSelectedSession(_ isEnabled: Bool) {
+        piSessions.setSubagentsEnabledForSelectedSession(isEnabled)
+    }
+
+    func setSubagentsEnabledForSelectedDraftAndNewSessions(_ isEnabled: Bool) {
+        piSessions.setSubagentsEnabledForSelectedDraftAndNewSessions(isEnabled)
+    }
+
+    func setAgentSelection(_ selection: Set<String>?, for sessionID: UUID) {
+        piSessions.setAgentSelection(selection, for: sessionID)
     }
 }

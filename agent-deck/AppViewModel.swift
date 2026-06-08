@@ -729,36 +729,6 @@ final class AppViewModel: NSObject {
         appSettings.openAIFastModeModelIdentifiers.contains(model.identifier)
     }
 
-    func togglePiAgentSessionPinned(_ id: UUID) {
-        piAgentSessionStore.togglePinned(id)
-    }
-
-    func setSubagentsEnabledForSelectedSession(_ isEnabled: Bool) {
-        guard let session = piAgentSessionStore.selectedSession else { return }
-        piAgentSessionStore.updateSession(session.id, bumpUpdatedAt: false) { session in
-            session.subagentsEnabled = isEnabled
-        }
-    }
-
-    /// Draft-only footer control: before the first launch, subagents act like a
-    /// session default. Update both the selected draft and the default for new
-    /// sessions. Once Pi has started, the footer becomes read-only.
-    func setSubagentsEnabledForSelectedDraftAndNewSessions(_ isEnabled: Bool) {
-        setSubagentsEnabledForNewSessions(isEnabled)
-        guard let session = piAgentSessionStore.selectedSession, session.status == .draft else { return }
-        piAgentSessionStore.updateSession(session.id, bumpUpdatedAt: false) { session in
-            session.subagentsEnabled = isEnabled
-        }
-    }
-
-    /// Persists a session's per-session subagent selection. `nil` restores the
-    /// default (all effective agents); a non-nil set pins an explicit choice.
-    func setAgentSelection(_ selection: Set<String>?, for sessionID: UUID) {
-        piAgentSessionStore.updateSession(sessionID, bumpUpdatedAt: false) { session in
-            session.agentSelection = selection
-        }
-    }
-
     private func settingsSummary(for scope: AgentEditingTarget.OverrideScope) -> SettingsSummary? {
         switch scope {
         case .global:
