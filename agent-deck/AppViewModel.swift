@@ -118,6 +118,7 @@ final class AppViewModel: NSObject {
     let projectServer: ProjectServerCoordinator
     let agentDeckRelease: AgentDeckReleaseCoordinator
     let catalogAutoRefresh: CatalogAutoRefreshCoordinator
+    let appLifecycle: AppLifecycleCoordinator
     let automation: AutomationCoordinator
     private var sessionWorktreeService: PiAgentSessionWorktreeService { environment.sessionWorktreeService }
     /// Memoizes `selectableAgentUniverse(forProjectPath:)` so the subagent
@@ -178,6 +179,7 @@ final class AppViewModel: NSObject {
             releaseNotesGenerator: environment.releaseNotesGenerator
         )
         catalogAutoRefresh = CatalogAutoRefreshCoordinator()
+        appLifecycle = AppLifecycleCoordinator()
         super.init()
         projects.host = self
         githubWorkspace.host = self
@@ -195,6 +197,7 @@ final class AppViewModel: NSObject {
         projectServer.attach(host: self)
         agentDeckRelease.attach(host: self)
         catalogAutoRefresh.attach(host: self)
+        appLifecycle.attach(host: self)
 
         settings.bootstrapFromController()
         #if DEBUG
@@ -219,7 +222,7 @@ final class AppViewModel: NSObject {
             guard let self, !self.didShutdown else { return }
             self.refresh(includeModels: false, scanAllProjects: true, silentlyReconcile: true)
         }
-        registerAppNotificationObservers()
+        appLifecycle.startObserving(windowID: windowID)
         catalogAutoRefresh.start()
         piSubagents.cleanupOrphanedArtifacts()
 
@@ -232,8 +235,8 @@ final class AppViewModel: NSObject {
         }
     }
 
-    deinit {
-        NotificationCenter.default.removeObserver(self)
+    func shutDownForTermination() {
+        shutdown(recordTranscript: false)
     }
 
     private func shutdown(recordTranscript: Bool) {
@@ -729,55 +732,6 @@ final class AppViewModel: NSObject {
 
     func togglePiAgentSessionPinned(_ id: UUID) {
         piAgentSessionStore.togglePinned(id)
-    }
-
-    private func registerAppNotificationObservers() {
-        let center = NotificationCenter.default
-        center.addObserver(self, selector: #selector(handlePiAgentNotificationResponse(_:)), name: .piAgentNotificationResponse, object: nil)
-        center.addObserver(self, selector: #selector(handleAppDidBecomeActiveNotification(_:)), name: NSApplication.didBecomeActiveNotification, object: nil)
-        center.addObserver(self, selector: #selector(handleAppWillResignActiveNotification(_:)), name: NSApplication.willResignActiveNotification, object: nil)
-        center.addObserver(self, selector: #selector(handleAppWillTerminateNotification(_:)), name: NSApplication.willTerminateNotification, object: nil)
-    }
-
-    @objc private func handlePiAgentNotificationResponse(_ notification: Notification) {
-        guard let rawSessionID = notification.userInfo?["sessionID"] as? String,
-              let sessionID = UUID(uuidString: rawSessionID) else { return }
-        if let rawWindowID = notification.userInfo?["windowID"] as? String,
-           let notificationWindowID = UUID(uuidString: rawWindowID),
-           notificationWindowID != windowID {
-            return
-        }
-
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            self.selectPiAgentSession(sessionID)
-            NSApp.activate(ignoringOtherApps: true)
-            NSApp.mainWindow?.makeKeyAndOrderFront(nil)
-        }
-    }
-
-    @objc private func handleAppDidBecomeActiveNotification(_ notification: Notification) {
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            // Re-sample Foundation Model availability — it may have changed
-            // (model finished downloading) while the app was inactive.
-            self.rebuildAutomationModelCaches()
-            self.catalogAutoRefresh.start()
-            self.catalogAutoRefresh.refreshIfWatchedFilesChanged()
-            self.acknowledgeVisibleSelectedPiAgentSession()
-            if self.selectedSidebarItem == .agent && self.shouldShowPiAgentGitActions {
-                self.prepareRepoChangesForSelectedPiAgentSession()
-            }
-        }
-    }
-
-    @objc private func handleAppWillResignActiveNotification(_ notification: Notification) {
-        catalogAutoRefresh.stop(cancelPendingScan: true)
-    }
-
-    @objc private func handleAppWillTerminateNotification(_ notification: Notification) {
-        shutdown(recordTranscript: false)
-        piAgentSessionStore.flushPendingSave()
     }
 
     func setSubagentsEnabledForSelectedSession(_ isEnabled: Bool) {
