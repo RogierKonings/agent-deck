@@ -151,6 +151,7 @@ final class AppViewModel: NSObject {
     let piWorkspace: PiAgentWorkspaceState
     let piGitShip: PiAgentGitShipCoordinator
     let piSessions: PiAgentSessionLifecycleCoordinator
+    let piRunner: PiAgentRunnerCoordinator
     let agentMemoryStore = AgentMemoryStore()
     let agentImageStore = AgentImageStore()
     let skillRepositorySyncService: SkillRepositorySyncService
@@ -174,8 +175,7 @@ final class AppViewModel: NSObject {
     private var releaseNotesGenerator: ReleaseNotesGenerationService { environment.releaseNotesGenerator }
     private var subagentWorktreeService: PiSubagentWorktreeService { environment.subagentWorktreeService }
     private var sessionWorktreeService: PiAgentSessionWorktreeService { environment.sessionWorktreeService }
-    @ObservationIgnored lazy var piAgentRunner = PiAgentRunnerService(store: piAgentSessionStore)
-    @ObservationIgnored private lazy var nativeSubagentRunner = PiSubagentRunService(store: piAgentSessionStore)
+    @ObservationIgnored lazy var nativeSubagentRunner = PiSubagentRunService(store: piAgentSessionStore)
     /// Memoizes `selectableAgentUniverse(forProjectPath:)` so the subagent
     /// picker (and `catalogAgents(for:)` / `sessionHasSelectableAgents`) read
     /// a precomputed list instead of rebuilding it on every body evaluation.
@@ -222,11 +222,17 @@ final class AppViewModel: NSObject {
             sessionStore: sessionStore,
             sessionWorktreeService: environment.sessionWorktreeService
         )
+        piRunner = PiAgentRunnerCoordinator(
+            sessionStore: sessionStore,
+            workspace: piWorkspace,
+            titleGenerator: environment.piSessionTitleGenerator
+        )
         super.init()
         projects.host = self
         githubWorkspace.host = self
         piGitShip.host = self
         piSessions.host = self
+        piRunner.attach(host: self)
 
         appSettings = appSettingsController.settings
         ThemeManager.shared.apply(appSettingsController.resolvedActiveTheme)
@@ -253,70 +259,6 @@ final class AppViewModel: NSObject {
             try? await Task.sleep(nanoseconds: 500_000_000)
             guard let self, !self.didShutdown else { return }
             self.refresh(includeModels: false, scanAllProjects: true, silentlyReconcile: true)
-        }
-        piAgentRunner.onTurnFinished = { [weak self] sessionID in
-            Task { @MainActor in self?.piSessions.handleTurnFinished(sessionID) }
-        }
-        piAgentRunner.onManagedSubagentRequest = { [weak self] sessionID, request, completion in
-            Task { @MainActor in
-                await self?.runManagedNativeSubagent(parentSessionID: sessionID, request: request, completion: completion)
-            }
-        }
-        piAgentRunner.onManagedParallelRequest = { [weak self] sessionID, request, completion in
-            Task { @MainActor in
-                await self?.runManagedNativeParallel(parentSessionID: sessionID, request: request, completion: completion)
-            }
-        }
-        piAgentRunner.onSupervisorRequestsList = { [weak self] sessionID in
-            self?.pendingSupervisorRequestsJSON(parentSessionID: sessionID) ?? "[]"
-        }
-        piAgentRunner.onSupervisorRequestAnswer = { [weak self] sessionID, requestID, response in
-            self?.answerSupervisorRequestFromParentAgent(parentSessionID: sessionID, requestID: requestID, response: response) ?? "\(AppBrand.displayName) could not route the supervisor response."
-        }
-        piAgentRunner.onSessionPlanSet = { [weak self] sessionID, request in
-            self?.setSessionPlanFromParentAgent(sessionID: sessionID, request: request) ?? "\(AppBrand.displayName) could not update the session plan."
-        }
-        piAgentRunner.onSessionPlanUpdate = { [weak self] sessionID, request in
-            self?.updateSessionPlanFromParentAgent(sessionID: sessionID, request: request) ?? "\(AppBrand.displayName) could not update the session plan."
-        }
-        piAgentRunner.nativeSubagentCatalogProvider = { [weak self] session in
-            self?.nativeSubagentCatalogPrompt(for: session)
-        }
-        piAgentRunner.parentSkillArgumentsProvider = { [weak self] projectURL in
-            try self?.parentSkillArguments(for: projectURL) ?? []
-        }
-        piAgentRunner.parentPromptTemplateArgumentsProvider = { [weak self] projectURL in
-            try self?.parentPromptTemplateArguments(for: projectURL) ?? []
-        }
-        piAgentRunner.parentMemoryAppendPromptsProvider = { [weak self] session, initialPrompt in
-            await self?.parentMemoryAppendPrompts(for: session, initialPrompt: initialPrompt) ?? []
-        }
-        piAgentRunner.boundAgentProvider = { [weak self] session in
-            self?.boundAgent(for: session)
-        }
-        piAgentRunner.boundAgentSkillArgumentsProvider = { [weak self] agent in
-            try self?.boundAgentSkillArguments(for: agent) ?? []
-        }
-        piAgentRunner.onMemoryWrite = { [weak self] sessionID, request in
-            self?.handleParentMemoryWrite(sessionID: sessionID, request: request) ?? "\(AppBrand.displayName) memory is not available."
-        }
-        piAgentRunner.onMemoryRecall = { [weak self] sessionID, request in
-            await self?.handleParentMemoryRecall(sessionID: sessionID, request: request) ?? "\(AppBrand.displayName) memory is not available."
-        }
-        piAgentRunner.onMemoryReinforce = { [weak self] sessionID, request in
-            self?.handleParentMemoryReinforce(sessionID: sessionID, request: request) ?? "\(AppBrand.displayName) memory is not available."
-        }
-        piAgentRunner.onMemoryUpdate = { [weak self] sessionID, request in
-            self?.handleParentMemoryUpdate(sessionID: sessionID, request: request) ?? "\(AppBrand.displayName) memory is not available."
-        }
-        piAgentRunner.onMemoryDelete = { [weak self] sessionID, request in
-            self?.handleParentMemoryDelete(sessionID: sessionID, request: request) ?? "\(AppBrand.displayName) memory is not available."
-        }
-        piAgentRunner.onMemoryMarkStale = { [weak self] sessionID, request in
-            await self?.handleParentMemoryMarkStale(sessionID: sessionID, request: request) ?? "\(AppBrand.displayName) memory is not available."
-        }
-        piAgentRunner.onMemorySearch = { [weak self] sessionID, request in
-            await self?.handleParentMemorySearch(sessionID: sessionID, request: request) ?? "\(AppBrand.displayName) memory is not available."
         }
         nativeSubagentRunner.childMemoryArgumentsProvider = { [weak self] parentSession, agent, task in
             await self?.childMemoryArguments(for: parentSession, agent: agent, task: task) ?? []
@@ -368,7 +310,7 @@ final class AppViewModel: NSObject {
         artifactCleanupTask = nil
         piSessions.cancelAllPendingNotifications()
         piSessionTitleGenerator.cancelAll()
-        piAgentRunner.stopAll(recordTranscript: recordTranscript)
+        piRunner.stopAll(recordTranscript: recordTranscript)
         nativeSubagentRunner.stopAll(recordTranscript: recordTranscript)
         projectServerService.terminateAll()
         nativeParallelSchedulersByID.removeAll()
@@ -1297,11 +1239,6 @@ final class AppViewModel: NSObject {
         piRuntimeSettingsRevision += 1
     }
 
-    func renamePiAgentSession(_ id: UUID, title: String) {
-        piAgentSessionStore.renameSession(id, title: title)
-        piAgentRunner.syncSessionName(for: id)
-    }
-
     var canOpenSelectedPiAgentSessionInTerminal: Bool {
         guard let session = piAgentSessionStore.selectedSession else { return false }
         if let sessionFile = session.piSessionFile, FileManager.default.fileExists(atPath: sessionFile) { return true }
@@ -1622,13 +1559,6 @@ final class AppViewModel: NSObject {
         piAgentSessionStore.togglePinned(id)
     }
 
-    func resumeSelectedPiAgentSession() {
-        guard let session = piAgentSessionStore.selectedSession else { return }
-        selectedSidebarItem = .agent
-        acknowledgePiAgentSession(session.id)
-        piAgentRunner.resume(session: session)
-    }
-
     func runNativeSubagent(agentName: String, task: String, useWorktreeIsolation: Bool = false, allowDirectProjectWrites: Bool = false, expectedOutcome: PiSubagentExpectedOutcome = .reportOnly, requestedOutputPath: String? = nil, allowOverwrite: Bool = false, readFirstPaths: [String] = []) {
         guard let session = piAgentSessionStore.selectedSession else { return }
         Task { @MainActor [weak self] in
@@ -1643,7 +1573,7 @@ final class AppViewModel: NSObject {
         }
     }
 
-    private func runManagedNativeSubagent(parentSessionID: UUID, request: PiManagedSubagentBridgeRequest, completion: @escaping (String) -> Void) async {
+    func runManagedNativeSubagent(parentSessionID: UUID, request: PiManagedSubagentBridgeRequest, completion: @escaping (String) -> Void) async {
         guard let session = piAgentSessionStore.sessions.first(where: { $0.id == parentSessionID }) else {
             completion("\(AppBrand.displayName) could not find the parent session.")
             return
@@ -1687,7 +1617,7 @@ final class AppViewModel: NSObject {
         }
     }
 
-    private func runManagedNativeParallel(parentSessionID: UUID, request: PiManagedParallelBridgeRequest, completion: @escaping (String) -> Void) async {
+    func runManagedNativeParallel(parentSessionID: UUID, request: PiManagedParallelBridgeRequest, completion: @escaping (String) -> Void) async {
         guard let session = piAgentSessionStore.sessions.first(where: { $0.id == parentSessionID }) else {
             completion("\(AppBrand.displayName) could not find the parent session.")
             return
@@ -1946,7 +1876,7 @@ final class AppViewModel: NSObject {
         return directory
     }
 
-    private func pendingSupervisorRequestsJSON(parentSessionID: UUID) -> String {
+    func pendingSupervisorRequestsJSON(parentSessionID: UUID) -> String {
         let rows = piAgentSessionStore.supervisorRequests(for: parentSessionID)
             .filter { $0.status == .pending }
             .map { request -> [String: String] in
@@ -1963,7 +1893,7 @@ final class AppViewModel: NSObject {
         return text
     }
 
-    private func answerSupervisorRequestFromParentAgent(parentSessionID: UUID, requestID: String, response: String) -> String {
+    func answerSupervisorRequestFromParentAgent(parentSessionID: UUID, requestID: String, response: String) -> String {
         let trimmed = response.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "Supervisor response is empty." }
         guard piAgentSessionStore.supervisorRequests(for: parentSessionID).contains(where: { $0.id == requestID && $0.status == .pending }) else {
@@ -1973,9 +1903,9 @@ final class AppViewModel: NSObject {
         return "Supervisor response sent to child request `\(requestID)`."
     }
 
-    private func setSessionPlanFromParentAgent(sessionID: UUID, request: PiSessionPlanSetBridgeRequest) -> String {
+    func setSessionPlanFromParentAgent(sessionID: UUID, request: PiSessionPlanSetBridgeRequest) -> String {
         let plan = piAgentSessionStore.setSessionPlan(sessionID: sessionID, items: request.items)
-        schedulePiAgentTitleUpdateIfNeeded(sessionID: sessionID, plan: plan)
+        piRunner.scheduleTitleUpdateIfNeeded(sessionID: sessionID, plan: plan)
         let rows = plan.items.map { ["id": $0.id, "title": $0.title, "status": $0.status.rawValue] }
         guard let data = try? JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys]),
               let text = String(data: data, encoding: .utf8) else {
@@ -1984,7 +1914,7 @@ final class AppViewModel: NSObject {
         return "Session plan set (`\(plan.id.uuidString)`). Use these item ids for updates:\n\(text)"
     }
 
-    private func updateSessionPlanFromParentAgent(sessionID: UUID, request: PiSessionPlanUpdateBridgeRequest) -> String {
+    func updateSessionPlanFromParentAgent(sessionID: UUID, request: PiSessionPlanUpdateBridgeRequest) -> String {
         guard let plan = piAgentSessionStore.updateSessionPlan(sessionID: sessionID, updates: request.updates) else {
             return "No current session plan exists. Call set_session_plan first."
         }
@@ -1996,7 +1926,7 @@ final class AppViewModel: NSObject {
         return "Session plan updated (`\(plan.id.uuidString)`):\n\(text)"
     }
 
-    private func nativeSubagentCatalogPrompt(for session: PiAgentSessionRecord) -> String? {
+    func nativeSubagentCatalogPrompt(for session: PiAgentSessionRecord) -> String? {
         let agents = catalogAgents(for: session)
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         guard !agents.isEmpty else { return nil }
@@ -2273,226 +2203,7 @@ final class AppViewModel: NSObject {
         piAgentSessionStore.append(.init(sessionID: session.id, role: .status, title: "Dev Server Restarted", text: "Restarted dev server."))
     }
 
-    func sendPiAgentMessage(_ text: String, mode: PiAgentInputMode, transcriptText: String? = nil, images: [PiAgentImageAttachment] = [], pasteAttachments: [PiAgentPasteAttachment] = [], issueAttachment: PiAgentIssueAttachment? = nil) {
-        guard let session = piAgentSessionStore.selectedSession else { return }
-        let visibleText = (transcriptText ?? text).trimmingCharacters(in: .whitespacesAndNewlines)
-        let effectiveText: String
-        if let issueAttachment {
-            effectiveText = PiIssuePromptBuilder.rpcMessage(
-                userText: text,
-                issue: issueAttachment,
-                projectName: session.projectName,
-                projectPath: session.worktreePath ?? session.projectPath
-            )
-        } else {
-            effectiveText = text
-        }
-        if images.isEmpty, visibleText == "/compact" || visibleText.hasPrefix("/compact ") {
-            let instructions = visibleText.hasPrefix("/compact ") ? String(visibleText.dropFirst("/compact ".count)) : nil
-            piAgentRunner.compact(session: session, customInstructions: instructions)
-            return
-        }
-        schedulePiAgentTitleGenerationIfNeeded(for: session, firstMessage: visibleText.isEmpty ? effectiveText.trimmingCharacters(in: .whitespacesAndNewlines) : visibleText)
-        if !piAgentRunner.isRunning(sessionID: session.id), mode == .prompt {
-            piAgentRunner.resume(session: session, initialPrompt: effectiveText, transcriptText: transcriptText, images: images, pasteAttachments: pasteAttachments, issueAttachment: issueAttachment)
-            return
-        }
-        piAgentRunner.send(effectiveText, mode: mode, to: session.id, transcriptText: transcriptText, images: images, pasteAttachments: pasteAttachments, issueAttachment: issueAttachment)
-    }
-
-    private func schedulePiAgentTitleUpdateIfNeeded(sessionID: UUID, plan: PiSessionPlanRecord) {
-        guard appSettings.autoGeneratePiAgentSessionTitles,
-              appSettings.autoUpdatePiAgentSessionTitles,
-              !plan.items.isEmpty,
-              !piWorkspace.isTitleGenerating(for: sessionID),
-              let session = piAgentSessionStore.sessions.first(where: { $0.id == sessionID }),
-              !session.title.hasPrefix("Draft ·"),
-              !session.isTitleUserEdited,
-              let latestUserMessage = piAgentSessionStore.transcript(for: sessionID)
-                .filter({ $0.role == .user })
-                .max(by: { $0.timestamp < $1.timestamp })?
-                .text
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-              !latestUserMessage.isEmpty,
-              let model = piAgentTitleGenerationModel() else { return }
-
-        piWorkspace.markTitleGenerating(sessionID)
-        let projectURL = URL(fileURLWithPath: session.worktreePath ?? session.projectPath)
-        let environment = EnvRuntimeEnvironment().environment(projectRoot: projectURL)
-        piSessionTitleGenerator.updateTitle(
-            currentTitle: session.title,
-            latestUserMessage: latestUserMessage,
-            planItems: plan.items,
-            model: model,
-            projectURL: projectURL,
-            environment: environment
-        ) { [weak self] result in
-            guard let self else { return }
-            self.piWorkspace.unmarkTitleGenerating(sessionID)
-            guard case let .success(title) = result,
-                  title.caseInsensitiveCompare("KEEP") != .orderedSame else { return }
-            guard let current = self.piAgentSessionStore.sessions.first(where: { $0.id == sessionID }),
-                  !current.title.hasPrefix("Draft ·"),
-                  !current.isTitleUserEdited,
-                  current.title.caseInsensitiveCompare(title) != .orderedSame else { return }
-            withAnimation(.snappy(duration: 0.26)) {
-                self.piAgentSessionStore.applyGeneratedTitle(sessionID, title: title)
-            }
-            self.piAgentRunner.syncSessionName(for: sessionID, force: true)
-        }
-    }
-
-    private func schedulePiAgentTitleGenerationIfNeeded(for session: PiAgentSessionRecord, firstMessage: String) {
-        let trimmedMessage = firstMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard appSettings.autoGeneratePiAgentSessionTitles,
-              !trimmedMessage.isEmpty,
-              session.title.hasPrefix("Draft ·"),
-              !session.isTitleUserEdited,
-              !piWorkspace.isTitleGenerating(for: session.id),
-              piAgentSessionStore.transcript(for: session.id).filter({ $0.role == .user }).isEmpty,
-              let model = piAgentTitleGenerationModel() else { return }
-
-        piWorkspace.markTitleGenerating(session.id)
-        let projectURL = URL(fileURLWithPath: session.worktreePath ?? session.projectPath)
-        let environment = EnvRuntimeEnvironment().environment(projectRoot: projectURL)
-        piSessionTitleGenerator.generateTitle(
-            for: trimmedMessage,
-            model: model,
-            projectURL: projectURL,
-            environment: environment
-        ) { [weak self] result in
-            guard let self else { return }
-            self.piWorkspace.unmarkTitleGenerating(session.id)
-            guard case let .success(title) = result else { return }
-            guard let current = self.piAgentSessionStore.sessions.first(where: { $0.id == session.id }),
-                  current.title.hasPrefix("Draft ·"),
-                  !current.isTitleUserEdited else { return }
-            withAnimation(.snappy(duration: 0.26)) {
-                self.piAgentSessionStore.applyGeneratedTitle(session.id, title: title)
-            }
-            self.piAgentRunner.syncSessionName(for: session.id, force: true)
-        }
-    }
-
-    func compactSelectedPiAgentSession(customInstructions: String? = nil) {
-        guard let session = piAgentSessionStore.selectedSession else { return }
-        piAgentRunner.compact(session: session, customInstructions: customInstructions)
-    }
-
-    /// Forks the Pi Agent session containing `entry` from that user message via
-    /// Pi's native /fork RPC. The user-message index is computed locally and
-    /// passed to the runner as a sanity check against Pi's get_fork_messages
-    /// reply. Only user-role entries are forkable — the UI gates this — but
-    /// guard here anyway so non-UI callers can't misuse it.
-    func forkPiAgentSession(from entry: PiAgentTranscriptEntry) {
-        guard entry.role == .user else { return }
-        let transcript = piAgentSessionStore.transcript(for: entry.sessionID)
-        let userEntries = transcript.filter { $0.role == .user }
-        guard let index = userEntries.firstIndex(where: { $0.id == entry.id }) else { return }
-        piAgentRunner.fork(
-            sessionID: entry.sessionID,
-            userMessageText: entry.text,
-            userMessageIndex: index
-        )
-    }
-
-    /// Forks the conversation into a fresh 1:1 agent chat. Mirrors the normal
-    /// fork UX: the new session shows a fork-origin recap card, seeds the
-    /// composer with the forked user-message text, and waits for the user to
-    /// review/edit before sending. Unlike `forkPiAgentSession`, this does NOT
-    /// use Pi's /fork RPC — the agent's system prompt is incompatible with
-    /// the parent's, so transcript replay would be misleading.
-    func forkPiAgentSessionAsAgentChat(from entry: PiAgentTranscriptEntry, agent: EffectiveAgentRecord) {
-        guard entry.role == .user else { return }
-        guard agent.resolved.disabled != true else {
-            piAgentRunnerSurfaceError(message: "Agent '\(agent.name)' is disabled.")
-            return
-        }
-        guard let parent = piAgentSessionStore.sessions.first(where: { $0.id == entry.sessionID }) else { return }
-        selectedSidebarItem = .agent
-        ensurePiAgentModelCatalogLoaded()
-        _ = piAgentSessionStore.forkSessionAsAgentChat(
-            from: parent,
-            agent: agent,
-            composerSeed: entry.text
-        )
-    }
-
-    func refreshPiAgentControlsForSelectedSession() {
-        refreshAvailableModels()
-        guard let sessionID = piAgentSessionStore.selectedSession?.id else { return }
-        piAgentRunner.refreshPiControls(sessionID: sessionID)
-    }
-
-    func setPiAgentModelForSelectedSession(provider: String?, modelID: String?) {
-        guard let session = piAgentSessionStore.selectedSession else { return }
-        piAgentRunner.setModel(sessionID: session.id, provider: provider, modelID: modelID)
-        if let currentLevel = session.thinkingLevel {
-            let fallback = defaultPiAgentModel()
-            let levels = supportedPiAgentThinkingLevels(session: session, provider: provider ?? session.modelProvider ?? fallback?.provider, modelID: modelID ?? session.model ?? fallback?.model)
-            if !levels.contains(currentLevel == "none" ? "off" : currentLevel) {
-                piAgentRunner.setThinkingLevel(sessionID: session.id, level: levels.first ?? "off")
-            }
-        }
-    }
-
-    func cyclePiAgentModelForSelectedSession() {
-        guard let session = piAgentSessionStore.selectedSession else { return }
-        let options = piAgentModelOptions()
-        guard !options.isEmpty else { return }
-        let fallback = defaultPiAgentModel()
-        let currentProvider = session.modelOverrideProvider ?? session.modelProvider ?? fallback?.provider
-        let currentModel = session.modelOverrideID ?? session.model ?? fallback?.model
-        let currentIndex = options.firstIndex { $0.provider == currentProvider && $0.id == currentModel } ?? -1
-        let next = options[(currentIndex + 1 + options.count) % options.count]
-        setPiAgentModelForSelectedSession(provider: next.provider, modelID: next.id)
-    }
-
-    func setPiAgentThinkingLevelForSelectedSession(_ level: String) {
-        guard let session = piAgentSessionStore.selectedSession else { return }
-        let normalized = level == "none" ? "off" : level
-        let fallback = defaultPiAgentModel()
-        let levels = supportedPiAgentThinkingLevels(session: session, provider: session.modelOverrideProvider ?? session.modelProvider ?? fallback?.provider, modelID: session.modelOverrideID ?? session.model ?? fallback?.model)
-        guard levels.contains(normalized) else {
-            piAgentSessionStore.updateSession(session.id) { record in
-                record.lastError = "Thinking level '\(level)' is not available for the selected model."
-            }
-            return
-        }
-        piAgentRunner.setThinkingLevel(sessionID: session.id, level: normalized)
-    }
-
-    func defaultPiAgentModel() -> AvailableModel? {
-        _ = piRuntimeSettingsRevision
-        let defaults = readPiRuntimeDefaults()
-        let provider = defaults.provider
-        let model = defaults.model
-        let candidateModels = enabledAvailableModels
-        if let provider, let model {
-            return candidateModels.first { $0.provider == provider && $0.model == model }
-                ?? candidateModels.first { $0.model == model }
-                ?? candidateModels.first
-        }
-        if let model {
-            return candidateModels.first { $0.identifier == model || $0.model == model } ?? candidateModels.first
-        }
-        return candidateModels.first
-    }
-
-    func defaultPiAgentThinkingLevel(for levels: [String]) -> String {
-        _ = piRuntimeSettingsRevision
-        let normalized = readPiRuntimeDefaults().thinkingLevel ?? "medium"
-        if levels.contains(normalized) { return normalized }
-        if levels.contains("medium") { return "medium" }
-        return levels.first ?? "off"
-    }
-
-    func piRuntimeDefaultThinkingLevel() -> String {
-        _ = piRuntimeSettingsRevision
-        return readPiRuntimeDefaults().thinkingLevel ?? "medium"
-    }
-
-    private func readPiRuntimeDefaults() -> (provider: String?, model: String?, thinkingLevel: String?) {
+    func readPiRuntimeDefaults() -> (provider: String?, model: String?, thinkingLevel: String?) {
         guard let object = piRuntimeSettingsObject() else { return (nil, nil, nil) }
         let provider = nonEmptyPiSetting(object["defaultProvider"])
         var model = nonEmptyPiSetting(object["defaultModel"])
@@ -2577,60 +2288,6 @@ final class AppViewModel: NSObject {
         guard let string = value as? String else { return nil }
         let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private func piAgentModelOptions() -> [PiAgentModelOption] {
-        return enabledAvailableModels
-            .filter { !appSettings.disabledModelIdentifiers.contains($0.identifier) }
-            .map { model in
-                PiAgentModelOption(
-                    provider: model.provider,
-                    id: model.model,
-                    name: nil,
-                    contextWindow: Int(model.contextWindow),
-                    maxOutput: Int(model.maxOutput),
-                    supportsThinking: model.supportsThinking,
-                    supportedThinkingLevels: model.supportedThinkingLevels,
-                    supportsImages: model.supportsImages
-                )
-            }
-    }
-
-    private func supportedPiAgentThinkingLevels(session: PiAgentSessionRecord, provider: String?, modelID: String?) -> [String] {
-        if let provider, let modelID {
-            if let cached = enabledAvailableModels.first(where: { $0.provider == provider && $0.model == modelID }) {
-                if !cached.supportedThinkingLevels.isEmpty { return cached.supportedThinkingLevels }
-                return cached.supportsThinking ? [] : ["off"]
-            }
-        }
-        return []
-    }
-
-    func cyclePiAgentThinkingLevelForSelectedSession() {
-        guard let session = piAgentSessionStore.selectedSession else { return }
-        let fallback = defaultPiAgentModel()
-        let levels = supportedPiAgentThinkingLevels(session: session, provider: session.modelOverrideProvider ?? session.modelProvider ?? fallback?.provider, modelID: session.modelOverrideID ?? session.model ?? fallback?.model)
-        guard !levels.isEmpty else { return }
-        let current = (session.thinkingLevel ?? defaultPiAgentThinkingLevel(for: levels)) == "none" ? "off" : (session.thinkingLevel ?? defaultPiAgentThinkingLevel(for: levels))
-        let currentIndex = levels.firstIndex(of: current) ?? -1
-        let next = levels[(currentIndex + 1 + levels.count) % levels.count]
-        piAgentRunner.setThinkingLevel(sessionID: session.id, level: next)
-    }
-
-    func respondToPiAgentUIRequest(_ request: PiAgentUIRequest, value: String) {
-        piAgentRunner.respondToExtensionUI(sessionID: request.sessionID, requestID: request.id, value: value)
-    }
-
-    func respondToPiAgentFreeformUIRequest(_ request: PiAgentUIRequest, sentinel: String, value: String) {
-        piAgentRunner.respondToFreeformExtensionUI(sessionID: request.sessionID, requestID: request.id, sentinel: sentinel, value: value)
-    }
-
-    func confirmPiAgentUIRequest(_ request: PiAgentUIRequest, confirmed: Bool) {
-        piAgentRunner.confirmExtensionUI(sessionID: request.sessionID, requestID: request.id, confirmed: confirmed)
-    }
-
-    func cancelPiAgentUIRequest(_ request: PiAgentUIRequest) {
-        piAgentRunner.cancelExtensionUI(sessionID: request.sessionID, requestID: request.id)
     }
 
     var gitHubBoardCacheLifetimeMinutes: Int {
@@ -3131,7 +2788,7 @@ final class AppViewModel: NSObject {
     /// not the system prompt, so the block must still be re-supplied on resume; it
     /// just has to be the original bytes, which also keeps the system prompt stable
     /// across the conversation.
-    private func parentMemoryAppendPrompts(for session: PiAgentSessionRecord, initialPrompt: String?) async -> [String] {
+    func parentMemoryAppendPrompts(for session: PiAgentSessionRecord, initialPrompt: String?) async -> [String] {
         guard appSettings.agentMemoryEnabled else { return [] }
         // Read the live record: the passed `session` may be a stale snapshot from the
         // launch caller, and the recall gate must reflect what's actually persisted.
@@ -3196,7 +2853,7 @@ final class AppViewModel: NSObject {
         """
     }
 
-    private func handleParentMemoryWrite(sessionID: UUID, request: AgentMemoryWriteBridgeRequest) -> String {
+    func handleParentMemoryWrite(sessionID: UUID, request: AgentMemoryWriteBridgeRequest) -> String {
         guard appSettings.agentMemoryEnabled else { return "\(AppBrand.displayName) memory is disabled." }
         let session = piAgentSessionStore.sessions.first(where: { $0.id == sessionID })
         return createAutomaticMemory(request, sourceSessionID: sessionID, sourceRunID: nil, sourceAgentName: nil, fallbackProjectPath: session?.projectPath)
@@ -3208,7 +2865,7 @@ final class AppViewModel: NSObject {
         return createAutomaticMemory(request, sourceSessionID: parentSessionID, sourceRunID: runID, sourceAgentName: agentName, fallbackProjectPath: session?.projectPath)
     }
 
-    private func handleParentMemoryRecall(sessionID: UUID, request: AgentMemoryRecallBridgeRequest) async -> String {
+    func handleParentMemoryRecall(sessionID: UUID, request: AgentMemoryRecallBridgeRequest) async -> String {
         guard appSettings.agentMemoryEnabled else { return "\(AppBrand.displayName) memory is disabled." }
         let session = piAgentSessionStore.sessions.first(where: { $0.id == sessionID })
         return await recallMemories(request, cardSessionID: sessionID, snapshotSessionID: sessionID, projectPath: session?.projectPath)
@@ -3220,7 +2877,7 @@ final class AppViewModel: NSObject {
         return await recallMemories(request, cardSessionID: parentSessionID, snapshotSessionID: nil, projectPath: session?.projectPath)
     }
 
-    private func handleParentMemoryReinforce(sessionID: UUID, request: AgentMemoryReinforceBridgeRequest) -> String { reinforceMemory(request, sessionID: sessionID) }
+    func handleParentMemoryReinforce(sessionID: UUID, request: AgentMemoryReinforceBridgeRequest) -> String { reinforceMemory(request, sessionID: sessionID) }
 
     private func handleSubagentMemoryReinforce(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryReinforceBridgeRequest) -> String { reinforceMemory(request, sessionID: parentSessionID) }
 
@@ -3232,7 +2889,7 @@ final class AppViewModel: NSObject {
         } catch { return error.localizedDescription }
     }
 
-    private func handleParentMemoryUpdate(sessionID: UUID, request: AgentMemoryUpdateBridgeRequest) -> String { updateMemory(request, sessionID: sessionID) }
+    func handleParentMemoryUpdate(sessionID: UUID, request: AgentMemoryUpdateBridgeRequest) -> String { updateMemory(request, sessionID: sessionID) }
 
     private func handleSubagentMemoryUpdate(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryUpdateBridgeRequest) -> String { updateMemory(request, sessionID: parentSessionID) }
 
@@ -3248,7 +2905,7 @@ final class AppViewModel: NSObject {
         } catch { return error.localizedDescription }
     }
 
-    private func handleParentMemoryDelete(sessionID: UUID, request: AgentMemoryDeleteBridgeRequest) -> String { deleteMemory(request, sessionID: sessionID) }
+    func handleParentMemoryDelete(sessionID: UUID, request: AgentMemoryDeleteBridgeRequest) -> String { deleteMemory(request, sessionID: sessionID) }
 
     private func handleSubagentMemoryDelete(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryDeleteBridgeRequest) -> String { deleteMemory(request, sessionID: parentSessionID) }
 
@@ -3290,7 +2947,7 @@ final class AppViewModel: NSObject {
         }
     }
 
-    private func handleParentMemoryMarkStale(sessionID: UUID, request: AgentMemoryStaleBridgeRequest) async -> String {
+    func handleParentMemoryMarkStale(sessionID: UUID, request: AgentMemoryStaleBridgeRequest) async -> String {
         guard appSettings.agentMemoryEnabled else { return "\(AppBrand.displayName) memory is disabled." }
         let session = piAgentSessionStore.sessions.first(where: { $0.id == sessionID })
         return await markStaleMemories(request, sourceSessionID: sessionID, fallbackProjectPath: session?.projectPath)
@@ -3324,7 +2981,7 @@ final class AppViewModel: NSObject {
         return "Marked \(uniqueRecords.count) Agent Deck memor\(uniqueRecords.count == 1 ? "y" : "ies") stale."
     }
 
-    private func handleParentMemorySearch(sessionID: UUID, request: AgentMemorySearchBridgeRequest) async -> String {
+    func handleParentMemorySearch(sessionID: UUID, request: AgentMemorySearchBridgeRequest) async -> String {
         guard appSettings.agentMemoryEnabled else { return "\(AppBrand.displayName) memory is disabled." }
         let session = piAgentSessionStore.sessions.first(where: { $0.id == sessionID })
         return await searchMemories(request, cardSessionID: sessionID, snapshotSessionID: sessionID, projectPath: session?.projectPath)
@@ -3653,37 +3310,7 @@ final class AppViewModel: NSObject {
         return try PiSkillLaunchResolver.childSkillArguments(agent: agent, snapshot: snap)
     }
 
-    /// Popover entry point: build the session and launch Pi. Switches the
-    /// sidebar to the agent screen so the new session is visible.
-    func startAgentSession(agent: EffectiveAgentRecord, project: DiscoveredProject, initialInstruction: String?) {
-        guard agent.resolved.disabled != true else {
-            piAgentRunnerSurfaceError(message: "Agent '\(agent.name)' is disabled.")
-            return
-        }
-        selectedSidebarItem = .agent
-        ensurePiAgentModelCatalogLoaded()
-        piAgentRunner.startAgentSession(agent: agent, project: project, initialInstruction: initialInstruction)
-    }
-
-    /// Mutates a session's `agentName` and reruns it. Used by the "Switch
-    /// agent…" affordance shown in the transcript header when the original
-    /// agent disappears.
-    func rebindAgent(sessionID: UUID, to agent: EffectiveAgentRecord) {
-        guard let existing = piAgentSessionStore.sessions.first(where: { $0.id == sessionID }) else { return }
-        guard existing.kind == .agent else { return }
-        piAgentSessionStore.updateSession(sessionID) { record in
-            record.agentName = agent.name
-            record.title = "Chat · \(agent.name)"
-            record.lastError = nil
-            record.status = .draft
-        }
-        guard let refreshed = piAgentSessionStore.sessions.first(where: { $0.id == sessionID }) else { return }
-        piAgentRunner.resume(session: refreshed)
-    }
-
-    private func piAgentRunnerSurfaceError(message: String) {
-        // The agent-chat start path has no transcript yet; route the message
-        // through the existing GitHub-style banner so the user sees it.
+    func piAgentRunnerSurfaceError(message: String) {
         github.githubLastError = message
     }
 
@@ -5492,13 +5119,13 @@ final class AppViewModel: NSObject {
         )
     }
 
-    private func parentSkillArguments(for projectURL: URL) throws -> [String] {
+    func parentSkillArguments(for projectURL: URL) throws -> [String] {
         let projectPath = projectURL.standardizedFileURL.path
         let names = Array(appSettings.defaultSkillNames.union(projectPreference(for: projectPath).assignedSkillNames))
         return try PiSkillLaunchResolver.skillArguments(for: names, catalog: skillCatalog(forProjectPath: projectPath))
     }
 
-    private func parentPromptTemplateArguments(for projectURL: URL) throws -> [String] {
+    func parentPromptTemplateArguments(for projectURL: URL) throws -> [String] {
         let projectPath = projectURL.standardizedFileURL.path
         let names = Array(appSettings.defaultPromptTemplateNames.union(projectPreference(for: projectPath).assignedPromptTemplateNames))
         return try PiPromptTemplateLaunchResolver.promptTemplateArguments(for: names, catalog: promptTemplateCatalog(forProjectPath: projectPath))

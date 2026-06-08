@@ -47,27 +47,27 @@ extension AppViewModel: PiAgentSessionLifecycleHost {
     }
 
     func rehydrateTranscript(session: PiAgentSessionRecord) {
-        piAgentRunner.rehydrateTranscriptFromSessionFileIfNeeded(session)
+        piRunner.rehydrateTranscript(session: session)
     }
 
     func stopRunningSession(_ sessionID: UUID, recordTranscript: Bool) {
-        piAgentRunner.stop(sessionID: sessionID, recordTranscript: recordTranscript)
+        piRunner.stop(sessionID: sessionID, recordTranscript: recordTranscript)
     }
 
     func isRunning(_ sessionID: UUID) -> Bool {
-        piAgentRunner.isRunning(sessionID: sessionID)
+        piRunner.isRunning(sessionID: sessionID)
     }
 
     func startProjectSession(project: DiscoveredProject, initialInstruction: String) {
-        piAgentRunner.startProjectSession(project: project, initialInstruction: initialInstruction)
+        piRunner.startProjectSession(project: project, initialInstruction: initialInstruction)
     }
 
     func resumeSession(_ session: PiAgentSessionRecord, initialPrompt: String) {
-        piAgentRunner.resume(session: session, initialPrompt: initialPrompt)
+        piRunner.resume(session: session, initialPrompt: initialPrompt)
     }
 
     func configureIdleParking(timeout: TimeInterval?) {
-        piAgentRunner.configureIdleParking(timeout: timeout)
+        piRunner.configureIdleParking(timeout: timeout)
     }
 
     var sessionsUseWorktree: Bool { appSettings.piAgentSessionsUseWorktree }
