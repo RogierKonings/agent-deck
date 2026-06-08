@@ -138,7 +138,9 @@ struct MemoryScreen: View {
             }
             .labelsHidden()
             .frame(width: 150)
-            Toggle("History", isOn: $includeSuperseded).toggleStyle(.switch)
+            Toggle("Show Superseded", isOn: $includeSuperseded)
+                .toggleStyle(.switch)
+                .help("Show memories that have been superseded by newer entries")
             Button {
                 startDream()
             } label: {
@@ -146,8 +148,6 @@ struct MemoryScreen: View {
             }
             .appSecondaryButton()
             .help("Analyze memory and propose mutations")
-            Button("Clear") { searchText = ""; selectedKind = nil; selectedScope = nil; includeSuperseded = false; sort = .newest }
-                .appSecondaryButton()
         }
     }
 
