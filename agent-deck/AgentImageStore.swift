@@ -1,11 +1,12 @@
 import AppKit
-import Combine
 import Foundation
 import ImageIO
+import Observation
 
 @MainActor
-final class AgentImageStore: ObservableObject {
-    @Published private(set) var assignments: [String: String] = [:]
+@Observable
+final class AgentImageStore {
+    private(set) var assignments: [String: String] = [:]
 
     private let fileManager: FileManager
     private let assignmentsURL: URL
@@ -19,7 +20,7 @@ final class AgentImageStore: ObservableObject {
         self.assignmentsURL = root.appendingPathComponent("agent-image-assignments.json")
         // Async load so AppViewModel.init returns immediately. Views see an
         // empty `assignments` for one frame, then the avatar mappings animate
-        // in via @Published. Same pattern as AgentMemoryStore (audit-02 P0-1)
+        // in via @Observable. Same pattern as AgentMemoryStore (audit-02 P0-1)
         // and PiAgentSessionStore (audit-02 P0-2).
         let url = self.assignmentsURL
         Task { @MainActor [weak self] in

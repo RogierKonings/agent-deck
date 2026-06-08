@@ -1,5 +1,5 @@
-import Combine
 import Foundation
+import Observation
 
 enum AgentMemoryError: LocalizedError {
     case secretDetected(String)
@@ -37,11 +37,12 @@ enum AgentMemorySupersessionChange: Equatable {
 }
 
 @MainActor
-final class AgentMemoryStore: ObservableObject {
-    @Published private(set) var records: [AgentMemoryRecord] = []
-    @Published private(set) var lastError: String?
-    @Published private(set) var revision: Int = 0
-    @Published private(set) var isLoading: Bool = false
+@Observable
+final class AgentMemoryStore {
+    private(set) var records: [AgentMemoryRecord] = []
+    private(set) var lastError: String?
+    private(set) var revision: Int = 0
+    private(set) var isLoading: Bool = false
 
     private let fileManager: FileManager
     private let databaseURL: URL

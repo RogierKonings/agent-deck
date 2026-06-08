@@ -1543,7 +1543,7 @@ private struct PiSystemInstructionsInfoPopover: View {
 private struct ProjectAgentsRecapSheet: View {
     let project: DiscoveredProject
     let recap: ProjectAgentRecap
-    @ObservedObject var imageStore: AgentImageStore
+    var imageStore: AgentImageStore
 
     @Environment(\.dismiss) private var dismiss
 

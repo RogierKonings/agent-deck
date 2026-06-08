@@ -5,60 +5,7 @@ import QuartzCore
 import SwiftUI
 import UniformTypeIdentifiers
 
-
-let piAgentLeakedToolNames: Set<String> = ["bash", "read", "edit", "write", "find", "grep", "subagent", "web_search", "fetch_content", "get_search_content", "web_fetch"]
-
-@MainActor
-enum PiAgentRPCEventRenderCache {
-    private static var cache: [String: PiAgentRPCEvent] = [:]
-    private static var order: [String] = []
-    private static let limit = 512
-
-    static func event(from rawJSON: String?) -> PiAgentRPCEvent? {
-        guard let rawJSON else { return nil }
-        let key = cacheKey(for: rawJSON)
-        if let cached = cache[key] { return cached }
-        guard let data = rawJSON.data(using: .utf8),
-              let event = try? JSONDecoder().decode(PiAgentRPCEvent.self, from: data) else {
-            return nil
-        }
-        cache[key] = event
-        order.append(key)
-        if order.count > limit {
-            let overflow = order.count - limit
-            for oldKey in order.prefix(overflow) {
-                cache[oldKey] = nil
-            }
-            order.removeFirst(overflow)
-        }
-        return event
-    }
-
-    private static func cacheKey(for rawJSON: String) -> String {
-        var hasher = Hasher()
-        hasher.combine(rawJSON)
-        return "\(rawJSON.count):\(hasher.finalize())"
-    }
-}
-
-struct PiAgentTranscriptStack<Content: View>: View {
-    let alignment: HorizontalAlignment
-    let spacing: CGFloat?
-    @ViewBuilder let content: () -> Content
-
-    init(alignment: HorizontalAlignment = .leading, spacing: CGFloat? = nil, @ViewBuilder content: @escaping () -> Content) {
-        self.alignment = alignment
-        self.spacing = spacing
-        self.content = content
-    }
-
-    var body: some View {
-        LazyVStack(alignment: alignment, spacing: spacing) {
-            content()
-        }
-        .scrollTargetLayout()
-    }
-}
+// MARK: - Transcript render cache
 
 @MainActor
 final class PiAgentTranscriptRenderCache: ObservableObject {
@@ -318,6 +265,8 @@ private extension PiAgentTranscriptEntry {
     }
 }
 
+// MARK: - Transcript timeline (SwiftUI fallback)
+
 private struct PiAgentTranscriptTimelineItem: Identifiable {
     enum Kind {
         case thread(PiAgentTranscriptThread)
@@ -340,6 +289,8 @@ private struct PiAgentTranscriptTimelineSnapshot {
 /// How a transcript row is rendered. Every row is now fully native AppKit (no
 /// per-row SwiftUI / `NSHostingView`); the spec knows how to build/configure/
 /// measure the concrete view.
+// MARK: - AppKit transcript cell kinds
+
 enum PiAgentTranscriptCellKind {
     case native(NativeRowSpec)
 }
@@ -388,8 +339,8 @@ private struct PiAgentAppKitTranscriptItem {
 }
 
 #if DEBUG
-/// Visual gallery for the production transcript renderer. Every row below uses
-/// the same native row class and payload path as the live Pi Agent transcript.
+// MARK: - Transcript debug gallery
+
 struct TranscriptDebugScreen: View {
     private let sessionID = UUID()
 
@@ -2504,6 +2455,8 @@ private struct SessionListContent: View, Equatable {
         }
     }
 }
+
+// MARK: - Pi Agent session screen
 
 struct PiAgentScreen: View {
     var viewModel: AppViewModel

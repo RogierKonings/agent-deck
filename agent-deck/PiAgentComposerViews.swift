@@ -1796,12 +1796,13 @@ private struct PiAgentContextBreakdownRow: View {
                     .lineLimit(1)
             }
             GeometryReader { proxy in
+                let width = AppTheme.safeFrameDimension(proxy.size.width)
                 ZStack(alignment: .leading) {
                     Capsule(style: .continuous)
                         .fill(AppTheme.contentSubtleFill)
                     Capsule(style: .continuous)
                         .fill(tint)
-                        .frame(width: proxy.size.width * clampedPercent / 100)
+                        .frame(width: width * clampedPercent / 100)
                 }
             }
             .frame(height: 6)
@@ -1988,12 +1989,13 @@ private struct PiAgentPromptCompositionRowView: View {
                 .foregroundStyle(AppTheme.mutedText)
             }
             GeometryReader { proxy in
+                let width = AppTheme.safeFrameDimension(proxy.size.width)
                 ZStack(alignment: .leading) {
                     Capsule(style: .continuous)
                         .fill(AppTheme.contentSubtleFill)
                     Capsule(style: .continuous)
                         .fill(tint)
-                        .frame(width: proxy.size.width * clampedPercent / 100)
+                        .frame(width: width * clampedPercent / 100)
                 }
             }
             .frame(height: 4)

@@ -23,6 +23,14 @@ enum AppTheme {
         /// this instead of the full `pagePadding` at the top.
         static let contentTopInset: CGFloat = 8
     }
+
+    /// SwiftUI can briefly report negative or non-finite geometry during window
+    /// setup / teardown and split-view transitions. Never feed those values back
+    /// into `.frame(...)`, because SwiftUI logs "Invalid view geometry" warnings.
+    static func safeFrameDimension(_ value: CGFloat) -> CGFloat {
+        guard value.isFinite else { return 0 }
+        return max(0, value)
+    }
     static let toolbarIconFrame = CGSize(width: 26, height: 20)
     static let toolbarAssetIconSize = CGSize(width: 16, height: 16)
 
@@ -934,7 +942,9 @@ struct SplitView<ListPane: View, DetailPane: View>: View {
 
     var body: some View {
         GeometryReader { geo in
-            let listWidth = geo.size.width * AppTheme.Split.listFraction
+            let width = AppTheme.safeFrameDimension(geo.size.width)
+            let height = AppTheme.safeFrameDimension(geo.size.height)
+            let listWidth = width * AppTheme.Split.listFraction
             HStack(spacing: 0) {
                 list()
                     .frame(width: listWidth)
@@ -942,7 +952,7 @@ struct SplitView<ListPane: View, DetailPane: View>: View {
                 detail()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(width: geo.size.width, height: geo.size.height)
+            .frame(width: width, height: height)
         }
     }
 }

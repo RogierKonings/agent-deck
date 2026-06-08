@@ -2,7 +2,7 @@ import SwiftUI
 
 struct MemoryScreen: View {
     var viewModel: AppViewModel
-    @ObservedObject var memoryStore: AgentMemoryStore
+    var memoryStore: AgentMemoryStore
     @Binding var searchText: String
     @State private var selectedKind: AgentMemoryKind?
     @State private var selectedScope: AgentMemoryScope?

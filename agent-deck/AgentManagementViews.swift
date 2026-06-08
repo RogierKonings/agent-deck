@@ -998,7 +998,7 @@ private struct AgentDetailView: View {
     let deleteAgent: (AgentRecord) throws -> Void
     let onEditAgent: (AgentEditTab) -> Void
     let projects: [DiscoveredProject]
-    @ObservedObject var imageStore: AgentImageStore
+    var imageStore: AgentImageStore
     let autoGenerateAvatarPrompts: Bool
     let generateAvatarPrompt: (EffectiveAgentRecord) async throws -> String
     @Environment(\.supportsImagePlayground) private var supportsImagePlayground

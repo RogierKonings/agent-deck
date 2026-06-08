@@ -150,7 +150,7 @@ struct PiNativeSubagentRunCard: View {
     let onOpenGraph: () -> Void
     let onOpenChildTranscript: (UUID) -> Void
     let onStopChild: (UUID) -> Void
-    @ObservedObject var imageStore: AgentImageStore
+    var imageStore: AgentImageStore
     @State private var isDetailsPresented = false
     @State private var promptPopover: PromptPopover?
     @State private var displayedStatus: PiSubagentRunStatus?
