@@ -2,9 +2,10 @@
 
 Status: continuation complete on `side-agent/dream-parity`; ready for parent/reviewer inspection, not self-merged.
 
-## Latest commit
+## Commits
 
-- `3bdbf63 Complete native dream parity`
+- Implementation commit: `6ea3850 Complete native dream parity`.
+- This report is updated on the branch after that implementation commit; use `git log --oneline -2` for the final report-update commit hash.
 
 ## Behavior implemented
 
