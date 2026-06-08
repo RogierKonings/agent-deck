@@ -62,7 +62,7 @@ final class AppViewModel: NSObject {
     /// measured Skills-tab hang hotspot). Derived from `appSettings`, so it is
     /// observation-ignored and rebuilt in the `didSet` above.
     @ObservationIgnored private var cachedStandardizedExternalSkillPaths: Set<String> = []
-    let resourceCatalog = ResourceCatalogState()
+    let resourceCatalog = ResourceCatalogCoordinator()
     var hasCompletedInitialRefresh: Bool { resourceCatalog.hasCompletedInitialRefresh }
     // Automation-model lookup is cached. `FoundationModelAutomationService`
     // queries Apple's Foundation Models availability API, and the Pi Agent
@@ -71,7 +71,7 @@ final class AppViewModel: NSObject {
     // boundaries — see `rebuildAutomationModelCaches()`.
     private(set) var cachedFoundationAutomationModel: AvailableModel?
     private(set) var cachedAutomationAvailableModels: [AvailableModel] = []
-    // Agent-list caches live in `resourceCatalog` — rebuilt by `rebuildWarningCaches()`.
+    // Agent-list caches live in `resourceCatalog` — rebuilt by `resourceCatalog.rebuildWarningCaches()`.
     var cachedAllDisplayAgents: [EffectiveAgentRecord] { resourceCatalog.allDisplayAgents }
     var cachedDisplayAgentByID: [EffectiveAgentRecord.ID: EffectiveAgentRecord] { resourceCatalog.displayAgentByID }
     var displayAgentsRevision: Int { resourceCatalog.displayAgentsRevision }
@@ -200,6 +200,7 @@ final class AppViewModel: NSObject {
         appLifecycle.attach(host: self)
         agentUniverse.attach(host: self)
         composerSlash.attach(host: self)
+        resourceCatalog.attach(host: self)
 
         settings.bootstrapFromController()
         #if DEBUG
@@ -418,7 +419,7 @@ final class AppViewModel: NSObject {
             refreshAvailableModels()
         }
 
-        rebuildWarningCaches(markInitialRefreshComplete: true)
+        resourceCatalog.rebuildWarningCaches(markInitialRefreshComplete: true)
     }
 
     /// Re-derive snapshot-scoped state from the already-cached raw snapshots
@@ -447,7 +448,7 @@ final class AppViewModel: NSObject {
         } else if selectedProjectPath == nil {
             snapshot = makeAggregateSnapshot()
         }
-        rebuildWarningCaches()
+        resourceCatalog.rebuildWarningCaches()
     }
 
     /// Patch the in-memory effective-agent skill list so snapshot-derived
@@ -698,11 +699,11 @@ final class AppViewModel: NSObject {
         }
     }
 
-    /// Cached — see `cachedAllDisplayAgents`. Rebuilt by `rebuildWarningCaches()`.
+    /// Cached — see `cachedAllDisplayAgents`. Rebuilt by `resourceCatalog.rebuildWarningCaches()`.
     var allDisplayAgents: [EffectiveAgentRecord] { cachedAllDisplayAgents }
 
-    /// The actual merge+sort. Called only from `rebuildWarningCaches()`.
-    private func computeAllDisplayAgents() -> [EffectiveAgentRecord] {
+    /// The actual merge+sort. Called only from `resourceCatalog.rebuildWarningCaches()`.
+    func computeAllDisplayAgents() -> [EffectiveAgentRecord] {
         var byID: [EffectiveAgentRecord.ID: EffectiveAgentRecord] = [:]
         for agent in snapshot.effectiveAgents { byID[agent.id] = agent }
         for agent in catalogOnlyEffectiveAgents { byID[agent.id] = agent }
@@ -1061,7 +1062,7 @@ final class AppViewModel: NSObject {
             }
         }
         if didPatchInMemory {
-            rebuildWarningCaches()
+            resourceCatalog.rebuildWarningCaches()
         }
         if needsGlobalRefresh {
             refresh(includeModels: false, silentlyReconcile: didPatchInMemory)
@@ -1080,7 +1081,7 @@ final class AppViewModel: NSObject {
         // Skips rename + builtin-override edits; those keep the existing flow.
         if case .custom = draft.target, draft.originalName == draft.config.name {
             patchEffectiveAgentConfig(originalName: draft.originalName, newConfig: draft.config, filePath: draft.sourcePath)
-            rebuildWarningCaches()
+            resourceCatalog.rebuildWarningCaches()
         } else if case let .builtinOverride(scope) = draft.target,
                   let builtin = agent.builtin?.parsed,
                   let overrideValues = agentPersistence.builtinOverrideValuesForTesting(base: builtin, edited: draft.config) {
@@ -1891,7 +1892,7 @@ final class AppViewModel: NSObject {
 
     /// Recomputes the cached automation-model lookup. Called only at real
     /// boundaries — app launch / activation, a model-list reload, a settings
-    /// change — never per `ContentView.body` eval. Mirrors `rebuildWarningCaches`.
+    /// change — never per `ContentView.body` eval. Mirrors `resourceCatalog.rebuildWarningCaches`.
     /// Triggered when the model catalog reloads and when `appSettings` changes,
     /// which also covers app launch (init assigns `appSettings`).
     func rebuildAutomationModelCaches() {
@@ -1909,120 +1910,6 @@ final class AppViewModel: NSObject {
         cachedStandardizedExternalSkillPaths = Set(
             appSettings.externalSkillPaths.map { URL(fileURLWithPath: $0).standardizedFileURL.path }
         )
-    }
-
-    private func rebuildWarningCaches(markInitialRefreshComplete: Bool = false) {
-        let allDisplayAgents = computeAllDisplayAgents()
-        let skillWarnings = buildSkillWarnings()
-        let promptWarnings = buildPromptWarnings()
-        let visibilityIssuesByAgentID = buildSkillVisibilityIssuesByAgentID()
-        let agentNamesByID = Dictionary(uniqueKeysWithValues: filteredAgents.map { ($0.id, $0.name) })
-        let skillReferenceWarnings: [SkillReferenceWarning] = visibilityIssuesByAgentID
-            .flatMap { pair -> [SkillReferenceWarning] in
-                guard let agentName = agentNamesByID[pair.key] else { return [] }
-                return pair.value.flatMap { issue in
-                    issue.missingSkills.map { missingSkill in
-                        SkillReferenceWarning(agentName: agentName, project: issue.project, missingSkill: missingSkill)
-                    }
-                }
-            }
-            .sorted(by: {
-                if $0.missingSkill != $1.missingSkill { return $0.missingSkill < $1.missingSkill }
-                if $0.agentName != $1.agentName { return $0.agentName < $1.agentName }
-                return $0.project.name < $1.project.name
-            })
-
-        var agentWarningsByID: [EffectiveAgentRecord.ID: [DiagnosticWarning]] = [:]
-        for agent in filteredAgents {
-            agentWarningsByID[agent.id] = computeWarnings(for: agent)
-        }
-
-        var skillMetadataByID: [SkillRecord.ID: SkillListMetadata] = [:]
-        var warningsBySkillID: [SkillRecord.ID: [DiagnosticWarning]] = [:]
-        let activeProject = selectedDiscoveredProject
-        for record in allVisibleSkillRecords {
-            let matchingWarnings = skillWarnings.filter { warning in
-                warning.id == "duplicate-skill:\(record.name)" ||
-                warning.id.contains(record.filePath) ||
-                warning.message.contains("`\(record.name)`") ||
-                warning.message.contains(record.filePath)
-            }
-            let hasWarnings = !matchingWarnings.isEmpty
-            warningsBySkillID[record.id] = matchingWarnings
-            let globallyEnabled = skillIsEnabledGlobally(record)
-            let isAssigned = globallyEnabled ||
-                !assignedProjects(for: record).isEmpty ||
-                !assignedAgents(for: record).isEmpty
-            let isActive = globallyEnabled ||
-                (activeProject.map { skill(record, isEnabledFor: $0) } ?? false)
-            skillMetadataByID[record.id] = SkillListMetadata(
-                isAssigned: isAssigned,
-                hasWarnings: hasWarnings,
-                isActiveForCurrentProject: isActive
-            )
-        }
-
-        resourceCatalog.applyRebuild(
-            allDisplayAgents: allDisplayAgents,
-            skillWarnings: skillWarnings,
-            promptWarnings: promptWarnings,
-            skillVisibilityIssuesByAgentID: visibilityIssuesByAgentID,
-            skillReferenceWarnings: skillReferenceWarnings,
-            agentWarningsByID: agentWarningsByID,
-            skillMetadataByID: skillMetadataByID,
-            warningsBySkillID: warningsBySkillID,
-            markInitialRefreshComplete: markInitialRefreshComplete
-        )
-    }
-
-    private func buildSkillWarnings() -> [DiagnosticWarning] {
-        let baseWarnings = snapshot.warnings.filter { warning in
-            warning.id.hasPrefix("malformed-skill:") || warning.message.localizedCaseInsensitiveContains("skill")
-        }
-        let collisionWarnings = PiSkillLaunchResolver.collisions(in: allVisibleSkillRecords).map { collision in
-            let paths = collision.skills.map(\.filePath).joined(separator: ", ")
-            return DiagnosticWarning(id: "duplicate-skill:\(collision.name)", message: "Duplicate skill name `\(collision.name)` found at: \(paths)")
-        }
-        return baseWarnings + collisionWarnings
-    }
-
-    private func buildPromptWarnings() -> [DiagnosticWarning] {
-        let baseWarnings = snapshot.warnings.filter { warning in
-            warning.id.hasPrefix("duplicate-prompt:")
-        }
-        let collisionWarnings = PiPromptTemplateLaunchResolver.collisions(in: allVisiblePromptTemplateRecords).map { collision in
-            let paths = collision.prompts.map(\.filePath).joined(separator: ", ")
-            return DiagnosticWarning(id: "duplicate-prompt-template:\(collision.name)", message: "Duplicate prompt template name `/\(collision.name)` found at: \(paths)")
-        }
-        return baseWarnings + collisionWarnings
-    }
-
-    private func buildSkillVisibilityIssuesByAgentID() -> [String: [AgentSkillVisibilityIssue]] {
-        var issuesByAgentID: [String: [AgentSkillVisibilityIssue]] = [:]
-        for agent in filteredAgents {
-            guard !agent.resolved.skills.isEmpty else { continue }
-            let explicitSkills = agent.resolved.skills
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-            guard !explicitSkills.isEmpty else { continue }
-
-            let managedRecord = snapshot.libraryAgents.first { $0.name == agent.name }
-                ?? agent.globalCustom
-                ?? agent.projectCustom
-            guard let managedRecord else { continue }
-
-            let issues: [AgentSkillVisibilityIssue] = assignedProjects(for: managedRecord).compactMap { project in
-                guard let projectSnapshot = allProjectSnapshots[project.path] else { return nil }
-                let visibleSkillNames = Set(PiSkillLaunchResolver.catalog(from: projectSnapshot).map(\.name))
-                let missingSkills = explicitSkills.filter { !visibleSkillNames.contains($0) }
-                guard !missingSkills.isEmpty else { return nil }
-                return AgentSkillVisibilityIssue(project: project, missingSkills: missingSkills)
-            }
-            if !issues.isEmpty {
-                issuesByAgentID[agent.id] = issues
-            }
-        }
-        return issuesByAgentID
     }
 
     func agentIsEnabledGlobally(_ agent: AgentRecord) -> Bool {
@@ -2139,7 +2026,7 @@ final class AppViewModel: NSObject {
         // in-memory effective agent so the checkbox flips immediately instead
         // of waiting for that rescan to land.
         patchEffectiveAgentSkills(agentName: agent.name, skills: draft.config.skills)
-        rebuildWarningCaches()
+        resourceCatalog.rebuildWarningCaches()
     }
 
     func assignedAgents(for skillRecord: SkillRecord) -> [EffectiveAgentRecord] {
@@ -2726,19 +2613,6 @@ final class AppViewModel: NSObject {
         }
 
         return nil
-    }
-
-    func warnings(for agent: EffectiveAgentRecord) -> [DiagnosticWarning] {
-        // Cache hit (incl. an empty array) is authoritative — see
-        // `rebuildWarningCaches()`. Miss → live compute (e.g. before first scan).
-        if let cached = cachedAgentWarningsByID[agent.id] { return cached }
-        return computeWarnings(for: agent)
-    }
-
-    private func computeWarnings(for agent: EffectiveAgentRecord) -> [DiagnosticWarning] {
-        snapshot.warnings.filter { warning in
-            warning.message.contains("Agent \(agent.name) ") || warning.message.contains("Agent \(agent.name)")
-        }
     }
 
     func agentsExplicitlyUsingSkill(_ skill: SkillRecord) -> [EffectiveAgentRecord] {
