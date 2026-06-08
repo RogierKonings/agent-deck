@@ -192,6 +192,85 @@ final class AgentMemoryStoreTests: XCTestCase {
         XCTAssertFalse(log.contains("skip"))
     }
 
+    func testDreamApplyProjectScopedMergeAfterReloadUsesProjectIDWithoutPath() throws {
+        let root = try temporaryDirectory()
+        let db = root.appendingPathComponent("memories.db")
+        let projectPath = "/tmp/agent-deck"
+        let seed = AgentMemoryStore(databaseURL: db, dreamLogURL: root.appendingPathComponent("dream.jsonl"), autoRefresh: false)
+        let a = try seed.createMemory(kind: .procedure, title: "Project duplicate A", summary: "A", body: "A", reasoning: "A", weight: 0.7, scope: .project, projectPath: projectPath, tags: ["project"])
+        let b = try seed.createMemory(kind: .procedure, title: "Project duplicate B", summary: "B", body: "B", reasoning: "B", weight: 0.6, scope: .project, projectPath: projectPath, tags: ["project"])
+
+        let reloaded = AgentMemoryStore(databaseURL: db, dreamLogURL: root.appendingPathComponent("dream.jsonl"), autoRefresh: false)
+        reloaded.refresh()
+        XCTAssertNil(reloaded.records.first { $0.id == a.id }?.projectPath)
+        XCTAssertEqual(reloaded.records.first { $0.id == a.id }?.projectID, "agent-deck")
+        let proposal = PiMemoryDreamProposal(id: "project-merge", action: .merge, sourceMemoryIDs: [a.id, b.id], title: "Project merged", content: "Merged project memory", reasoning: "Project merge", tags: ["project"], weight: 0.85, type: .procedure, weightChanges: [:])
+
+        XCTAssertNoThrow(try reloaded.applyDreamProposals([proposal]))
+        let merged = try XCTUnwrap(reloaded.records.first { $0.title == "Project merged" })
+        XCTAssertEqual(merged.scope, .project)
+        XCTAssertEqual(merged.projectID, "agent-deck")
+        XCTAssertEqual(merged.synthesizedFrom, [a.id, b.id])
+        XCTAssertEqual(reloaded.records.first { $0.id == a.id }?.supersededBy, merged.id)
+        XCTAssertEqual(reloaded.records.first { $0.id == b.id }?.supersededBy, merged.id)
+    }
+
+    func testDreamApplyProjectScopedSynthesizeAfterReloadUsesProjectIDWithoutPath() throws {
+        let root = try temporaryDirectory()
+        let db = root.appendingPathComponent("memories.db")
+        let projectPath = "/tmp/agent-deck"
+        let seed = AgentMemoryStore(databaseURL: db, dreamLogURL: root.appendingPathComponent("dream.jsonl"), autoRefresh: false)
+        let a = try seed.createMemory(kind: .insight, title: "Project lesson A", summary: "A", body: "A", reasoning: "A", weight: 0.8, scope: .project, projectPath: projectPath, tags: ["project"])
+        let b = try seed.createMemory(kind: .insight, title: "Project lesson B", summary: "B", body: "B", reasoning: "B", weight: 0.6, scope: .project, projectPath: projectPath, tags: ["project"])
+
+        let reloaded = AgentMemoryStore(databaseURL: db, dreamLogURL: root.appendingPathComponent("dream.jsonl"), autoRefresh: false)
+        reloaded.refresh()
+        XCTAssertNil(reloaded.records.first { $0.id == a.id }?.projectPath)
+        let proposal = PiMemoryDreamProposal(id: "project-synthesis", phase: .schemaSynthesis, action: .synthesize, sourceMemoryIDs: [a.id, b.id], title: "Project synthesis", content: "Project-level pattern", reasoning: "Project synthesis", tags: ["project"], weight: 0.9, type: .insight, weightChanges: [:])
+
+        XCTAssertNoThrow(try reloaded.applyDreamProposals([proposal]))
+        let synthesized = try XCTUnwrap(reloaded.records.first { $0.title == "Project synthesis" })
+        XCTAssertEqual(synthesized.scope, .project)
+        XCTAssertEqual(synthesized.projectID, "agent-deck")
+        XCTAssertEqual(synthesized.synthesizedFrom, [a.id, b.id])
+        XCTAssertEqual(reloaded.records.first { $0.id == a.id }?.weight ?? 0, 0.68, accuracy: 0.001)
+        XCTAssertEqual(reloaded.records.first { $0.id == b.id }?.weight ?? 0, 0.51, accuracy: 0.001)
+    }
+
+    func testDreamApplyProjectScopedDiscoverPatternAfterReloadUsesProjectIDWithoutPath() throws {
+        let root = try temporaryDirectory()
+        let db = root.appendingPathComponent("memories.db")
+        let projectPath = "/tmp/agent-deck"
+        let seed = AgentMemoryStore(databaseURL: db, dreamLogURL: root.appendingPathComponent("dream.jsonl"), autoRefresh: false)
+        let a = try seed.createMemory(kind: .event, title: "Project event A", summary: "A", body: "A", reasoning: "A", scope: .project, projectPath: projectPath, tags: ["project"])
+        let b = try seed.createMemory(kind: .event, title: "Project event B", summary: "B", body: "B", reasoning: "B", scope: .project, projectPath: projectPath, tags: ["project"])
+
+        let reloaded = AgentMemoryStore(databaseURL: db, dreamLogURL: root.appendingPathComponent("dream.jsonl"), autoRefresh: false)
+        reloaded.refresh()
+        XCTAssertNil(reloaded.records.first { $0.id == a.id }?.projectPath)
+        let proposal = PiMemoryDreamProposal(id: "project-pattern", phase: .temporalPatterns, action: .discoverPattern, sourceMemoryIDs: [a.id, b.id], title: "Project event pattern", content: "Pattern insight", reasoning: "Project pattern", tags: ["dream-pattern"], weight: 0.78, type: .insight, weightChanges: [:])
+
+        XCTAssertNoThrow(try reloaded.applyDreamProposals([proposal]))
+        let pattern = try XCTUnwrap(reloaded.records.first { $0.title == "Project event pattern" })
+        XCTAssertEqual(pattern.kind, .insight)
+        XCTAssertEqual(pattern.scope, .project)
+        XCTAssertEqual(pattern.projectID, "agent-deck")
+        XCTAssertEqual(pattern.synthesizedFrom, [a.id, b.id])
+    }
+
+    func testDreamApplySkipOnlyDoesNotWriteEmptyAuditLog() throws {
+        let root = try temporaryDirectory()
+        let logURL = root.appendingPathComponent("dream.jsonl")
+        let store = AgentMemoryStore(databaseURL: root.appendingPathComponent("memories.db"), dreamLogURL: logURL, autoRefresh: false)
+        _ = try store.createMemory(kind: .insight, title: "Original", summary: "Body", body: "Body", reasoning: "Reason", scope: .general, projectPath: nil, tags: [])
+        let before = store.records
+        let skip = PiMemoryDreamProposal(id: "skip-only", phase: .clusterReview, action: .skip, sourceMemoryIDs: [], title: "No-op", content: "No-op", reasoning: "No changes", tags: ["skip"], weight: nil, type: nil, weightChanges: [:])
+
+        XCTAssertNoThrow(try store.applyDreamProposals([skip]))
+        XCTAssertEqual(store.records, before)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: logURL.path))
+    }
+
     func testDreamApplyCancelNoOpMakesNoChangesWhenNotCalled() throws {
         let store = AgentMemoryStore(databaseURL: try temporaryDatabase(), autoRefresh: false)
         _ = try store.createMemory(kind: .insight, title: "Original", summary: "Body", body: "Body", reasoning: "Reason", scope: .general, projectPath: nil, tags: [])

@@ -121,11 +121,15 @@ final class AgentMemoryStore: ObservableObject {
             canonicalProject = "general"
             resolvedProjectPath = nil
         case .project:
-            guard let projectPath, !projectPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            if let projectPath = projectPath?.nilIfBlank {
+                canonicalProject = explicitProjectID?.nilIfBlank ?? Self.projectID(for: projectPath)
+                resolvedProjectPath = projectPath
+            } else if let explicitProjectID = explicitProjectID?.nilIfBlank {
+                canonicalProject = explicitProjectID
+                resolvedProjectPath = nil
+            } else {
                 throw AgentMemoryError.missingProject
             }
-            canonicalProject = explicitProjectID?.nilIfBlank ?? Self.projectID(for: projectPath)
-            resolvedProjectPath = projectPath
         }
 
         let now = Date()
@@ -352,6 +356,7 @@ final class AgentMemoryStore: ObservableObject {
 
     func applyDreamProposals(_ proposals: [PiMemoryDreamProposal]) throws {
         let approved = proposals.filter { $0.action != .skip }
+        guard !approved.isEmpty else { return }
         let byID = Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
         let explicitlyReweightedIDs = Set(approved.flatMap { proposal in
             proposal.action == .reweight ? Array(proposal.weightChanges.keys) : []

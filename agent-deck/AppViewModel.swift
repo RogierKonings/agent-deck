@@ -4978,9 +4978,11 @@ final class AppViewModel: NSObject {
     }
 
     func applyDreamMemoryProposals(_ proposals: [PiMemoryDreamProposal]) {
+        let actionable = proposals.filter { $0.action != .skip }
+        guard !actionable.isEmpty else { return }
         do {
-            try agentMemoryStore.applyDreamProposals(proposals)
-            appendMemoryEvent(.edited, records: [], summary: "Applied \(proposals.count) dream memory proposal\(proposals.count == 1 ? "" : "s").")
+            try agentMemoryStore.applyDreamProposals(actionable)
+            appendMemoryEvent(.edited, records: [], summary: "Applied \(actionable.count) dream memory proposal\(actionable.count == 1 ? "" : "s").")
         } catch {
             appendMemoryBlockedEvent(error.localizedDescription)
         }
