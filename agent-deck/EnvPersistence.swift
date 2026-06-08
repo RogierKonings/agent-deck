@@ -1,4 +1,5 @@
 import Foundation
+import AgentDeckCore
 
 struct EnvPersistence {
     private let fileManager = FileManager.default

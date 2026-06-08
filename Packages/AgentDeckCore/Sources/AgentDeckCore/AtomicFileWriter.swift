@@ -2,8 +2,8 @@ import Foundation
 
 /// Shared atomic file writes for persistence services. Ensures parent directories
 /// exist and appends a trailing newline for text payloads.
-enum AtomicFileWriter {
-    static func writeText(
+public enum AtomicFileWriter {
+    public static func writeText(
         _ text: String,
         to path: String,
         fileManager: FileManager = .default,
@@ -18,7 +18,7 @@ enum AtomicFileWriter {
         try payload.write(to: url, atomically: true, encoding: .utf8)
     }
 
-    static func writeJSON(
+    public static func writeJSON(
         _ object: [String: Any],
         to path: String,
         fileManager: FileManager = .default

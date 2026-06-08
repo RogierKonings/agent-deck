@@ -61,7 +61,7 @@ nonisolated struct AppRefreshService: Sendable {
         // Parallelize per-project scans. `PiScanner` is a value type with no
         // shared mutable state, so each iteration gets its own scan. We use
         // `concurrentPerform` (blocking) to keep `loadSnapshot` itself sync —
-        // the override-edit caller (`refreshSynchronouslyBlocksMainUntilDone`)
+        // Override edits patch snapshots in memory and reconcile asynchronously.
         // depends on the synchronous shape, and the two detached callers don't
         // care which thread the work runs on.
         let projectSnapshots: [String: ScanSnapshot]

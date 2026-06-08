@@ -180,26 +180,27 @@ final class AppViewModel: NSObject {
     let piAgentSessionStore = PiAgentSessionStore()
     let agentMemoryStore = AgentMemoryStore()
     let agentImageStore = AgentImageStore()
-    let skillRepositorySyncService = SkillRepositorySyncService()
+    let skillRepositorySyncService: SkillRepositorySyncService
     private(set) var isCheckingAllSkillUpdates = false
     private(set) var isUpdatingAllSkillRepositories = false
     var skillBatchActionMessage: String?
 
-    private let agentPersistence = AgentPersistence()
-    private let envPersistence = EnvPersistence()
-    private let projectPreferencesStore = ProjectPreferencesStore.shared
-    private let appSettingsController = AppSettingsController()
-    private let gitRepositoryService = GitRepositoryService()
+    private let environment: AppEnvironment
+    private var agentPersistence: AgentPersistence { environment.agentPersistence }
+    private var envPersistence: EnvPersistence { environment.envPersistence }
+    private var projectPreferencesStore: ProjectPreferencesStore { environment.projectPreferencesStore }
+    private var appSettingsController: AppSettingsController { environment.appSettingsController }
+    private var gitRepositoryService: GitRepositoryService { environment.gitRepositoryService }
     @ObservationIgnored private lazy var githubWorkspace = GitHubWorkspace(gitRepositoryService: gitRepositoryService)
     var github: GitHubWorkspace { githubWorkspace }
-    private let shipService = PiAgentShipService()
+    private var shipService: PiAgentShipService { environment.shipService }
     /// Tag-and-push release flow, scoped to the agent-deck repo itself.
     var agentDeckReleaseService: ReleaseService { ReleaseService(gitRepositoryService: gitRepositoryService) }
-    private let agentAvatarPromptService = AgentAvatarPromptGenerationService()
-    private let skillDescriptionService = SkillDescriptionGenerationService()
-    private let releaseNotesGenerator = ReleaseNotesGenerationService()
-    private let subagentWorktreeService = PiSubagentWorktreeService()
-    private let sessionWorktreeService = PiAgentSessionWorktreeService()
+    private var agentAvatarPromptService: AgentAvatarPromptGenerationService { environment.agentAvatarPromptService }
+    private var skillDescriptionService: SkillDescriptionGenerationService { environment.skillDescriptionService }
+    private var releaseNotesGenerator: ReleaseNotesGenerationService { environment.releaseNotesGenerator }
+    private var subagentWorktreeService: PiSubagentWorktreeService { environment.subagentWorktreeService }
+    private var sessionWorktreeService: PiAgentSessionWorktreeService { environment.sessionWorktreeService }
     @ObservationIgnored private lazy var piAgentRunner = PiAgentRunnerService(store: piAgentSessionStore)
     @ObservationIgnored private lazy var nativeSubagentRunner = PiSubagentRunService(store: piAgentSessionStore)
     /// Memoizes `selectableAgentUniverse(forProjectPath:)` so the subagent
@@ -207,9 +208,9 @@ final class AppViewModel: NSObject {
     /// a precomputed list instead of rebuilding it on every body evaluation.
     /// Cleared in `clearAgentUniverseCache()` whenever a snapshot publishes.
     @ObservationIgnored private var agentUniverseCacheByProjectPath: [String: [EffectiveAgentRecord]] = [:]
-    private let piSessionTitleGenerator = PiSessionTitleGenerationService()
+    private var piSessionTitleGenerator: PiSessionTitleGenerationService { environment.piSessionTitleGenerator }
     let projectServerService = ProjectServerService()
-    private var globalSnapshot: ScanSnapshot = .empty {
+    var globalSnapshot: ScanSnapshot = .empty {
         didSet { clearAgentUniverseCache() }
     }
     private(set) var projectRootURL: URL?
@@ -238,7 +239,13 @@ final class AppViewModel: NSObject {
         return TimeInterval(piAgentIdleParkingTimeoutMinutes * 60)
     }
 
-    override init() {
+    convenience override init() {
+        self.init(environment: .live)
+    }
+
+    init(environment: AppEnvironment) {
+        self.environment = environment
+        skillRepositorySyncService = environment.skillRepositorySyncService
         super.init()
         githubWorkspace.host = self
 
@@ -446,31 +453,6 @@ final class AppViewModel: NSObject {
         }
     }
 
-    // Blocks the main thread on a full project rescan. Only `refreshAfterOverrideChange`
-    // should reach for this: builtin-override toggles are bound to snapshot-derived UI
-    // state, and an async refresh would let the toggle snap back to the old value for a
-    // frame while the rescan is in flight. Every other caller should use `refresh(...)`
-    // (which is detached) and rely on `silentlyReconcile: true` to avoid the spinner.
-    private func refreshSynchronouslyBlocksMainUntilDone(
-        includeModels: Bool = false,
-        scanAllProjects: Bool = false,
-        extraProjectPathsToScan: Set<String> = []
-    ) {
-        let result = refreshCoordinator.loadSnapshotSynchronously(
-            inputs: RefreshInputs(
-                rootURLs: configuredProjectsRootURLs,
-                selectedProjectPath: selectedProjectPath,
-                preferencesByPath: projectPreferencesStore.preferencesByPath,
-                externalSkillPaths: appSettings.externalSkillPaths,
-                externalPromptPaths: appSettings.externalPromptPaths,
-                scanAllProjects: scanAllProjects,
-                extraProjectPathsToScan: extraProjectPathsToScan
-            )
-        )
-        applyRefreshSnapshot(result, includeModels: includeModels)
-        isRefreshingProjects = false
-    }
-
     /// Queue a "select this skill once it shows up" intent and kick off an
     /// async refresh. Used by sheet-save flows that create a new skill —
     /// avoids the prior synchronous refresh that blocked the UI on the
@@ -624,7 +606,7 @@ final class AppViewModel: NSObject {
     /// only mutates UserDefaults, and `scopedAgentSnapshot` is idempotent over
     /// the agent-catalog fields it copies through. This replaces a full
     /// `refresh()` (which re-walks the filesystem) for assignment toggles.
-    private func reconcileSnapshotsFromPreferences() {
+    func reconcileSnapshotsFromPreferences() {
         let catalogProjectSnapshots = Array(allProjectSnapshots.values)
         globalSnapshot = scopedAgentSnapshot(
             globalSnapshot,
@@ -700,8 +682,7 @@ final class AppViewModel: NSObject {
     ///
     /// Skips renames — `EffectiveAgentRecord.id` and `AgentRecord.id` both
     /// encode the name, so a rename needs the existing refresh path that also
-    /// runs the `pendingSelectAgentName` flow. Skips builtin-override edits;
-    /// those mutate a different on-disk structure and use `refreshSynchronouslyBlocksMainUntilDone`.
+    /// Skips builtin-override edits when the caller already patched snapshots in memory.
     private func patchEffectiveAgentConfig(originalName: String, newConfig: AgentConfig, filePath: String?) {
         guard originalName == newConfig.name else { return }
 
@@ -5068,6 +5049,10 @@ final class AppViewModel: NSObject {
         if case .custom = draft.target, draft.originalName == draft.config.name {
             patchEffectiveAgentConfig(originalName: draft.originalName, newConfig: draft.config, filePath: draft.sourcePath)
             rebuildWarningCaches()
+        } else if case let .builtinOverride(scope) = draft.target,
+                  let builtin = agent.builtin?.parsed,
+                  let overrideValues = agentPersistence.builtinOverrideValuesForTesting(base: builtin, edited: draft.config) {
+            patchBuiltinOverrideRecord(agentName: agent.name, scope: scope, overrideValues: overrideValues)
         }
         refreshAfterAgentDraftChange(draft)
     }
@@ -6749,6 +6734,7 @@ final class AppViewModel: NSObject {
     func setDisableBuiltins(_ isDisabled: Bool, scope: AgentEditingTarget.OverrideScope) {
         do {
             try agentPersistence.setDisableBuiltins(isDisabled, scope: scope, projectRoot: selectedProjectPath)
+            patchDisableBuiltins(isDisabled, scope: scope)
             refreshAfterOverrideChange(scope: scope)
         } catch {
             github.githubLastError = error.localizedDescription
@@ -6958,23 +6944,14 @@ final class AppViewModel: NSObject {
     }
 
     private func refreshAfterOverrideChange(scope: AgentEditingTarget.OverrideScope) {
-        // Builtin-override changes feed bound, snapshot-derived toggles — the
-        // Settings "Disable builtins" switch and the per-agent builtin-disable
-        // control. Keep this synchronous so those toggles show the new state
-        // immediately instead of snapping back while an async refresh is in
-        // flight. Override edits are infrequent admin actions, so the brief
-        // rescan is an acceptable cost here.
         switch scope {
         case .global:
-            refreshSynchronouslyBlocksMainUntilDone(includeModels: false)
-            refresh(includeModels: false)
+            refresh(includeModels: false, silentlyReconcile: true)
         case .project:
             if let projectPath = selectedProjectPath {
-                refreshSynchronouslyBlocksMainUntilDone(includeModels: false, scanAllProjects: false, extraProjectPathsToScan: [projectPath])
-                refresh(includeModels: false, scanAllProjects: false, extraProjectPathsToScan: [projectPath])
+                refresh(includeModels: false, scanAllProjects: false, extraProjectPathsToScan: [projectPath], silentlyReconcile: true)
             } else {
-                refreshSynchronouslyBlocksMainUntilDone(includeModels: false)
-                refresh(includeModels: false)
+                refresh(includeModels: false, silentlyReconcile: true)
             }
         }
     }

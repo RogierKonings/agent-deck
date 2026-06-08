@@ -52,18 +52,6 @@ final class RefreshCoordinator {
         }
     }
 
-    func loadSnapshotSynchronously(inputs: RefreshInputs) -> AppRefreshSnapshot {
-        AppRefreshService().loadSnapshot(
-            rootURLs: inputs.rootURLs,
-            selectedProjectPath: inputs.selectedProjectPath,
-            preferencesByPath: inputs.preferencesByPath,
-            externalSkillPaths: inputs.externalSkillPaths,
-            externalPromptPaths: inputs.externalPromptPaths,
-            scanAllProjects: inputs.scanAllProjects,
-            extraProjectPathsToScan: inputs.extraProjectPathsToScan
-        )
-    }
-
     func cancelPendingRefresh() {
         refreshTask?.cancel()
         refreshTask = nil
