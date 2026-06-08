@@ -147,12 +147,8 @@ final class AppViewModel: NSObject {
     var foundationAutomationModel: AvailableModel? { cachedFoundationAutomationModel }
 
     var automationAvailableModels: [AvailableModel] { cachedAutomationAvailableModels }
-    var showPiAgentAttentionOnly = false
-    private(set) var piAgentTitleGeneratingSessionIDs: Set<UUID> = []
-    private(set) var piAgentPendingComposerText: String?
-    private(set) var piAgentPendingIssueAttachment: PiAgentIssueAttachment?
-    private(set) var piAgentGitAutomationAction: PiAgentGitAutomationAction?
-    let piAgentSessionStore = PiAgentSessionStore()
+    let piAgentSessionStore: PiAgentSessionStore
+    let piWorkspace: PiAgentWorkspaceState
     let agentMemoryStore = AgentMemoryStore()
     let agentImageStore = AgentImageStore()
     let skillRepositorySyncService: SkillRepositorySyncService
@@ -220,6 +216,9 @@ final class AppViewModel: NSObject {
         self.environment = environment
         skillRepositorySyncService = environment.skillRepositorySyncService
         projects = ProjectDiscoveryState(preferencesStore: environment.projectPreferencesStore)
+        let sessionStore = PiAgentSessionStore()
+        piAgentSessionStore = sessionStore
+        piWorkspace = PiAgentWorkspaceState(sessionStore: sessionStore)
         super.init()
         projects.host = self
         githubWorkspace.host = self
@@ -1277,8 +1276,10 @@ final class AppViewModel: NSObject {
         )
         provisionWorktreeIfEnabledFireAndForget(for: created.id, project: project)
         ensurePiAgentModelCatalogLoaded()
-        piAgentPendingComposerText = PiIssuePromptBuilder.issueDraft(detail: detail, project: project)
-        piAgentPendingIssueAttachment = PiAgentIssueAttachment(detail: detail)
+        piWorkspace.setPendingIssueLaunch(
+            composerText: PiIssuePromptBuilder.issueDraft(detail: detail, project: project),
+            attachment: PiAgentIssueAttachment(detail: detail)
+        )
     }
 
     /// Context-menu entry point from the issue list: the row only carries a
@@ -1310,18 +1311,6 @@ final class AppViewModel: NSObject {
         }
     }
 
-    func consumePendingPiAgentComposerText() -> String? {
-        guard let pending = piAgentPendingComposerText else { return nil }
-        piAgentPendingComposerText = nil
-        return pending
-    }
-
-    func consumePendingPiAgentIssueAttachment() -> PiAgentIssueAttachment? {
-        let pending = piAgentPendingIssueAttachment
-        piAgentPendingIssueAttachment = nil
-        return pending
-    }
-
     func openPiAgentScreen() {
         selectedSidebarItem = .agent
         if piAgentSessionStore.selectedSession?.id != nil {
@@ -1349,14 +1338,6 @@ final class AppViewModel: NSObject {
         piAgentRunner.rehydrateTranscriptFromSessionFileIfNeeded(session)
     }
 
-    /// Sessions for the active project, in the store's stable order (pinned +
-    /// recency) — the base order the sidebar shows before any search filter.
-    /// Drives next/previous session navigation and the scroll benchmark.
-    func scopedPiAgentSessionsInOrder() -> [PiAgentSessionRecord] {
-        guard let path = selectedProjectPath else { return piAgentSessionStore.sessions }
-        return piAgentSessionStore.sessions.filter { $0.projectPath == path }
-    }
-
     /// Move selection by `offset` within the scoped session list, wrapping at
     /// both ends. No-op when there are no sessions. Used by the ⌘] / ⌘[
     /// shortcuts and reused as the scroll benchmark's "advance" mechanism.
@@ -1381,24 +1362,6 @@ final class AppViewModel: NSObject {
         guard let sessionID = piAgentSessionStore.selectedSession?.id,
               isPiAgentSessionActuallyVisible(sessionID) else { return }
         acknowledgePiAgentSession(sessionID)
-    }
-
-    var piAgentNeedsAttentionCount: Int {
-        piAgentSessionStore.sessions.count(where: \.needsAttention)
-    }
-
-    var piAgentRunningSessionCount: Int {
-        piAgentSessionStore.sessions.filter { session in
-            !session.needsAttention && piAgentSessionIsWorking(session)
-        }.count
-    }
-
-    func piAgentSessionIsWorking(_ session: PiAgentSessionRecord) -> Bool {
-        session.status.isActive || piAgentSessionHasActiveSubagent(session.id)
-    }
-
-    private func piAgentSessionHasActiveSubagent(_ sessionID: UUID) -> Bool {
-        piAgentSessionStore.subagentRuns(for: sessionID).contains { $0.status.isActive }
     }
 
     func isProviderEnabled(_ provider: String) -> Bool {
@@ -2588,13 +2551,13 @@ final class AppViewModel: NSObject {
     var canCommitSelectedPiAgentSession: Bool {
         guard shouldShowCommitSelectedPiAgentSession,
               let session = piAgentSessionStore.selectedSession else { return false }
-        return piAgentGitAutomationAction == nil && !session.status.isActive
+        return piWorkspace.gitAutomationAction == nil && !session.status.isActive
     }
 
     var canPushSelectedPiAgentSession: Bool {
         guard shouldShowPushSelectedPiAgentSession,
               let session = piAgentSessionStore.selectedSession else { return false }
-        return piAgentGitAutomationAction == nil && !session.status.isActive
+        return piWorkspace.gitAutomationAction == nil && !session.status.isActive
     }
 
     var canCommitAndPushSelectedPiAgentSession: Bool { canCommitSelectedPiAgentSession }
@@ -2608,7 +2571,7 @@ final class AppViewModel: NSObject {
     var canMergeSelectedPiAgentSession: Bool {
         guard shouldShowMergeSelectedPiAgentSession,
               let session = piAgentSessionStore.selectedSession,
-              piAgentGitAutomationAction == nil,
+              piWorkspace.gitAutomationAction == nil,
               !session.status.isActive,
               let changes = github.repositoryChangesEntry(for: session.repositoryRoot)?.snapshot else { return false }
 
@@ -2630,19 +2593,19 @@ final class AppViewModel: NSObject {
         let sessionID = session.id
         let branchName = session.branchName ?? "current branch"
         let projectURL = URL(fileURLWithPath: session.repositoryRoot, isDirectory: true)
-        piAgentGitAutomationAction = .push
+        piWorkspace.setGitAutomationAction(.push)
         Task { [weak self] in
             guard let self else { return }
             do {
                 try await gitRepositoryService.pushCurrentBranch(in: projectURL)
                 await MainActor.run {
-                    self.piAgentGitAutomationAction = nil
+                    self.piWorkspace.setGitAutomationAction(nil)
                     self.piAgentSessionStore.append(.init(sessionID: sessionID, role: .status, title: "Push Completed", text: "Pushed \(branchName)"))
                     self.prepareRepoChangesForSelectedPiAgentSession(force: true)
                 }
             } catch {
                 await MainActor.run {
-                    self.piAgentGitAutomationAction = nil
+                    self.piWorkspace.setGitAutomationAction(nil)
                     self.piAgentSessionStore.append(.init(sessionID: sessionID, role: .error, title: "Push Failed", text: error.localizedDescription))
                     self.prepareRepoChangesForSelectedPiAgentSession(force: true)
                 }
@@ -2687,7 +2650,7 @@ final class AppViewModel: NSObject {
         let sessionID = session.id
         let projectURL = URL(fileURLWithPath: session.repositoryRoot, isDirectory: true)
         let environment = EnvRuntimeEnvironment().environment(projectRoot: projectURL)
-        piAgentGitAutomationAction = pushAfterCommit ? .commitAndPush : .commit
+        piWorkspace.setGitAutomationAction(pushAfterCommit ? .commitAndPush : .commit)
 
         Task { [weak self] in
             guard let self else { return }
@@ -2698,13 +2661,13 @@ final class AppViewModel: NSObject {
                 }
 
                 await MainActor.run {
-                    self.piAgentGitAutomationAction = nil
+                    self.piWorkspace.setGitAutomationAction(nil)
                     self.piAgentSessionStore.append(.init(sessionID: sessionID, role: .status, title: pushAfterCommit ? "Commit & Push Completed" : "Commit Completed", text: pushAfterCommit ? "Committed and pushed “\(message.title)”" : "Committed “\(message.title)”"))
                     self.prepareRepoChangesForSelectedPiAgentSession(force: true)
                 }
             } catch {
                 await MainActor.run {
-                    self.piAgentGitAutomationAction = nil
+                    self.piWorkspace.setGitAutomationAction(nil)
                     self.piAgentSessionStore.append(.init(sessionID: sessionID, role: .error, title: pushAfterCommit ? "Commit & Push Failed" : "Commit Failed", text: error.localizedDescription))
                     self.prepareRepoChangesForSelectedPiAgentSession(force: true)
                 }
@@ -2741,7 +2704,7 @@ final class AppViewModel: NSObject {
         let worktreeURL = URL(fileURLWithPath: worktreePath, isDirectory: true)
         let environment = EnvRuntimeEnvironment().environment(projectRoot: worktreeURL)
         let keepWorktreeAfterMerge = appSettings.piAgentSessionsKeepWorktreeAfterMerge
-        piAgentGitAutomationAction = .merge
+        piWorkspace.setGitAutomationAction(.merge)
 
         Task { [weak self] in
             guard let self else { return }
@@ -2787,7 +2750,7 @@ final class AppViewModel: NSObject {
                 case .success:
                     if keepWorktreeAfterMerge {
                         await MainActor.run {
-                            self.piAgentGitAutomationAction = nil
+                            self.piWorkspace.setGitAutomationAction(nil)
                             self.piAgentSessionStore.append(.init(
                                 sessionID: sessionID,
                                 role: .status,
@@ -2818,7 +2781,7 @@ final class AppViewModel: NSObject {
                         cleanupResult = .failure(error)
                     }
                     await MainActor.run {
-                        self.piAgentGitAutomationAction = nil
+                        self.piWorkspace.setGitAutomationAction(nil)
                         switch cleanupResult {
                         case .success(let cleanupOutcome):
                             // The worktree directory was removed (the only paths inside
@@ -2853,20 +2816,20 @@ final class AppViewModel: NSObject {
                     }
                 case let .conflict(status):
                     await MainActor.run {
-                        self.piAgentGitAutomationAction = nil
+                        self.piWorkspace.setGitAutomationAction(nil)
                         self.piAgentSessionStore.append(.init(sessionID: sessionID, role: .error, title: "Merge Conflict", text: "Merge of `\(branchName)` into `\(sourceBranch)` left conflicts. Resolve them in the project, then commit.\n\n\(status)"))
                         self.prepareRepoChangesForSelectedPiAgentSession(force: true)
                     }
                 }
             } catch let skipError as NSError where skipError.domain == "AgentDeckMerge" && skipError.code == 3 {
                 await MainActor.run {
-                    self.piAgentGitAutomationAction = nil
+                    self.piWorkspace.setGitAutomationAction(nil)
                     self.piAgentSessionStore.append(.init(sessionID: sessionID, role: .error, title: "Merge Skipped", text: skipError.localizedDescription))
                     self.prepareRepoChangesForSelectedPiAgentSession(force: true)
                 }
             } catch {
                 await MainActor.run {
-                    self.piAgentGitAutomationAction = nil
+                    self.piWorkspace.setGitAutomationAction(nil)
                     self.piAgentSessionStore.append(.init(sessionID: sessionID, role: .error, title: "Merge Failed", text: error.localizedDescription))
                     self.prepareRepoChangesForSelectedPiAgentSession(force: true)
                 }
@@ -2935,7 +2898,7 @@ final class AppViewModel: NSObject {
         guard appSettings.autoGeneratePiAgentSessionTitles,
               appSettings.autoUpdatePiAgentSessionTitles,
               !plan.items.isEmpty,
-              !piAgentTitleGeneratingSessionIDs.contains(sessionID),
+              !piWorkspace.isTitleGenerating(for: sessionID),
               let session = piAgentSessionStore.sessions.first(where: { $0.id == sessionID }),
               !session.title.hasPrefix("Draft ·"),
               !session.isTitleUserEdited,
@@ -2947,7 +2910,7 @@ final class AppViewModel: NSObject {
               !latestUserMessage.isEmpty,
               let model = piAgentTitleGenerationModel() else { return }
 
-        piAgentTitleGeneratingSessionIDs.insert(sessionID)
+        piWorkspace.markTitleGenerating(sessionID)
         let projectURL = URL(fileURLWithPath: session.worktreePath ?? session.projectPath)
         let environment = EnvRuntimeEnvironment().environment(projectRoot: projectURL)
         piSessionTitleGenerator.updateTitle(
@@ -2959,7 +2922,7 @@ final class AppViewModel: NSObject {
             environment: environment
         ) { [weak self] result in
             guard let self else { return }
-            self.piAgentTitleGeneratingSessionIDs.remove(sessionID)
+            self.piWorkspace.unmarkTitleGenerating(sessionID)
             guard case let .success(title) = result,
                   title.caseInsensitiveCompare("KEEP") != .orderedSame else { return }
             guard let current = self.piAgentSessionStore.sessions.first(where: { $0.id == sessionID }),
@@ -2979,11 +2942,11 @@ final class AppViewModel: NSObject {
               !trimmedMessage.isEmpty,
               session.title.hasPrefix("Draft ·"),
               !session.isTitleUserEdited,
-              !piAgentTitleGeneratingSessionIDs.contains(session.id),
+              !piWorkspace.isTitleGenerating(for: session.id),
               piAgentSessionStore.transcript(for: session.id).filter({ $0.role == .user }).isEmpty,
               let model = piAgentTitleGenerationModel() else { return }
 
-        piAgentTitleGeneratingSessionIDs.insert(session.id)
+        piWorkspace.markTitleGenerating(session.id)
         let projectURL = URL(fileURLWithPath: session.worktreePath ?? session.projectPath)
         let environment = EnvRuntimeEnvironment().environment(projectRoot: projectURL)
         piSessionTitleGenerator.generateTitle(
@@ -2993,7 +2956,7 @@ final class AppViewModel: NSObject {
             environment: environment
         ) { [weak self] result in
             guard let self else { return }
-            self.piAgentTitleGeneratingSessionIDs.remove(session.id)
+            self.piWorkspace.unmarkTitleGenerating(session.id)
             guard case let .success(title) = result else { return }
             guard let current = self.piAgentSessionStore.sessions.first(where: { $0.id == session.id }),
                   current.title.hasPrefix("Draft ·"),
