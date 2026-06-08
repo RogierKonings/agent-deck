@@ -37,3 +37,6 @@ tmp/
 
 # Local-only release helper (kept off the public repo on purpose)
 scripts/release.sh
+
+# pi side-agents worktrees
+.worktrees/
