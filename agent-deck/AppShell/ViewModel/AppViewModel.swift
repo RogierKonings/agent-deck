@@ -71,6 +71,7 @@ final class AppViewModel: NSObject {
     // boundaries — see `rebuildAutomationModelCaches()`.
     private(set) var cachedFoundationAutomationModel: AvailableModel?
     private(set) var cachedAutomationAvailableModels: [AvailableModel] = []
+    private(set) var cachedEnabledAvailableModels: [AvailableModel] = []
     // Agent-list caches live in `resourceCatalog` — rebuilt by `resourceCatalog.rebuildWarningCaches()`.
     var cachedAllDisplayAgents: [EffectiveAgentRecord] { resourceCatalog.allDisplayAgents }
     var cachedDisplayAgentByID: [EffectiveAgentRecord.ID: EffectiveAgentRecord] { resourceCatalog.displayAgentByID }
@@ -85,9 +86,10 @@ final class AppViewModel: NSObject {
     var cachedPromptWarnings: [DiagnosticWarning] { resourceCatalog.promptWarnings }
     var cachedSkillReferenceWarnings: [SkillReferenceWarning] { resourceCatalog.skillReferenceWarnings }
     var cachedSkillVisibilityIssuesByAgentID: [String: [AgentSkillVisibilityIssue]] { resourceCatalog.skillVisibilityIssuesByAgentID }
-    var enabledAvailableModels: [AvailableModel] {
-        modelCatalog.availableModels.filter { modelCatalog.isModelAvailable($0) }
-    }
+    // Cached for the same reason as `cachedAutomationAvailableModels`: the
+    // toolbar/composer read this on every `ContentView.body` eval. Rebuilt in
+    // `rebuildAutomationModelCaches()` at real model/settings boundaries.
+    var enabledAvailableModels: [AvailableModel] { cachedEnabledAvailableModels }
 
     var foundationAutomationModel: AvailableModel? { cachedFoundationAutomationModel }
 
@@ -226,7 +228,9 @@ final class AppViewModel: NSObject {
         projects.loadPersistedSelection()
         piAgentSessionStore.newSessionSubagentsEnabled = appSettings.nativeSubagentsEnabledForNewSessions
         piSessions.configureIdleParking()
-        refreshAvailableModels()
+        // Cold launch: models come from the on-disk discovery cache instantly;
+        // the real `pi --list-models` spawn is deferred off the launch path.
+        modelCatalog.loadModelsFromCacheThenDeferredRefresh()
         // First-frame refresh: only scan global + the last-selected project
         // (cheap). The full-project scan is deferred to after first paint so a
         // user with many projects doesn't pay the O(P × dir-walk) cost before
@@ -1550,8 +1554,11 @@ final class AppViewModel: NSObject {
     /// Triggered when the model catalog reloads and when `appSettings` changes,
     /// which also covers app launch (init assigns `appSettings`).
     func rebuildAutomationModelCaches() {
+        let enabled = modelCatalog.availableModels.filter { modelCatalog.isModelAvailable($0) }
+        cachedEnabledAvailableModels = enabled
+
         let foundation = FoundationModelAutomationService.availableModel()
-        var models = enabledAvailableModels
+        var models = enabled
         if let foundation,
            !models.contains(where: { $0.identifier == foundation.identifier }) {
             models.insert(foundation, at: 0)

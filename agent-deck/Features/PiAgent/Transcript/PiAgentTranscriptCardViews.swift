@@ -289,9 +289,10 @@ struct PiAgentUserMessageContent: View {
         }
     }
 
+    private static let inlineFileTagRegex = try? NSRegularExpression(pattern: #"<file name=\"([^\"]+)\">[\s\S]*?</file>"#)
+
     private static func inlineFileTags(in text: String) -> [FileAttachmentPreview] {
-        let pattern = #"<file name=\"([^\"]+)\">[\s\S]*?</file>"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        guard let regex = inlineFileTagRegex else { return [] }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
         return regex.matches(in: text, range: range).compactMap { match in
             guard let range = Range(match.range(at: 1), in: text) else { return nil }
@@ -378,8 +379,19 @@ struct PiAgentUserMessageContent: View {
         ]
     }
 
+    /// Compiled-regex cache: `matches`/`folderReferences` run per card render
+    /// with a fixed set of patterns, so compile each pattern once.
+    private static var regexCache: [String: NSRegularExpression] = [:]
+
+    private static func cachedRegex(_ pattern: String) -> NSRegularExpression? {
+        if let regex = regexCache[pattern] { return regex }
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        regexCache[pattern] = regex
+        return regex
+    }
+
     private static func matches(pattern: String, in text: String) -> [String] {
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        guard let regex = cachedRegex(pattern) else { return [] }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
         return regex.matches(in: text, range: range).compactMap { match in
             guard match.numberOfRanges > 1, let range = Range(match.range(at: 1), in: text) else { return nil }

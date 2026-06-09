@@ -173,6 +173,9 @@ final class AgentMemoryCoordinator {
         let projectURL = host?.dreamProjectURL() ?? FileManager.default.homeDirectoryForCurrentUser
         let environment = host?.dreamProcessEnvironment(for: projectURL) ?? ProcessInfo.processInfo.environment
         let reviewer = PiMemoryDreamLLMReviewer(model: model, projectURL: projectURL, environment: environment)
+        // The reviewer keeps one pi helper process alive across all phases of
+        // the run; tear it down when the run ends (success or failure).
+        defer { reviewer.shutdown() }
         return try await PiMemoryDreamService(reviewer: reviewer).propose(memories: memories, progress: progress)
     }
 

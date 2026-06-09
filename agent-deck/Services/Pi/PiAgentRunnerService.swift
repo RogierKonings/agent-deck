@@ -1245,7 +1245,10 @@ final class PiAgentRunnerService {
         }
 
         if event.command == "get_session_stats", let data = event.data {
-            store.updateSession(sessionID) { record in
+            // Ephemeral stats: skip the full session-index save. The turn-end
+            // idle confirmation (mark → updateSession, ~900ms later), session
+            // stop, and app-termination saves persist the latest values.
+            store.updateSession(sessionID, persist: false) { record in
                 record.lastSummary = data.compactDescription
                 record.inputTokens = data["tokens"]?["input"]?.numberValue.map(Int.init)
                 record.outputTokens = data["tokens"]?["output"]?.numberValue.map(Int.init)

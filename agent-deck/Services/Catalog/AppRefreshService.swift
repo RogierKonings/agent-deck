@@ -168,46 +168,40 @@ nonisolated struct AppRefreshService: Sendable {
 }
 
 nonisolated struct FileWatchFingerprint: Sendable {
+    /// Shallow fingerprint: each watch root contributes its own mtime plus its
+    /// direct children's names/mtimes (one `contentsOfDirectory` per root), not
+    /// a full recursive walk. FSEvents covers deep changes while the app runs;
+    /// the fingerprint only needs to catch changes made while the app was
+    /// inactive, and adding/removing/saving a file bumps its parent directory's
+    /// mtime, so root + direct-child mtimes catch the overwhelming majority.
+    /// Trade-off: a deep edit made while inactive that doesn't touch any
+    /// shallow mtime can be missed — the 5-minute auto-refresh timer and
+    /// manual refresh remain as backstops.
     static func make(urls: [URL]) -> String {
         let fileManager = FileManager.default
-        let entries: [String] = urls.flatMap { url in
-            if let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .isDirectoryKey]),
-               values.isDirectory == true {
-                let enumerator = fileManager.enumerator(
-                    at: url,
-                    includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey, .isDirectoryKey],
-                    options: [.skipsPackageDescendants]
-                )
-                var children: [String] = []
-                while let child = enumerator?.nextObject() as? URL {
-                    let childValues = try? child.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey, .isDirectoryKey])
-                    if childValues?.isDirectory == true {
-                        if shouldSkipDirectory(child.lastPathComponent) {
-                            enumerator?.skipDescendants()
-                        }
-                        continue
-                    }
-                    guard childValues?.isRegularFile == true, watchedFile(child) else { continue }
-                    let date = childValues?.contentModificationDate?.timeIntervalSince1970 ?? 0
-                    children.append("\(child.path)::\(date)")
-                }
-                return children
+        let entries: [String] = urls.flatMap { url -> [String] in
+            guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .isDirectoryKey]) else {
+                return ["\(url.path)::missing"]
             }
-            let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)?.timeIntervalSince1970 ?? 0
-            return ["\(url.path)::\(date)"]
+            let rootDate = values.contentModificationDate?.timeIntervalSince1970 ?? 0
+            guard values.isDirectory == true else {
+                return ["\(url.path)::\(rootDate)"]
+            }
+            var children: [String] = ["\(url.path)::\(rootDate)"]
+            let childURLs = (try? fileManager.contentsOfDirectory(
+                at: url,
+                includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey],
+                options: []
+            )) ?? []
+            for child in childURLs {
+                let childValues = try? child.resourceValues(forKeys: [.contentModificationDateKey, .isDirectoryKey])
+                if childValues?.isDirectory == true, shouldSkipDirectory(child.lastPathComponent) { continue }
+                let date = childValues?.contentModificationDate?.timeIntervalSince1970 ?? 0
+                children.append("\(child.path)::\(date)")
+            }
+            return children
         }
         return entries.sorted().joined(separator: "|")
-    }
-
-    private static func watchedFile(_ url: URL) -> Bool {
-        let name = url.lastPathComponent
-        if name == ".env" || name == "SKILL.md" { return true }
-        switch url.pathExtension.lowercased() {
-        case "md", "json":
-            return true
-        default:
-            return false
-        }
     }
 
     private static func shouldSkipDirectory(_ name: String) -> Bool {

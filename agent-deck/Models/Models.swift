@@ -129,7 +129,58 @@ nonisolated struct SkillRecord: Identifiable, Hashable, Sendable {
     let description: String?
     let source: ScopeID
     let filePath: String
-    let body: String
+
+    /// Full SKILL.md text. Catalog scans no longer load every body eagerly —
+    /// it is read from disk on first access and memoized per record instance.
+    /// Excluded from Hashable/Equatable so record comparisons stay O(metadata);
+    /// re-scans produce fresh instances, so edited bodies are picked up.
+    var body: String { bodyStorage.text(filePath: filePath) }
+
+    private let bodyStorage: SkillBodyStorage
+
+    init(id: String, name: String, description: String?, source: ScopeID, filePath: String, body: String? = nil) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.source = source
+        self.filePath = filePath
+        bodyStorage = SkillBodyStorage(eagerText: body)
+    }
+
+    static func == (lhs: SkillRecord, rhs: SkillRecord) -> Bool {
+        lhs.id == rhs.id
+            && lhs.name == rhs.name
+            && lhs.description == rhs.description
+            && lhs.source == rhs.source
+            && lhs.filePath == rhs.filePath
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(name)
+        hasher.combine(description)
+        hasher.combine(source)
+        hasher.combine(filePath)
+    }
+}
+
+/// Reference box so copies of a `SkillRecord` share one lazily-read body.
+private nonisolated final class SkillBodyStorage: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cached: String?
+
+    init(eagerText: String?) {
+        cached = eagerText
+    }
+
+    func text(filePath: String) -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        if let cached { return cached }
+        let text = (try? String(contentsOfFile: filePath, encoding: .utf8)) ?? ""
+        cached = text
+        return text
+    }
 }
 
 nonisolated struct ProjectSkillRecap: Hashable, Sendable {
@@ -215,7 +266,7 @@ nonisolated struct EnvKeyRecord: Identifiable, Hashable, Sendable {
     let source: ScopeID
 }
 
-nonisolated struct AvailableModel: Identifiable, Hashable, Sendable {
+nonisolated struct AvailableModel: Identifiable, Hashable, Sendable, Codable {
     let provider: String
     let model: String
     let contextWindow: String

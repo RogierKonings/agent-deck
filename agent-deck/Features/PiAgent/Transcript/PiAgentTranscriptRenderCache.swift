@@ -37,6 +37,11 @@ final class PiAgentTranscriptRenderCache: ObservableObject {
     private var lastRevision = -1
     private var lastThreadSignature: [UUID] = []
     private var lastAutoScrollTurnEntryID: UUID?
+    /// Cheap per-raw-entry signatures from the previous publish. Used to detect
+    /// the common streaming shape — only entries after the last thread boundary
+    /// changed — so `publish` can rebuild just the final thread instead of
+    /// re-normalizing and re-threading the whole transcript every ~33ms.
+    private var lastRawEntrySignatures: [Int] = []
     // Per-thread cached content revision keyed by a cheap signature (counts + last-entry
     // text length). Repeat lookups during the same body re-evaluation, or across unrelated
     // body re-evaluations (composer typing etc.), skip the full O(entries) walk.
@@ -61,12 +66,16 @@ final class PiAgentTranscriptRenderCache: ObservableObject {
             lastRevision = -1
             lastThreadSignature = []
             lastAutoScrollTurnEntryID = nil
+            lastRawEntrySignatures = []
             threadRevisionCache.removeAll()
             renderRevision += 1
             return
         }
         guard sessionID != lastSessionID || revision != lastRevision else { return }
         let isSessionSwitch = sessionID != lastSessionID
+        if isSessionSwitch {
+            lastRawEntrySignatures = []
+        }
         // Don't wipe threadRevisionCache on session switch — keys are per-thread UUIDs
         // which are globally unique, so cached revisions for a different session can't
         // collide. Persisting the cache means a return-visit to a previously-viewed
@@ -93,12 +102,18 @@ final class PiAgentTranscriptRenderCache: ObservableObject {
     }
 
     private func publish(_ rawEntries: [PiAgentTranscriptEntry]) {
-        let normalized = normalizeThinkingOrder(
-            coalescedCompactionEntries(
-                rawEntries.compactMap(normalizedTranscriptEntry).filter(isValuableTranscriptEntry)
-            )
-        )
-        let nextThreads = PiAgentTranscriptThread.make(from: normalized)
+        let newSignatures = rawEntries.map(Self.rawEntrySignature)
+        let normalized: [PiAgentTranscriptEntry]
+        let nextThreads: [PiAgentTranscriptThread]
+        if let incremental = incrementalPublishResult(rawEntries, newSignatures: newSignatures) {
+            normalized = incremental.entries
+            nextThreads = incremental.threads
+        } else {
+            normalized = normalizedEntries(from: rawEntries)
+            nextThreads = PiAgentTranscriptThread.make(from: normalized)
+        }
+        lastRawEntrySignatures = newSignatures
+
         let signature = nextThreads.map(\.id)
         let structurallyChanged = signature != lastThreadSignature
         let latestUserEntryID = normalized.last(where: { $0.role == .user })?.id
@@ -120,6 +135,85 @@ final class PiAgentTranscriptRenderCache: ObservableObject {
         } else {
             streamingRevision += 1
         }
+    }
+
+    /// The full normalization pipeline. Every step is entry-local except
+    /// `coalescedCompactionEntries` (merges consecutive Compaction statuses) and
+    /// `normalizeThinkingOrder` (swaps adjacent thinking/assistant pairs) — both
+    /// of which only look at neighboring entries, which is what makes the
+    /// segment-local fast path in `incrementalPublishResult` valid.
+    private func normalizedEntries(from rawEntries: [PiAgentTranscriptEntry]) -> [PiAgentTranscriptEntry] {
+        normalizeThinkingOrder(
+            coalescedCompactionEntries(
+                rawEntries.compactMap(normalizedTranscriptEntry).filter(isValuableTranscriptEntry)
+            )
+        )
+    }
+
+    /// Streaming fast path: when only raw entries AFTER the last user-question
+    /// thread boundary changed (the shape of every assistant/thinking/tool
+    /// streaming pulse), re-normalize and re-thread just that final segment and
+    /// splice it onto the cached prefix — instead of walking the whole transcript
+    /// every ~33ms. Returns `nil` (full rebuild) whenever the shape is anything
+    /// else: prefix edits, truncation, session switches, compaction boundaries,
+    /// or any mismatch between the cached entries/threads and the boundary entry.
+    /// Behavior is identical to the full pipeline because every normalization
+    /// step is local (see `normalizedEntries`), the boundary entry is a user
+    /// question (so no compaction merge or thinking swap can cross the splice),
+    /// and `PiAgentTranscriptThread.make` starts a fresh thread exactly at user
+    /// questions.
+    private func incrementalPublishResult(
+        _ rawEntries: [PiAgentTranscriptEntry],
+        newSignatures: [Int]
+    ) -> (entries: [PiAgentTranscriptEntry], threads: [PiAgentTranscriptThread])? {
+        guard !lastRawEntrySignatures.isEmpty, !threads.isEmpty else { return nil }
+        guard rawEntries.count >= lastRawEntrySignatures.count else { return nil }
+
+        var firstDifference = lastRawEntrySignatures.count
+        for index in lastRawEntrySignatures.indices where lastRawEntrySignatures[index] != newSignatures[index] {
+            firstDifference = index
+            break
+        }
+        if firstDifference == newSignatures.count {
+            return (entries, threads) // No raw change at all — reuse the cache.
+        }
+
+        // The fast path only handles segments that start at a user question.
+        // A trailing Compaction boundary could merge with an earlier Compaction
+        // across the splice, so it always takes the full rebuild.
+        guard let boundaryIndex = rawEntries.lastIndex(where: { entry in
+            (entry.role == .user && entry.title != "Steering") ||
+                (entry.role == .status && entry.title == "Compaction")
+        }) else { return nil }
+        let boundary = rawEntries[boundaryIndex]
+        guard boundary.role == .user, firstDifference > boundaryIndex else { return nil }
+
+        guard let entrySplice = entries.lastIndex(where: { $0.id == boundary.id }),
+              let threadSplice = threads.lastIndex(where: { $0.id == boundary.id }) else { return nil }
+
+        let segment = normalizedEntries(from: Array(rawEntries[boundaryIndex...]))
+        guard segment.first?.id == boundary.id else { return nil }
+        let segmentThreads = PiAgentTranscriptThread.make(from: segment)
+        guard segmentThreads.first?.id == boundary.id else { return nil }
+
+        return (
+            Array(entries[..<entrySplice]) + segment,
+            Array(threads[..<threadSplice]) + segmentThreads
+        )
+    }
+
+    /// Cheap change-detection signature for one raw entry. Mirrors the fields
+    /// `hashEntryRevision` uses for row revisions: any mutation `upsert`/
+    /// `updateEntry` can make to an entry changes at least one of these.
+    private static func rawEntrySignature(_ entry: PiAgentTranscriptEntry) -> Int {
+        var hasher = Hasher()
+        hasher.combine(entry.id)
+        hasher.combine(entry.role)
+        hasher.combine(entry.title)
+        hasher.combine(entry.text.count)
+        hasher.combine(entry.rawJSON?.count ?? 0)
+        hasher.combine(entry.timestamp)
+        return hasher.finalize()
     }
 
     private enum AssistantContentInterpretation {

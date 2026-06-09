@@ -11,6 +11,11 @@ struct MemoryScreen: View {
     @State private var selectedRecordID: String?
     @State private var isEditorPresented = false
     @State private var editingRecord: AgentMemoryRecord?
+    /// Memoized filter+sort result. The body re-evaluates on dream-state
+    /// updates and store revision bumps; recomputing the O(records) string-join
+    /// filter on each pass was wasted work, so it only reruns when an actual
+    /// filter input changes (see `filterInputsSignature`).
+    @State private var cachedFilteredRecords: [AgentMemoryRecord] = []
 
     var body: some View {
         AppPage("Memory", subtitle: "Inspect and manage canonical Pi persistent memory") {
@@ -36,15 +41,38 @@ struct MemoryScreen: View {
                 }
             }
         }
-        .onAppear { consumePendingMemorySelection() }
+        .onAppear {
+            cachedFilteredRecords = computeFilteredRecords()
+            consumePendingMemorySelection()
+        }
         .onChange(of: viewModel.selectedMemoryID) { _, _ in consumePendingMemorySelection() }
+        .onChange(of: filterInputsSignature) { _, _ in
+            cachedFilteredRecords = computeFilteredRecords()
+        }
     }
 
     private var scopedRecords: [AgentMemoryRecord] {
         memoryStore.records(projectPath: viewModel.selectedProjectPath)
     }
 
+    /// Changes exactly when an input of `computeFilteredRecords()` changes.
+    private var filterInputsSignature: Int {
+        var hasher = Hasher()
+        hasher.combine(memoryStore.revision)
+        hasher.combine(viewModel.selectedProjectPath)
+        hasher.combine(searchText)
+        hasher.combine(includeSuperseded)
+        hasher.combine(selectedKind)
+        hasher.combine(selectedScope)
+        hasher.combine(sort)
+        return hasher.finalize()
+    }
+
     private var filteredRecords: [AgentMemoryRecord] {
+        cachedFilteredRecords
+    }
+
+    private func computeFilteredRecords() -> [AgentMemoryRecord] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let filtered = scopedRecords.filter { record in
             if !includeSuperseded && !record.isInjectable { return false }

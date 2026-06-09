@@ -247,8 +247,8 @@ nonisolated struct PiScanner: @unchecked Sendable {
 
             if isDirectory.boolValue {
                 let skillFile = url.appendingPathComponent("SKILL.md")
-                guard let text = try? String(contentsOf: skillFile, encoding: .utf8) else { return nil }
-                let document = parseMarkdownDocument(text)
+                guard let header = readSkillHeader(at: skillFile) else { return nil }
+                let document = parseMarkdownDocument(header)
                 let name = document.frontmatter["name"]?.nonEmpty ?? url.lastPathComponent
                 let description = document.frontmatter["description"]?.nonEmpty
                 return SkillRecord(
@@ -256,8 +256,7 @@ nonisolated struct PiScanner: @unchecked Sendable {
                     name: name,
                     description: description,
                     source: ScopeID(kind: scope, path: skillFile.path),
-                    filePath: skillFile.path,
-                    body: text
+                    filePath: skillFile.path
                 )
             }
 
@@ -375,8 +374,8 @@ nonisolated struct PiScanner: @unchecked Sendable {
     }
 
     private func scanStandaloneSkillFile(at file: URL, scope: ResourceScopeKind) -> SkillRecord? {
-        guard let text = try? String(contentsOf: file, encoding: .utf8) else { return nil }
-        let document = parseMarkdownDocument(text)
+        guard let header = readSkillHeader(at: file) else { return nil }
+        let document = parseMarkdownDocument(header)
         let name = document.frontmatter["name"]?.nonEmpty ?? file.deletingLastPathComponent().lastPathComponent
         let description = document.frontmatter["description"]?.nonEmpty
         return SkillRecord(
@@ -384,9 +383,20 @@ nonisolated struct PiScanner: @unchecked Sendable {
             name: name,
             description: description,
             source: ScopeID(kind: scope, path: file.path),
-            filePath: file.path,
-            body: text
+            filePath: file.path
         )
+    }
+
+    /// Reads at most the leading 16KB of a skill file — more than enough for any
+    /// sane frontmatter block. Catalog refreshes only need name/description, so
+    /// this avoids loading every full skill body into memory on every scan;
+    /// `SkillRecord.body` reads the full file lazily at point of use.
+    private func readSkillHeader(at file: URL) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: file) else { return nil }
+        defer { try? handle.close() }
+        // nil from read(upToCount:) at EOF means an empty (but existing) file.
+        let data = (try? handle.read(upToCount: 16 * 1024)) ?? Data()
+        return String(decoding: data, as: UTF8.self)
     }
 
     private func scanPromptTemplates(

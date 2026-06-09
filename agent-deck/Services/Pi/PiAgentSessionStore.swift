@@ -502,7 +502,10 @@ final class PiAgentSessionStore {
         saveStructuralChange()
     }
 
-    func updateSession(_ id: UUID, bumpUpdatedAt: Bool = false, mutate: (inout PiAgentSessionRecord) -> Void) {
+    /// `persist: false` skips the session-index save for ephemeral field updates
+    /// (e.g. streaming token stats); the next persisting update — turn-end idle
+    /// confirmation, stop, app termination — writes them to disk.
+    func updateSession(_ id: UUID, bumpUpdatedAt: Bool = false, persist: Bool = true, mutate: (inout PiAgentSessionRecord) -> Void) {
         guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
         // Avoid an unconditional sortSessions() — every `sessions.sort` is an Observable
         // write on `sessions`, and many per-frame calls during streaming were tripping
@@ -533,7 +536,9 @@ final class PiAgentSessionStore {
             || sessions[index].status != preStatus {
             bumpSessionListRevision()
         }
-        save()
+        if persist {
+            save()
+        }
     }
 
     func renameSession(_ id: UUID, title: String) {

@@ -454,11 +454,23 @@ final class PiMemoryDreamLLMReviewer: PiMemoryDreamReviewing {
     private let projectURL: URL
     private let environment: [String: String]
     private let timeoutNanoseconds: UInt64 = 45_000_000_000
+    /// One `pi` RPC helper reused for every phase of a dream run instead of a
+    /// fresh process per LLM call (up to ~30 spawns per run). Created lazily on
+    /// the first non-Foundation call; relaunched if the process died; torn down
+    /// by `shutdown()` when the dream run finishes.
+    private var helperSession: PiMemoryDreamHelperSession?
 
     init(model: AvailableModel, projectURL: URL, environment: [String: String]) {
         self.model = model
         self.projectURL = projectURL
         self.environment = environment
+    }
+
+    /// Stops the shared helper process. Call when the dream run completes
+    /// (success or failure).
+    func shutdown() {
+        helperSession?.stop()
+        helperSession = nil
     }
 
     func reviewClusterForMerge(cluster: [AgentMemoryRecord]) async throws -> [PiMemoryDreamProposal] {
@@ -495,70 +507,141 @@ final class PiMemoryDreamLLMReviewer: PiMemoryDreamReviewing {
         if FoundationModelAutomationService.isFoundationModel(model) {
             return try await FoundationModelAutomationService.generateOneShot(prompt: user, systemPrompt: system, temperature: 0.2, maxTokens: 2_000)
         }
+        // Phase-specific "system" text travels inline in the user message: the
+        // shared helper launches once with a generic system prompt and serves
+        // every phase as a sequential prompt on the same process.
+        return try await ensureHelperSession().complete(instructions: system, user: user)
+    }
+
+    private func ensureHelperSession() throws -> PiMemoryDreamHelperSession {
+        if let helperSession, helperSession.isRunning {
+            return helperSession
+        }
+        helperSession?.stop()
+        let session = try PiMemoryDreamHelperSession(
+            model: model,
+            projectURL: projectURL,
+            environment: environment,
+            timeoutNanoseconds: timeoutNanoseconds
+        )
+        helperSession = session
+        return session
+    }
+}
+
+/// One long-lived `pi --mode rpc` helper that answers multiple dream-phase
+/// prompts sequentially on a single process. Replaces the previous
+/// process-per-LLM-call design (up to ~30 spawns per dream run).
+@MainActor
+private final class PiMemoryDreamHelperSession {
+    typealias ReviewError = PiMemoryDreamLLMReviewer.ReviewError
+
+    /// Generic system prompt; each phase carries its own instructions inline in
+    /// the user message, so one process can serve all phases.
+    private static let systemPrompt = """
+    You are a memory-maintenance reviewer for a personal knowledge base. Each user message contains standalone instructions and data. Treat every message independently of earlier ones and respond with valid JSON only, exactly as that message specifies.
+    """
+
+    private var client: PiRPCClient!
+    private var pending: CheckedContinuation<String, Error>?
+    private var assistantText = ""
+    private var timeoutTask: Task<Void, Never>?
+    private let timeoutNanoseconds: UInt64
+
+    var isRunning: Bool { client?.isRunning ?? false }
+
+    init(model: AvailableModel, projectURL: URL, environment: [String: String], timeoutNanoseconds: UInt64) throws {
+        self.timeoutNanoseconds = timeoutNanoseconds
+        let drain = MainActorEventDrain<PiClientMessage> { [weak self] message in
+            self?.handle(message)
+        }
+        client = try PiRPCClient(
+            cwd: projectURL,
+            provider: model.provider,
+            modelArgument: PiSessionTitleGenerationService.runtimeModelArgument(modelID: model.model, thinkingLevel: "off"),
+            extraArguments: ["--no-session", "--no-extensions", "--no-skills", "--no-tools", "--no-context-files", "--no-prompt-templates", "--no-themes", "--system-prompt", Self.systemPrompt, "--append-system-prompt", ""],
+            environment: environment,
+            onEvent: { drain.send(.events($0)) },
+            onStderr: { _ in },
+            onTermination: { code in
+                drain.send(.terminated(code))
+                drain.finish()
+            }
+        )
+    }
+
+    func complete(instructions: String, user: String) async throws -> String {
+        guard pending == nil else { throw ReviewError.rpc("Dream helper already has a request in flight.") }
+        guard isRunning else { throw ReviewError.processExited(-1) }
+        assistantText = ""
         return try await withCheckedThrowingContinuation { continuation in
-            startPiHelper(system: system, user: user) { result in continuation.resume(with: result) }
+            pending = continuation
+            timeoutTask = Task { [weak self, timeoutNanoseconds] in
+                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+                guard let self, !Task.isCancelled else { return }
+                // A hung turn would poison later phases on this process; kill it
+                // and let the reviewer relaunch on the next call.
+                self.client?.stop()
+                self.fail(with: ReviewError.timedOut)
+            }
+            client.prompt("\(instructions)\n\n\(user)")
         }
     }
 
-    private func startPiHelper(system: String, user: String, completion: @escaping @Sendable (Result<String, Error>) -> Void) {
-        do {
-            nonisolated(unsafe) var assistantText = ""
-            nonisolated(unsafe) var didFinish = false
-            nonisolated(unsafe) var client: PiRPCClient?
-            client = try PiRPCClient(
-                cwd: projectURL,
-                provider: model.provider,
-                modelArgument: PiSessionTitleGenerationService.runtimeModelArgument(modelID: model.model, thinkingLevel: "off"),
-                extraArguments: ["--no-session", "--no-extensions", "--no-skills", "--no-tools", "--no-context-files", "--no-prompt-templates", "--no-themes", "--system-prompt", system, "--append-system-prompt", ""],
-                environment: environment,
-                onEvent: { events in
-                    Task { @MainActor in
-                        guard !didFinish else { return }
-                        for wrapped in events {
-                            guard let event = wrapped.event else { continue }
-                            if event.type == "response", event.success == false {
-                                didFinish = true
-                                client?.stop()
-                                completion(.failure(ReviewError.rpc(event.error?.compactDescription ?? wrapped.rawLine)))
-                                return
-                            }
-                            if event.type == "message_update", let assistantEvent = event.assistantMessageEvent, assistantEvent["type"]?.stringValue == "text_delta" {
-                                assistantText += assistantEvent["delta"]?.stringValue ?? ""
-                            }
-                            if event.type == "message_end", let message = event.message {
-                                let text = Self.extractAssistantText(from: message)
-                                if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { assistantText = text }
-                            }
-                            if event.type == "agent_end" || event.type == "turn_end" {
-                                didFinish = true
-                                client?.stop()
-                                let trimmed = assistantText.trimmingCharacters(in: .whitespacesAndNewlines)
-                                completion(trimmed.isEmpty ? .failure(ReviewError.emptyResponse) : .success(trimmed))
-                                return
-                            }
-                        }
-                    }
-                },
-                onStderr: { _ in },
-                onTermination: { code in
-                    Task { @MainActor in
-                        guard !didFinish else { return }
-                        didFinish = true
-                        completion(.failure(ReviewError.processExited(code)))
-                    }
-                }
-            )
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
-                guard !didFinish else { return }
-                didFinish = true
-                client?.stop()
-                completion(.failure(ReviewError.timedOut))
+    func stop() {
+        fail(with: ReviewError.processExited(-1))
+        client?.stop()
+    }
+
+    private func handle(_ message: PiClientMessage) {
+        switch message {
+        case let .events(events):
+            for line in events {
+                handle(eventLine: line)
+                if pending == nil { break }
             }
-            client?.prompt(user)
-        } catch {
-            completion(.failure(error))
+        case .stderr:
+            break
+        case let .terminated(code):
+            fail(with: ReviewError.processExited(code))
         }
+    }
+
+    private func handle(eventLine: PiRPCClient.EventLine) {
+        guard pending != nil, let event = eventLine.event else { return }
+        if event.type == "response", event.success == false {
+            fail(with: ReviewError.rpc(event.error?.compactDescription ?? eventLine.rawLine))
+            return
+        }
+        if event.type == "message_update", let assistantEvent = event.assistantMessageEvent, assistantEvent["type"]?.stringValue == "text_delta" {
+            assistantText += assistantEvent["delta"]?.stringValue ?? ""
+        }
+        if event.type == "message_end", let message = event.message {
+            let text = Self.extractAssistantText(from: message)
+            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { assistantText = text }
+        }
+        if event.type == "agent_end" || event.type == "turn_end" {
+            let trimmed = assistantText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                fail(with: ReviewError.emptyResponse)
+            } else {
+                succeed(with: trimmed)
+            }
+        }
+    }
+
+    private func succeed(with text: String) {
+        timeoutTask?.cancel()
+        timeoutTask = nil
+        pending?.resume(returning: text)
+        pending = nil
+    }
+
+    private func fail(with error: Error) {
+        timeoutTask?.cancel()
+        timeoutTask = nil
+        pending?.resume(throwing: error)
+        pending = nil
     }
 
     private static func extractAssistantText(from message: JSONValue) -> String {

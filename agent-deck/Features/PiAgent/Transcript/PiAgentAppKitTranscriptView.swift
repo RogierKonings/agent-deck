@@ -395,6 +395,10 @@ struct PiAgentAppKitTranscriptView: NSViewRepresentable {
         // One-frame debounce so a burst of cell measurements during a single
         // layout pass coalesces into one noteHeightOfRows call.
         private let heightReportInterval: TimeInterval = 0.016
+        /// When the last synchronous streaming measure+retile ran. Streaming-only
+        /// updates allow at most one synchronous retile per display refresh;
+        /// throttled pulses fall back to the async pending-height machinery.
+        private var lastSynchronousRetileTime: CFTimeInterval = 0
 
         private struct ScrollAnchor {
             let id: String
@@ -699,10 +703,21 @@ struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                     // wobble. Measuring now and routing through the existing
                     // noteHeightsChanged keeps the follow/anchor behaviour intact;
                     // the later async report sees no height change and no-ops.
-                    let retileIDs = profiler.measureForced { measureChangedCellsSynchronously(Set(changedIDs)) }
-                    if !retileIDs.isEmpty {
-                        flushPendingHeightWorkSynchronously()
-                        noteHeightsChanged(forIDs: retileIDs)
+                    //
+                    // Throttle: during pure streaming (no structural change) run at
+                    // most one synchronous measure+retile per display refresh. A
+                    // throttled pulse still reconfigured the cells above; their
+                    // async height reports (reportMeasuredHeight → ~16ms debounce)
+                    // issue a single trailing retile, so no growth is ever lost.
+                    let now = CACurrentMediaTime()
+                    let isStreamingOnlyUpdate = streamingUpdate && !structuralUpdate && !isSessionSwitch
+                    if !isStreamingOnlyUpdate || now - lastSynchronousRetileTime >= heightReportInterval {
+                        lastSynchronousRetileTime = now
+                        let retileIDs = profiler.measureForced { measureChangedCellsSynchronously(Set(changedIDs)) }
+                        if !retileIDs.isEmpty {
+                            flushPendingHeightWorkSynchronously()
+                            noteHeightsChanged(forIDs: retileIDs)
+                        }
                     }
                 } else if streamingUpdate || structuralUpdate {
                     publishPinnedState(isAutoFollowing)

@@ -88,6 +88,28 @@ final class ModelCatalogCoordinator {
         }
     }
 
+    /// Launch path: populate the catalog from the on-disk discovery cache
+    /// immediately, then run the real `pi --list-models` discovery only after
+    /// launch settles so it doesn't compete with the catalog scan and
+    /// session-store load. First-ever launch (no cache) starts discovery right
+    /// away (still detached at `.utility`).
+    func loadModelsFromCacheThenDeferredRefresh() {
+        Task.detached(priority: .utility) { [weak self] in
+            let cached = AvailableModelsDiskCache.load()
+            if let cached, !cached.models.isEmpty {
+                await MainActor.run { [weak self] in
+                    guard let self, self.availableModels.isEmpty else { return }
+                    self.availableModels = cached.models
+                    self.modelsLastUpdatedAt = cached.fetchedAt
+                }
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+            }
+            await MainActor.run { [weak self] in
+                self?.refreshAvailableModels()
+            }
+        }
+    }
+
     func ensurePiAgentModelCatalogLoaded() {
         guard availableModels.isEmpty else { return }
         refreshAvailableModels()
@@ -122,6 +144,11 @@ final class ModelCatalogCoordinator {
         modelsLastUpdatedAt = Date()
         if markRefreshComplete {
             isRefreshingModels = false
+        }
+        // Keep the launch cache fresh; skip empty results (failed discovery)
+        // so a transient failure doesn't wipe a good cache.
+        if !models.isEmpty {
+            AvailableModelsDiskCache.save(models: models)
         }
     }
 }

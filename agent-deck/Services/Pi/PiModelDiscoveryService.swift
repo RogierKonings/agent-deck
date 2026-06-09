@@ -1,5 +1,38 @@
 import Foundation
 
+/// On-disk cache of the last successful `pi --list-models` discovery (models +
+/// thinking levels). Lets cold launch populate the model catalog instantly
+/// without spawning `pi` + `node` on the launch path; the real discovery runs
+/// deferred and rewrites the cache when it completes.
+nonisolated enum AvailableModelsDiskCache {
+    struct Contents: Codable, Sendable {
+        let models: [AvailableModel]
+        let fetchedAt: Date
+    }
+
+    private static var fileURL: URL {
+        let directory = URL.applicationSupportDirectory
+            .appendingPathComponent(AppBrand.displayName, isDirectory: true)
+            .appendingPathComponent("Caches", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent("available-models.json")
+    }
+
+    static func load() -> Contents? {
+        guard let data = try? Data(contentsOf: fileURL) else { return nil }
+        return try? JSONDecoder().decode(Contents.self, from: data)
+    }
+
+    static func save(models: [AvailableModel], fetchedAt: Date = Date()) {
+        let contents = Contents(models: models, fetchedAt: fetchedAt)
+        let url = fileURL
+        Task.detached(priority: .utility) {
+            guard let data = try? JSONEncoder().encode(contents) else { return }
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+}
+
 struct PiModelDiscoveryService: Sendable {
     private let commandRunner: CommandRunning
     private let piResolver: PiExecutableResolver
