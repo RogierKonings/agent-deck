@@ -25,29 +25,32 @@ extension PiAgentScreen {
     }
 
     /// COMPLETE signature of every input `appKitTranscriptItemsBuild` reads.
-    /// `renderRevision`/`streamingRevision` cover all transcript content (threads).
+    /// `renderRevision`/`streamingRevision` cover all transcript content (threads —
+    /// and therefore the timeline snapshot, which derives purely from
+    /// `transcriptCache.threads` + the archive toggle hashed below).
     /// `appKitTranscript{Chrome,ThreadContext}Revision` are the SAME hashes the build
     /// folds into each row's `contentRevision`, so reusing them here captures the
     /// session-level inputs (status, worktree/project, loading, visibility, skills,
     /// subagent summary) without re-listing them — and can't drift if those helpers
     /// gain a read. The tail adds the few inputs those revisions don't cover.
+    ///
+    /// This runs on every host body pass (~30Hz while streaming), so it must stay
+    /// O(1) in transcript length: no timeline snapshot, no per-run/request hashing.
+    /// Subagent runs + supervisor requests are covered by the store's per-session
+    /// `subagentActivityRevision`, bumped on every mutation of either collection.
     var appKitTranscriptItemsSignature: Int {
-        let snapshot = transcriptTimelineSnapshot
         var hasher = Hasher()
         hasher.combine(transcriptCache.renderRevision)
         hasher.combine(transcriptCache.streamingRevision)
-        hasher.combine(appKitTranscriptChromeRevision(snapshot: snapshot))
-        hasher.combine(appKitTranscriptThreadContextRevision(snapshot: snapshot))
+        hasher.combine(appKitTranscriptChromeRevision())
+        hasher.combine(appKitTranscriptThreadContextRevision())
         hasher.combine(showArchivedPreCompactionTranscript)
         if let session = store.selectedSession {
             hasher.combine(session.commandInvocations)         // slash-command chrome
             hasher.combine(session.forkedFromParentTitle)      // fork-origin card
             hasher.combine(session.forkedFromSessionID)
             hasher.combine(session.forkedFromTranscriptSnapshot)
-            // Full run/request records (the chrome revisions only hash a summary):
-            // a card/notice reflects the whole record, so hash all of it.
-            for run in store.subagentRuns(for: session.id) { hasher.combine(run) }
-            for request in store.supervisorRequests(for: session.id) { hasher.combine(request) }
+            hasher.combine(store.subagentActivityRevision(for: session.id))
         }
         return hasher.finalize()
     }
@@ -55,8 +58,8 @@ extension PiAgentScreen {
     var appKitTranscriptItemsBuild: [PiAgentAppKitTranscriptItem] {
         let timelineSnapshot = transcriptTimelineSnapshot
         let timelineItems = timelineSnapshot.mainVisibleItems
-        let chromeRevision = appKitTranscriptChromeRevision(snapshot: timelineSnapshot)
-        let contextRevision = appKitTranscriptThreadContextRevision(snapshot: timelineSnapshot)
+        let chromeRevision = appKitTranscriptChromeRevision()
+        let contextRevision = appKitTranscriptThreadContextRevision()
         let visibility = viewModel.appSettings.piAgentTranscriptVisibility
         let skills = visibleSkillsForSelectedSession
         let commandSlashNames = Set((store.selectedSession?.commandInvocations ?? []).map { name in
@@ -615,7 +618,7 @@ extension PiAgentScreen {
         return hasher.finalize()
     }
 
-    func appKitTranscriptChromeRevision(snapshot: PiAgentTranscriptTimelineSnapshot) -> Int {
+    func appKitTranscriptChromeRevision() -> Int {
         var hasher = Hasher()
         hasher.combine(store.selectedSession?.id)
         hasher.combine(String(describing: store.selectedSession?.status))
@@ -625,13 +628,14 @@ extension PiAgentScreen {
         return hasher.finalize()
     }
 
-    func appKitTranscriptThreadContextRevision(snapshot: PiAgentTranscriptTimelineSnapshot) -> Int {
+    func appKitTranscriptThreadContextRevision() -> Int {
         var hasher = Hasher()
         hasher.combine(String(describing: viewModel.appSettings.piAgentTranscriptVisibility))
         hasher.combine(visibleSkillsForSelectedSession.map(\.name))
         hasher.combine(store.selectedSession.map { $0.worktreePath ?? $0.projectPath })
         if let sessionID = store.selectedSession?.id {
-            hasher.combine(store.subagentRuns(for: sessionID).map { "\($0.id):\($0.status):\($0.updatedAt)" })
+            // Covers every run/request mutation without an O(runs) string map.
+            hasher.combine(store.subagentActivityRevision(for: sessionID))
         }
         return hasher.finalize()
     }

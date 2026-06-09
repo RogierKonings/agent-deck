@@ -25,6 +25,10 @@ final class PiAgentSessionStore {
     private(set) var subagentRunsBySessionID: [UUID: [PiSubagentRunRecord]] = [:] {
         didSet { subagentRunsRevision &+= 1 }
     }
+    /// Per-session counter for subagent-run/supervisor-request mutations; see
+    /// `subagentActivityRevision(for:)`. Observable so memo signatures reading it
+    /// from a view body re-evaluate when activity changes.
+    private(set) var subagentActivityRevisionBySessionID: [UUID: Int] = [:]
     private(set) var subagentTranscriptsByRunID: [UUID: [PiAgentTranscriptEntry]] = [:]
     private(set) var supervisorRequestsBySessionID: [UUID: [PiSubagentSupervisorRequest]] = [:]
     private(set) var sessionPlansBySessionID: [UUID: PiSessionPlanRecord] = [:]
@@ -578,6 +582,17 @@ final class PiAgentSessionStore {
         subagentRunsBySessionID[sessionID] ?? []
     }
 
+    /// Monotonic per-session counter bumped on every subagent-run or supervisor-
+    /// request mutation. Lets render-memo signatures observe "did any run/request
+    /// for this session change?" without hashing every record on every body pass.
+    func subagentActivityRevision(for sessionID: UUID) -> Int {
+        subagentActivityRevisionBySessionID[sessionID] ?? 0
+    }
+
+    private func bumpSubagentActivityRevision(_ sessionID: UUID) {
+        subagentActivityRevisionBySessionID[sessionID, default: 0] &+= 1
+    }
+
     func subagentTranscript(for runID: UUID) -> [PiAgentTranscriptEntry] {
         loadSubagentTranscriptIfNeeded(runID)
         markSubagentTranscriptUsed(runID)
@@ -799,6 +814,7 @@ final class PiAgentSessionStore {
             runs.insert(run, at: 0)
         }
         subagentRunsBySessionID[run.parentSessionID] = runs.sorted { $0.createdAt > $1.createdAt }
+        bumpSubagentActivityRevision(run.parentSessionID)
         touchSession(run.parentSessionID, bumpUpdatedAt: true)
     }
 
@@ -808,6 +824,7 @@ final class PiAgentSessionStore {
         mutate(&runs[index])
         runs[index].updatedAt = Date()
         subagentRunsBySessionID[parentSessionID] = runs.sorted { $0.createdAt > $1.createdAt }
+        bumpSubagentActivityRevision(parentSessionID)
         touchSession(parentSessionID, bumpUpdatedAt: true)
     }
 
@@ -856,6 +873,7 @@ final class PiAgentSessionStore {
             requests.insert(request, at: 0)
         }
         supervisorRequestsBySessionID[request.parentSessionID] = requests.sorted { $0.updatedAt > $1.updatedAt }
+        bumpSubagentActivityRevision(request.parentSessionID)
         touchSession(request.parentSessionID, bumpUpdatedAt: true)
     }
 
@@ -865,6 +883,7 @@ final class PiAgentSessionStore {
         mutate(&requests[index])
         requests[index].updatedAt = Date()
         supervisorRequestsBySessionID[parentSessionID] = requests.sorted { $0.updatedAt > $1.updatedAt }
+        bumpSubagentActivityRevision(parentSessionID)
         touchSession(parentSessionID, bumpUpdatedAt: true)
     }
 
@@ -956,6 +975,7 @@ final class PiAgentSessionStore {
             }
             subagentRunsBySessionID[sessionID] = nil
             supervisorRequestsBySessionID[sessionID] = nil
+            subagentActivityRevisionBySessionID[sessionID] = nil
             sessionPlansBySessionID[sessionID] = nil
             sessionPlanEventsBySessionID[sessionID] = nil
             processingActivityBySessionID[sessionID] = nil
