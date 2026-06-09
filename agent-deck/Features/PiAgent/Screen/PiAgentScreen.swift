@@ -168,9 +168,6 @@ struct PiAgentScreen: View {
             pruneMultiSelectionToVisibleSessions()
             rebuildSessionActivityCache()
         }
-        .onChange(of: store.transcriptRevisionsBySessionID) { _, _ in
-            rebuildSessionActivityCache()
-        }
         .onChange(of: viewModel.selectedProjectPath) { _, _ in
             rebuildVisibleSessions()
             syncVisibleSessionSelection()
@@ -179,10 +176,20 @@ struct PiAgentScreen: View {
                 viewModel.acknowledgeVisibleSelectedPiAgentSession()
             }
         }
-        .task(id: store.selectedTranscriptRevision) {
-            await Task.yield()
-            scheduleTranscriptCacheUpdate()
-        }
+        // The streaming-cadence store revisions (`selectedTranscriptRevision`,
+        // `transcriptRevisionsBySessionID`) are read ONLY inside this invisible
+        // child view, so Observation registers them against its body — not this
+        // screen's. Reading them here re-evaluated the whole screen (session list
+        // maps, scoped-session filters, composer inputs) ~15Hz while streaming.
+        .background(
+            PiAgentTranscriptRevisionDriver(
+                store: store,
+                onSelectedTranscriptRevisionChange: { scheduleTranscriptCacheUpdate() },
+                onTranscriptRevisionsChange: { changedSessionIDs in
+                    rebuildSessionActivityCache(for: changedSessionIDs)
+                }
+            )
+        )
         .sheet(item: selectedSubagentTranscriptBinding) { run in
             PiNativeSubagentTranscriptSheet(
                 run: run,
@@ -257,13 +264,21 @@ struct PiAgentScreen: View {
         visibleSessions.map(\.id)
     }
 
-    func rebuildSessionActivityCache() {
-        var fresh: [UUID: PiAgentSessionGitActivity] = [:]
+    /// Rebuilds the per-session git-activity cache. Pass `changedSessionIDs` to
+    /// rescan only those sessions (the streaming path — one session's transcript
+    /// revision bumped); pass `nil` for a full rebuild over the visible set
+    /// (visible-set changes). The `@State` write is skipped when nothing changed,
+    /// so streaming pulses that add no git activity never invalidate the screen.
+    func rebuildSessionActivityCache(for changedSessionIDs: Set<UUID>? = nil) {
+        var fresh: [UUID: PiAgentSessionGitActivity] = changedSessionIDs == nil ? [:] : sessionActivityCache
         for session in visibleSessions {
+            if let changedSessionIDs, !changedSessionIDs.contains(session.id) { continue }
             let entries = store.transcriptsBySessionID[session.id] ?? []
             let activity = piAgentSessionGitActivity(from: entries)
             if activity.hasCommit || activity.hasPush || activity.hasMerge {
                 fresh[session.id] = activity
+            } else {
+                fresh[session.id] = nil
             }
         }
         if fresh != sessionActivityCache {
@@ -555,5 +570,40 @@ struct PiAgentScreen: View {
             requestTranscriptBottomScroll()
         }
         .perfScene("PiAgentTranscript")
+    }
+}
+
+/// Invisible observer that isolates the streaming-cadence store reads from
+/// `PiAgentScreen.body`. `selectedTranscriptRevision` (coalesced ~66ms while
+/// streaming) drives the transcript render cache; `transcriptRevisionsBySessionID`
+/// drives the per-session git-activity badges. Reading either in the screen body
+/// registered Observation on the whole screen, re-running its session-list maps
+/// and filters on every pulse. Here the reads register on this zero-size view
+/// only; the callbacks reach back into the parent's `@State` via captured methods
+/// (state storage is reference-backed, so the captured struct copies stay live).
+struct PiAgentTranscriptRevisionDriver: View {
+    var store: PiAgentSessionStore
+    var onSelectedTranscriptRevisionChange: () -> Void
+    var onTranscriptRevisionsChange: (_ changedSessionIDs: Set<UUID>) -> Void
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .allowsHitTesting(false)
+            .task(id: store.selectedTranscriptRevision) {
+                await Task.yield()
+                onSelectedTranscriptRevisionChange()
+            }
+            .onChange(of: store.transcriptRevisionsBySessionID) { old, new in
+                var changed = Set<UUID>()
+                for (sessionID, revision) in new where old[sessionID] != revision {
+                    changed.insert(sessionID)
+                }
+                for sessionID in old.keys where new[sessionID] == nil {
+                    changed.insert(sessionID)
+                }
+                guard !changed.isEmpty else { return }
+                onTranscriptRevisionsChange(changed)
+            }
     }
 }
