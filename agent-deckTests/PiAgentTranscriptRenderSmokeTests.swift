@@ -5,6 +5,10 @@ import XCTest
 
 @MainActor
 final class PiAgentTranscriptRenderSmokeTests: XCTestCase {
+    override func setUp() async throws {
+        PiExecutableResolver.resetCachedExecutableForTesting()
+    }
+
     func testMarkdownHighlightingUsesThemeColorsAndToggleOnlyChangesAttributes() {
         let manager = ThemeManager.shared
         let previousTheme = manager.activeTheme

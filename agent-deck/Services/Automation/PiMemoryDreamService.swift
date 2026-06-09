@@ -23,7 +23,7 @@ struct PiMemoryDreamService {
     func propose(memories: [AgentMemoryRecord], progress: @escaping @MainActor (String) -> Void = { _ in }) async throws -> PiMemoryDreamCycleResult {
         let started = Date()
         let current = memories.filter { $0.isInjectable }
-        await MainActor.run { progress("Loading \(current.count) current memories…") }
+        await reportProgress("Loading \(current.count) current memories…", using: progress)
 
         let clusters = Self.semanticClusters(current, threshold: 0.55, maxClusters: 15, minClusterSize: 2)
         var proposals: [PiMemoryDreamProposal] = []
@@ -31,7 +31,7 @@ struct PiMemoryDreamService {
 
         for cluster in clusters {
             clustersReviewed += 1
-            await MainActor.run { progress("Reviewing cluster \(clustersReviewed)/\(clusters.count)…") }
+            await reportProgress("Reviewing cluster \(clustersReviewed)/\(clusters.count)…", using: progress)
             let mergeActions = try await reviewer.reviewClusterForMerge(cluster: cluster)
             proposals.append(contentsOf: mergeActions)
             let didMerge = mergeActions.contains { $0.action == .merge }
@@ -40,13 +40,13 @@ struct PiMemoryDreamService {
             }
         }
 
-        await MainActor.run { progress("Rebalancing memory weights…") }
+        await reportProgress("Rebalancing memory weights…", using: progress)
         proposals.append(contentsOf: try await reviewer.rebalanceWeights(candidates: Self.weightCandidates(current)))
 
-        await MainActor.run { progress("Scanning fact contradictions…") }
+        await reportProgress("Scanning fact contradictions…", using: progress)
         proposals.append(contentsOf: try await reviewer.scanContradictions(facts: current.filter { $0.kind == .fact }))
 
-        await MainActor.run { progress("Discovering temporal event patterns…") }
+        await reportProgress("Discovering temporal event patterns…", using: progress)
         proposals.append(contentsOf: try await reviewer.discoverTemporalPatterns(events: current.filter { $0.kind == .event }))
 
         if proposals.isEmpty {
@@ -65,7 +65,7 @@ struct PiMemoryDreamService {
             ))
         }
 
-        await MainActor.run { progress("Prepared \(proposals.filter { $0.action != .skip }.count) actionable proposal(s).") }
+        await reportProgress("Prepared \(proposals.filter { $0.action != .skip }.count) actionable proposal(s).", using: progress)
         return PiMemoryDreamCycleResult(
             id: UUID().uuidString,
             startedAt: started,
@@ -80,6 +80,13 @@ struct PiMemoryDreamService {
             patternsDiscovered: proposals.filter { $0.action == .discoverPattern }.count,
             proposals: proposals
         )
+    }
+
+    private func reportProgress(
+        _ message: String,
+        using progress: @escaping @MainActor (String) -> Void
+    ) async {
+        await MainActor.run { progress(message) }
     }
 
     static func semanticClusters(_ memories: [AgentMemoryRecord], threshold: Double = 0.55, maxClusters: Int = 15, minClusterSize: Int = 2) -> [[AgentMemoryRecord]] {

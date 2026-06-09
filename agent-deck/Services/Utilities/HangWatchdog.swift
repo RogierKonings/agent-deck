@@ -62,6 +62,9 @@ nonisolated final class HangWatchdog: @unchecked Sendable {
     /// is a no-op so no heartbeat runs, no `sample` is spawned, and nothing logs.
     func start() {
 #if DEBUG
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            return
+        }
         let defaults = UserDefaults.standard
         if defaults.object(forKey: "HangWatchdogEnabled") != nil,
            defaults.bool(forKey: "HangWatchdogEnabled") == false {

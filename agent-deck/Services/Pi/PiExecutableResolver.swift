@@ -31,8 +31,26 @@ struct PiExecutableResolver: Sendable {
             environment["AGENT_DECK_PI_PATH"] ?? "",
             environment["PI_CLI_PATH"] ?? "",
             environment["SHELL"] ?? "",
-            environment["PATH"] ?? ""
+            environment["PATH"] ?? "",
+            skipsCommonCandidatesForTesting ? "skip-common" : ""
         ].joined(separator: "\u{1f}")
+    }
+
+    /// Clears cached pi resolution. Tests call this when mutating launch env vars.
+    nonisolated static func resetCachedExecutableForTesting() {
+        cacheLock.lock()
+        cachedURL = nil
+        cacheLock.unlock()
+    }
+
+    /// When true, `resolve()` only checks explicit overrides and `PATH`.
+    nonisolated(unsafe) private static var skipsCommonCandidatesForTesting = false
+
+    nonisolated static func setSkipsCommonCandidatesForTesting(_ value: Bool) {
+        cacheLock.lock()
+        skipsCommonCandidatesForTesting = value
+        cachedURL = nil
+        cacheLock.unlock()
     }
 
     nonisolated private func resolveUncached(environment: [String: String]) -> URL? {
@@ -44,6 +62,10 @@ struct PiExecutableResolver: Sendable {
 
         if let pathResolved = resolveExecutableInPATH("pi", environment: environment) {
             return pathResolved
+        }
+
+        guard !Self.skipsCommonCandidatesForTesting else {
+            return nil
         }
 
         let candidates = commonPiCandidates()

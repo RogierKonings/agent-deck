@@ -23,6 +23,8 @@ final class AgentDeckAppDelegate: NSObject, NSApplicationDelegate, UNUserNotific
         // Crash-proof hang detector: when the main thread freezes (janky scroll),
         // it auto-captures the hung backtrace via the external `sample` tool to
         // /tmp/agentdeck-hang-<n>.txt. Disable with HangWatchdogEnabled=NO.
+        // Skipped under XCTest — UI smoke tests trigger hitch sampling that
+        // stalls the hosted test runner for minutes.
         HangWatchdog.shared.start()
         // Debug: render sample native transcript bubbles for visual verification
         // without loading a real session. Off unless NativeBubblePreview=YES.

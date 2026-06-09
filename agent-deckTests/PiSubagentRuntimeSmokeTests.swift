@@ -64,6 +64,10 @@ final class PiSubagentLaunchPlannerTests: XCTestCase {
 
 @MainActor
 final class PiSubagentRunServiceSmokeTests: XCTestCase {
+    override func setUp() async throws {
+        PiExecutableResolver.resetCachedExecutableForTesting()
+    }
+
     func testRunSingleInjectsProjectEnvIntoChildPiProcess() async throws {
         let harness = try PiTestSupport.makeEnvCaptureHarness(keys: [
             "AGENT_DECK_ENV_CHILD_SMOKE",
@@ -90,7 +94,8 @@ final class PiSubagentRunServiceSmokeTests: XCTestCase {
         )
         defer { runner.stop(runID: run.id, parentSessionID: parent.id) }
 
-        XCTAssertTrue(PiTestSupport.waitUntil { FileManager.default.fileExists(atPath: harness.envLog.path) })
+        let envCaptured = await PiTestSupport.waitUntilAsync { FileManager.default.fileExists(atPath: harness.envLog.path) }
+        XCTAssertTrue(envCaptured)
         let captured = PiTestSupport.capturedEnvironment(in: harness.envLog)
         XCTAssertEqual(captured["AGENT_DECK_ENV_CHILD_SMOKE"], "child-project-value")
         XCTAssertEqual(captured["AGENT_DECK_NATIVE_SUBAGENT"], "1")
@@ -101,6 +106,7 @@ final class PiSubagentRunServiceSmokeTests: XCTestCase {
     func testRunSingleCreatesArtifactsAndRecordsResolvedModelBeforeProcessEvents() async throws {
         let fakePi = try PiTestSupport.makeFakePiExecutable()
         let oldPiPath = getenv("AGENT_DECK_PI_PATH").map { String(cString: $0) }
+        PiExecutableResolver.resetCachedExecutableForTesting()
         setenv("AGENT_DECK_PI_PATH", fakePi.path, 1)
         defer { restorePiPath(oldPiPath) }
 
@@ -133,6 +139,7 @@ final class PiSubagentRunServiceSmokeTests: XCTestCase {
     func testSystemPromptPlacesAgentPromptBeforeCommonBoundary() async throws {
         let fakePi = try PiTestSupport.makeFakePiExecutable()
         let oldPiPath = getenv("AGENT_DECK_PI_PATH").map { String(cString: $0) }
+        PiExecutableResolver.resetCachedExecutableForTesting()
         setenv("AGENT_DECK_PI_PATH", fakePi.path, 1)
         defer { restorePiPath(oldPiPath) }
 
@@ -157,6 +164,7 @@ final class PiSubagentRunServiceSmokeTests: XCTestCase {
     func testNativeSubagentsAllowProjectContextDiscovery() async throws {
         let fakePi = try PiTestSupport.makeFakePiExecutable()
         let oldPiPath = getenv("AGENT_DECK_PI_PATH").map { String(cString: $0) }
+        PiExecutableResolver.resetCachedExecutableForTesting()
         setenv("AGENT_DECK_PI_PATH", fakePi.path, 1)
         defer { restorePiPath(oldPiPath) }
 
@@ -203,6 +211,7 @@ final class PiSubagentRunServiceSmokeTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
 
         let oldPiPath = getenv("AGENT_DECK_PI_PATH").map { String(cString: $0) }
+        PiExecutableResolver.resetCachedExecutableForTesting()
         setenv("AGENT_DECK_PI_PATH", executable.path, 1)
         defer { restorePiPath(oldPiPath) }
 
@@ -211,11 +220,13 @@ final class PiSubagentRunServiceSmokeTests: XCTestCase {
         let parent = try PiTestSupport.makeParentSession()
 
         let first = try await runner.runSingle(parentSession: parent, agent: PiTestSupport.makeAgent(), snapshot: .empty, task: "First pass.")
-        XCTAssertTrue(PiTestSupport.waitUntil { store.subagentRuns(for: parent.id).first(where: { $0.id == first.id })?.status == .completed })
+        let firstCompleted = await PiTestSupport.waitUntilAsync { store.subagentRuns(for: parent.id).first(where: { $0.id == first.id })?.status == .completed }
+        XCTAssertTrue(firstCompleted)
 
         let continued = try await runner.runSingle(parentSession: parent, agent: PiTestSupport.makeAgent(), snapshot: .empty, task: "Direct follow-up.", continueRunID: first.id)
         XCTAssertEqual(continued.id, first.id)
-        XCTAssertTrue(PiTestSupport.waitUntil { store.subagentRuns(for: parent.id).first(where: { $0.id == first.id })?.child?.index == 1 && store.subagentRuns(for: parent.id).first(where: { $0.id == first.id })?.status == .completed })
+        let continuationCompleted = await PiTestSupport.waitUntilAsync { store.subagentRuns(for: parent.id).first(where: { $0.id == first.id })?.child?.index == 1 && store.subagentRuns(for: parent.id).first(where: { $0.id == first.id })?.status == .completed }
+        XCTAssertTrue(continuationCompleted)
 
         let args = try String(contentsOf: argsLog, encoding: .utf8)
         XCTAssertTrue(args.contains("--session\n\(childSessionFile.path)"))
@@ -236,6 +247,7 @@ final class PiSubagentRunServiceSmokeTests: XCTestCase {
     func testReadFirstPathsRejectAbsoluteAndParentTraversalInputs() async throws {
         let fakePi = try PiTestSupport.makeFakePiExecutable()
         let oldPiPath = getenv("AGENT_DECK_PI_PATH").map { String(cString: $0) }
+        PiExecutableResolver.resetCachedExecutableForTesting()
         setenv("AGENT_DECK_PI_PATH", fakePi.path, 1)
         defer { restorePiPath(oldPiPath) }
 
@@ -262,6 +274,9 @@ final class PiSubagentRunServiceSmokeTests: XCTestCase {
 
 
     func testLaunchCommandIsolatesChildPiFromAmbientExtensionsContextAndSkills() async throws {
+        let settingsHarness = PiTestSupport.isolateAppSettings { $0.agentMemoryEnabled = false }
+        defer { settingsHarness.restore() }
+
         let customExtension = "/tmp/agent-deck-custom-extension.ts"
         let harness = try PiTestSupport.makeBridgeHarness(events: [])
         defer { harness.restoreEnvironment() }
@@ -318,10 +333,11 @@ final class PiSubagentRunServiceSmokeTests: XCTestCase {
         defer { runner.stop(runID: run.id, parentSessionID: parent.id) }
 
         let finalPromptURL = run.artifactDirectory.asFileURL.appendingPathComponent("final-system-prompt.md")
-        XCTAssertTrue(PiTestSupport.waitUntil {
+        let auditCaptured = await PiTestSupport.waitUntilAsync {
             (try? String(contentsOf: finalPromptURL, encoding: .utf8)) == "Final child prompt from Pi."
                 && responseValue(id: "audit-child-1", in: harness.stdinLog) == "System prompt captured."
-        })
+        }
+        XCTAssertTrue(auditCaptured)
         XCTAssertTrue(store.subagentTranscript(for: run.id).contains { $0.title == "System Prompt Captured" })
     }
 
@@ -433,9 +449,10 @@ final class PiSubagentRunServiceSmokeTests: XCTestCase {
         )
         defer { runner.stop(runID: run.id, parentSessionID: parent.id) }
 
-        XCTAssertTrue(PiTestSupport.waitUntil {
+        let progressAcknowledged = await PiTestSupport.waitUntilAsync {
             PiTestSupport.extensionUIResponses(in: harness.stdinLog).contains { $0["id"] as? String == "child-progress-1" }
-        })
+        }
+        XCTAssertTrue(progressAcknowledged)
         let request = try XCTUnwrap(store.supervisorRequests(for: parent.id).first)
         XCTAssertEqual(request.kind, .progressUpdate)
         XCTAssertEqual(request.status, .answered)
@@ -458,14 +475,16 @@ final class PiSubagentRunServiceSmokeTests: XCTestCase {
         )
         defer { runner.stop(runID: run.id, parentSessionID: parent.id) }
 
-        XCTAssertTrue(PiTestSupport.waitUntil { store.supervisorRequests(for: parent.id).first?.status == .pending })
+        let decisionPending = await PiTestSupport.waitUntilAsync { store.supervisorRequests(for: parent.id).first?.status == .pending }
+        XCTAssertTrue(decisionPending)
         let request = try XCTUnwrap(store.supervisorRequests(for: parent.id).first)
         XCTAssertEqual(request.kind, .needDecision)
         XCTAssertEqual(store.subagentRuns(for: parent.id).first(where: { $0.id == run.id })?.status, .blocked)
 
         runner.respondToSupervisorRequest(request.id, parentSessionID: parent.id, response: "Use worktree.")
 
-        XCTAssertTrue(PiTestSupport.waitUntil { responseValue(id: "child-decision-1", in: harness.stdinLog) == "Use worktree." })
+        let decisionAnswered = await PiTestSupport.waitUntilAsync { responseValue(id: "child-decision-1", in: harness.stdinLog) == "Use worktree." }
+        XCTAssertTrue(decisionAnswered)
         XCTAssertEqual(store.supervisorRequests(for: parent.id).first?.status, .answered)
         XCTAssertEqual(store.supervisorRequests(for: parent.id).first?.response, "Use worktree.")
     }
@@ -486,14 +505,16 @@ final class PiSubagentRunServiceSmokeTests: XCTestCase {
         )
         defer { runner.stop(runID: run.id, parentSessionID: parent.id) }
 
-        XCTAssertTrue(PiTestSupport.waitUntil { store.supervisorRequests(for: parent.id).first?.status == .pending })
+        let interviewPending = await PiTestSupport.waitUntilAsync { store.supervisorRequests(for: parent.id).first?.status == .pending }
+        XCTAssertTrue(interviewPending)
         let request = try XCTUnwrap(store.supervisorRequests(for: parent.id).first)
         XCTAssertEqual(request.kind, .interviewRequest)
         XCTAssertEqual(store.subagentRuns(for: parent.id).first(where: { $0.id == run.id })?.status, .blocked)
 
         runner.respondToSupervisorRequest(request.id, parentSessionID: parent.id, response: "Schedule a focused interview.")
 
-        XCTAssertTrue(PiTestSupport.waitUntil { responseValue(id: "child-interview-1", in: harness.stdinLog) == "Schedule a focused interview." })
+        let interviewAnswered = await PiTestSupport.waitUntilAsync { responseValue(id: "child-interview-1", in: harness.stdinLog) == "Schedule a focused interview." }
+        XCTAssertTrue(interviewAnswered)
         XCTAssertEqual(store.supervisorRequests(for: parent.id).first?.status, .answered)
     }
 
@@ -522,10 +543,11 @@ final class PiSubagentRunServiceSmokeTests: XCTestCase {
         )
         defer { runner.stop(runID: run.id, parentSessionID: parent.id) }
 
-        XCTAssertTrue(PiTestSupport.waitUntil {
+        let promptSent = await PiTestSupport.waitUntilAsync {
             guard let log = try? String(contentsOf: harness.stdinLog, encoding: .utf8) else { return false }
             return log.contains("Expected outcome")
-        })
+        }
+        XCTAssertTrue(promptSent)
         let log = try String(contentsOf: harness.stdinLog, encoding: .utf8)
         let prompts = log
             .split(separator: "\n")
@@ -546,6 +568,7 @@ final class PiSubagentRunServiceSmokeTests: XCTestCase {
         } else {
             unsetenv("AGENT_DECK_PI_PATH")
         }
+        PiExecutableResolver.resetCachedExecutableForTesting()
     }
 }
 

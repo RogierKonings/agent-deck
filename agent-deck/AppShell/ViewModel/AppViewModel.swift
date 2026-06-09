@@ -105,7 +105,6 @@ final class AppViewModel: NSObject {
 
     private let environment: AppEnvironment
     private var agentPersistence: AgentPersistence { environment.agentPersistence }
-    private var envPersistence: EnvPersistence { environment.envPersistence }
     private var projectPreferencesStore: ProjectPreferencesStore { environment.projectPreferencesStore }
     private var appSettingsController: AppSettingsController { settings.controller }
     private var gitRepositoryService: GitRepositoryService { environment.gitRepositoryService }
@@ -123,6 +122,8 @@ final class AppViewModel: NSObject {
     let agentRepository: AgentRepositoryCoordinator
     let promptRepository: PromptRepositoryCoordinator
     let skillCatalog: SkillCatalogCoordinator
+    let envCatalog: EnvCatalogCoordinator
+    let agentDraft: AgentDraftCoordinator
     let composerSlash: ComposerSlashCoordinator
     let automation: AutomationCoordinator
     private var sessionWorktreeService: PiAgentSessionWorktreeService { environment.sessionWorktreeService }
@@ -185,6 +186,8 @@ final class AppViewModel: NSObject {
         agentRepository = AgentRepositoryCoordinator()
         promptRepository = PromptRepositoryCoordinator()
         skillCatalog = SkillCatalogCoordinator()
+        envCatalog = EnvCatalogCoordinator(persistence: environment.envPersistence)
+        agentDraft = AgentDraftCoordinator(persistence: environment.agentPersistence)
         composerSlash = ComposerSlashCoordinator()
         super.init()
         projects.host = self
@@ -208,6 +211,8 @@ final class AppViewModel: NSObject {
         agentRepository.attach(host: self)
         promptRepository.attach(host: self)
         skillCatalog.attach(host: self)
+        envCatalog.attach(host: self)
+        agentDraft.attach(host: self)
         composerSlash.attach(host: self)
         resourceCatalog.attach(host: self)
 
@@ -914,129 +919,6 @@ final class AppViewModel: NSObject {
             .filter { enabledProjectPaths.contains($0.key) }
             .values
             .reduce(0) { $0 + $1.warnings.count }
-    }
-
-    func makeAgentDraft(for agent: EffectiveAgentRecord, preferredOverrideScope: AgentEditingTarget.OverrideScope? = nil) -> AgentEditorDraft? {
-        agentPersistence.makeDraft(for: agent, preferredOverrideScope: preferredOverrideScope)
-    }
-
-    func saveAgentDrafts(_ pairs: [(draft: AgentEditorDraft, agent: EffectiveAgentRecord)]) throws {
-        guard !pairs.isEmpty else { return }
-        for pair in pairs {
-            try agentPersistence.save(pair.draft, original: pair.agent, projectRoot: selectedProjectPath)
-        }
-        var needsGlobalRefresh = false
-        var projectPaths: Set<String> = []
-        var didPatchInMemory = false
-        for pair in pairs {
-            switch pair.draft.target {
-            case .custom(.global), .custom(.library), .builtinOverride(.global):
-                needsGlobalRefresh = true
-            case .custom(.project):
-                if let path = pair.draft.sourcePath.flatMap(projectPath(containing:)) ?? selectedProjectPath {
-                    projectPaths.insert(path)
-                }
-            case .builtinOverride(.project):
-                if let path = selectedProjectPath {
-                    projectPaths.insert(path)
-                }
-            }
-            // Sync in-memory patch for custom edits so the panes update before
-            // the rescan lands. Matches the single-save fast path in `saveAgentDraft`.
-            if case .custom = pair.draft.target, pair.draft.originalName == pair.draft.config.name {
-                patchEffectiveAgentConfig(
-                    originalName: pair.draft.originalName,
-                    newConfig: pair.draft.config,
-                    filePath: pair.draft.sourcePath
-                )
-                didPatchInMemory = true
-            }
-        }
-        if didPatchInMemory {
-            resourceCatalog.rebuildWarningCaches()
-        }
-        if needsGlobalRefresh {
-            refresh(includeModels: false, silentlyReconcile: didPatchInMemory)
-        }
-        for path in projectPaths {
-            refreshAfterProjectScopedChange(projectPath: path)
-        }
-    }
-
-    func saveAgentDraft(_ draft: AgentEditorDraft, for agent: EffectiveAgentRecord) throws {
-        try agentPersistence.save(draft, original: agent, projectRoot: selectedProjectPath)
-        // Fast-path: mirror the disk write into the in-memory snapshots so the
-        // detail pane (reading `cachedDisplayAgentByID`) and the list layout
-        // (driven by `displayAgentsRevision`) reflect the new config now,
-        // instead of waiting for `refreshAfterAgentDraftChange`'s async rescan.
-        // Skips rename + builtin-override edits; those keep the existing flow.
-        if case .custom = draft.target, draft.originalName == draft.config.name {
-            patchEffectiveAgentConfig(originalName: draft.originalName, newConfig: draft.config, filePath: draft.sourcePath)
-            resourceCatalog.rebuildWarningCaches()
-        } else if case let .builtinOverride(scope) = draft.target,
-                  let builtin = agent.builtin?.parsed,
-                  let overrideValues = agentPersistence.builtinOverrideValuesForTesting(base: builtin, edited: draft.config) {
-            patchBuiltinOverrideRecord(agentName: agent.name, scope: scope, overrideValues: overrideValues)
-        }
-        refreshAfterAgentDraftChange(draft)
-    }
-
-    func setAgentDisabled(_ isDisabled: Bool, for agent: EffectiveAgentRecord) throws {
-        let overrideScope: AgentEditingTarget.OverrideScope = selectedProjectPath == nil ? .global : .project
-        guard var draft = makeAgentDraft(for: agent, preferredOverrideScope: overrideScope) else { return }
-        draft.config.disabled = isDisabled
-        try saveAgentDraft(draft, for: agent)
-    }
-
-    func makeNewAgentDraft(scope: AgentEditingTarget.CustomAgentScope) -> AgentEditorDraft {
-        let base = AgentConfig(
-            name: "new-agent",
-            description: "",
-            whenToUse: nil,
-            model: nil,
-            fallbackModels: [],
-            thinking: nil,
-            systemPromptMode: "replace",
-            inheritSkills: nil,
-            disabled: nil,
-            tools: ["read", "grep", "find", "ls", "bash"],
-            mcpDirectTools: nil,
-            extensions: nil,
-            skills: [],
-            output: nil,
-            defaultExpectedOutcome: .reportOnly,
-            defaultReads: nil,
-            defaultProgress: nil,
-            interactive: nil,
-            maxSubagentDepth: nil,
-            systemPrompt: "Describe the agent behavior here.",
-            unknownFields: [:]
-        )
-        return agentPersistence.makeNewDraft(scope: scope, base: base)
-    }
-
-    func makeDuplicateAgentDraft(from agent: EffectiveAgentRecord, scope: AgentEditingTarget.CustomAgentScope? = nil) -> AgentEditorDraft {
-        let targetScope = scope ?? defaultCustomScope(for: agent)
-        var config = agent.winningRecord?.parsed ?? agent.resolved
-        config.name = duplicatedName(for: config.name)
-        return agentPersistence.makeNewDraft(scope: targetScope, base: config)
-    }
-
-    func makeReplacementAgentDraft(from agent: EffectiveAgentRecord, scope: AgentEditingTarget.CustomAgentScope) -> AgentEditorDraft {
-        var config: AgentConfig
-        if scope == .global, agent.builtin != nil, agent.globalCustom == nil {
-            // Global replacement files should not accidentally bake in project-only overrides.
-            config = makeAgentDraft(for: agent, preferredOverrideScope: .global)?.config ?? agent.resolved
-        } else {
-            config = agent.resolved
-        }
-        config.name = agent.name
-        return agentPersistence.makeNewDraft(scope: scope, base: config)
-    }
-
-    func saveNewAgentDraft(_ draft: AgentEditorDraft) throws {
-        try agentPersistence.saveNewCustomAgent(draft, projectRoot: selectedProjectPath)
-        refreshAfterAgentDraftChange(draft)
     }
 
     func canRenameAgent(_ agent: EffectiveAgentRecord) -> Bool {
@@ -1793,39 +1675,6 @@ final class AppViewModel: NSObject {
             .filter { seen.insert($0.id).inserted }
     }
 
-    func makeEnvDraft(for record: EnvKeyRecord) -> EnvEditorDraft {
-        envPersistence.makeDraft(for: record)
-    }
-
-    func makeNewEnvDraft(scope: AgentEditingTarget.CustomAgentScope, prefilledKey: String? = nil) -> EnvEditorDraft {
-        envPersistence.makeNewDraft(scope: scope, projectRoot: selectedProjectPath, prefilledKey: prefilledKey)
-    }
-
-    func saveEnvDrafts(_ drafts: [EnvEditorDraft]) throws {
-        guard !drafts.isEmpty else { return }
-        // A batch may target both the project and the global file, so refresh
-        // every distinct destination once. Recording inside the loop and
-        // refreshing in `defer` keeps refreshes running for files already
-        // written even if a later save throws.
-        var written: [(scope: ResourceScopeKind, path: String)] = []
-        defer {
-            for file in written {
-                refreshAfterFileScopedChange(sourceKind: file.scope, filePath: file.path)
-            }
-        }
-        for draft in drafts {
-            try envPersistence.save(draft)
-            if !written.contains(where: { $0.path == draft.path }) {
-                written.append((draft.scope, draft.path))
-            }
-        }
-    }
-
-    func deleteEnvKey(_ record: EnvKeyRecord) throws {
-        try envPersistence.delete(record)
-        refreshAfterFileScopedChange(sourceKind: record.source.kind, filePath: record.source.path)
-    }
-
     var userDisableBuiltins: Bool {
         settingsSummary(for: .global)?.disableBuiltins ?? false
     }
@@ -2017,22 +1866,6 @@ final class AppViewModel: NSObject {
         )
     }
 
-    private func refreshAfterAgentDraftChange(_ draft: AgentEditorDraft) {
-        switch draft.target {
-        case let .custom(scope):
-            guard scope == .project else {
-                // Global agent edit (incl. setSkill→saveAgentDraft toggle) —
-                // `patchEffectiveAgentSkills` already updated the in-memory
-                // snapshot, so this scan is reconciliation only.
-                refresh(includeModels: false, silentlyReconcile: true)
-                return
-            }
-            refreshAfterProjectScopedChange(projectPath: draft.sourcePath.flatMap(projectPath(containing:)) ?? selectedProjectPath)
-        case let .builtinOverride(scope):
-            refreshAfterOverrideChange(scope: scope)
-        }
-    }
-
     private func refreshAfterOverrideChange(scope: AgentEditingTarget.OverrideScope) {
         switch scope {
         case .global:
@@ -2114,24 +1947,6 @@ final class AppViewModel: NSObject {
         return nil
     }
 
-    private func defaultCustomScope(for agent: EffectiveAgentRecord) -> AgentEditingTarget.CustomAgentScope {
-        if agent.projectCustom != nil || agent.projectOverride != nil || (agent.projectRoot != nil && selectedProjectPath != nil) {
-            return .project
-        }
-        return .global
-    }
-
-    private func duplicatedName(for name: String) -> String {
-        let existingNames = Set(snapshot.effectiveAgents.map(\.name))
-        var candidate = "\(name)-copy"
-        var index = 2
-        while existingNames.contains(candidate) {
-            candidate = "\(name)-copy-\(index)"
-            index += 1
-        }
-        return candidate
-    }
-
     private func deduplicateByID<T: Identifiable>(_ values: [T]) -> [T] where T.ID: Hashable {
         var seen: Set<T.ID> = []
         return values.filter { seen.insert($0.id).inserted }
@@ -2173,4 +1988,77 @@ final class AppViewModel: NSObject {
         resourceCatalog.rebuildWarningCaches()
     }
 
+}
+
+// MARK: - Env catalog host
+
+extension AppViewModel: EnvCatalogHost {
+    func refreshAfterEnvFileChange(sourceKind: ResourceScopeKind, filePath: String) {
+        refreshAfterFileScopedChange(sourceKind: sourceKind, filePath: filePath)
+    }
+}
+
+// MARK: - Agent draft host (private snapshot/refresh surface)
+
+extension AppViewModel: AgentDraftHost {
+    func resolveProjectPath(containing filePath: String) -> String? {
+        projectPath(containing: filePath)
+    }
+
+    func applyEffectiveAgentConfigPatch(originalName: String, newConfig: AgentConfig, filePath: String?) {
+        patchEffectiveAgentConfig(originalName: originalName, newConfig: newConfig, filePath: filePath)
+    }
+
+    func applyBuiltinOverridePatch(
+        agentName: String,
+        scope: AgentEditingTarget.OverrideScope,
+        overrideValues: [String: Any]?
+    ) {
+        patchBuiltinOverrideRecord(agentName: agentName, scope: scope, overrideValues: overrideValues)
+    }
+
+    func rebuildWarningCachesAfterAgentDraftSave() {
+        resourceCatalog.rebuildWarningCaches()
+    }
+
+    func refreshAfterAgentDraftChange(_ draft: AgentEditorDraft) {
+        switch draft.target {
+        case let .custom(scope):
+            guard scope == .project else {
+                refresh(includeModels: false, silentlyReconcile: true)
+                return
+            }
+            refreshAfterProjectScopedChange(
+                projectPath: draft.sourcePath.flatMap(projectPath(containing:)) ?? selectedProjectPath
+            )
+        case let .builtinOverride(scope):
+            refreshAfterOverrideChange(scope: scope)
+        }
+    }
+
+    func refreshGloballyAfterAgentDraftSave(silentlyReconcile: Bool) {
+        refresh(includeModels: false, silentlyReconcile: silentlyReconcile)
+    }
+
+    func refreshAfterProjectScopedAgentDraftSave(projectPath: String) {
+        refreshAfterProjectScopedChange(projectPath: projectPath)
+    }
+
+    func defaultCustomScope(for agent: EffectiveAgentRecord) -> AgentEditingTarget.CustomAgentScope {
+        if agent.projectCustom != nil || agent.projectOverride != nil || (agent.projectRoot != nil && selectedProjectPath != nil) {
+            return .project
+        }
+        return .global
+    }
+
+    func duplicatedName(for name: String) -> String {
+        let existingNames = Set(snapshot.effectiveAgents.map(\.name))
+        var candidate = "\(name)-copy"
+        var index = 2
+        while existingNames.contains(candidate) {
+            candidate = "\(name)-copy-\(index)"
+            index += 1
+        }
+        return candidate
+    }
 }

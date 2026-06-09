@@ -3,6 +3,10 @@ import XCTest
 
 @MainActor
 final class PiSkillVisibilitySmokeTests: XCTestCase {
+    override func setUp() async throws {
+        PiExecutableResolver.resetCachedExecutableForTesting()
+    }
+
     func testParentSessionGetsRuntimeSkillCommandsFromPiRPC() throws {
         let harness = try PiTestSupport.makeBridgeHarness(event: [
             "type": "response",
@@ -42,6 +46,7 @@ final class PiSkillVisibilitySmokeTests: XCTestCase {
     func testParentLaunchDisablesAmbientSkillsWhenNoAssignmentsExist() throws {
         let fakePi = try PiTestSupport.makeFakePiExecutable()
         let oldPiPath = getenv("AGENT_DECK_PI_PATH").map { String(cString: $0) }
+        PiExecutableResolver.resetCachedExecutableForTesting()
         setenv("AGENT_DECK_PI_PATH", fakePi.path, 1)
         defer { restorePiPath(oldPiPath) }
 
@@ -125,6 +130,7 @@ final class PiSkillVisibilitySmokeTests: XCTestCase {
     func testNativeSubagentPassesExplicitSkillUsingNativeSkillFlag() async throws {
         let fakePi = try PiTestSupport.makeFakePiExecutable()
         let oldPiPath = getenv("AGENT_DECK_PI_PATH").map { String(cString: $0) }
+        PiExecutableResolver.resetCachedExecutableForTesting()
         setenv("AGENT_DECK_PI_PATH", fakePi.path, 1)
         defer { restorePiPath(oldPiPath) }
 
@@ -159,6 +165,7 @@ final class PiSkillVisibilitySmokeTests: XCTestCase {
     func testNativeSubagentAlwaysDisablesAmbientSkillDiscovery() async throws {
         let fakePi = try PiTestSupport.makeFakePiExecutable()
         let oldPiPath = getenv("AGENT_DECK_PI_PATH").map { String(cString: $0) }
+        PiExecutableResolver.resetCachedExecutableForTesting()
         setenv("AGENT_DECK_PI_PATH", fakePi.path, 1)
         defer { restorePiPath(oldPiPath) }
 
@@ -250,4 +257,5 @@ private func restorePiPath(_ oldPiPath: String?) {
     } else {
         unsetenv("AGENT_DECK_PI_PATH")
     }
+    PiExecutableResolver.resetCachedExecutableForTesting()
 }

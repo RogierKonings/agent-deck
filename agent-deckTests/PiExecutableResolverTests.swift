@@ -58,12 +58,17 @@ final class PiExecutableResolverTests: XCTestCase {
     }
 
     func testResolveReturnsNilWhenPiNotFound() {
+        PiExecutableResolver.setSkipsCommonCandidatesForTesting(true)
+        defer { PiExecutableResolver.setSkipsCommonCandidatesForTesting(false) }
+
         let oldPath = ProcessInfo.processInfo.environment["PATH"] ?? ""
         setenv("PATH", "/nonexistent-path-for-test", 1)
         unsetenv("AGENT_DECK_PI_PATH")
         unsetenv("PI_CLI_PATH")
+        PiExecutableResolver.resetCachedExecutableForTesting()
         defer {
             setenv("PATH", oldPath, 1)
+            PiExecutableResolver.resetCachedExecutableForTesting()
         }
 
         XCTAssertNil(PiExecutableResolver().resolve())
