@@ -15,11 +15,11 @@ final class PiSubagentRunService {
     private var streamFlushTasksByRunID: [UUID: Task<Void, Never>] = [:]
     private let fileManager = FileManager.default
     var childMemoryArgumentsProvider: ((PiAgentSessionRecord, EffectiveAgentRecord, String) async throws -> [String])?
-    var onMemoryWrite: ((UUID, UUID, String?, AgentMemoryWriteBridgeRequest) -> String)?
+    var onMemoryWrite: ((UUID, UUID, String?, AgentMemoryWriteBridgeRequest) async -> String)?
     var onMemoryRecall: ((UUID, UUID, String?, AgentMemoryRecallBridgeRequest) async -> String)?
-    var onMemoryReinforce: ((UUID, UUID, String?, AgentMemoryReinforceBridgeRequest) -> String)?
-    var onMemoryUpdate: ((UUID, UUID, String?, AgentMemoryUpdateBridgeRequest) -> String)?
-    var onMemoryDelete: ((UUID, UUID, String?, AgentMemoryDeleteBridgeRequest) -> String)?
+    var onMemoryReinforce: ((UUID, UUID, String?, AgentMemoryReinforceBridgeRequest) async -> String)?
+    var onMemoryUpdate: ((UUID, UUID, String?, AgentMemoryUpdateBridgeRequest) async -> String)?
+    var onMemoryDelete: ((UUID, UUID, String?, AgentMemoryDeleteBridgeRequest) async -> String)?
     var onMemoryMarkStale: ((UUID, UUID, String?, AgentMemoryStaleBridgeRequest) async -> String)?
     var onMemorySearch: ((UUID, UUID, String?, AgentMemorySearchBridgeRequest) async -> String)?
 
@@ -1141,8 +1141,11 @@ final class PiSubagentRunService {
             return
         }
         let agentName = store.subagentRuns(for: parentSessionID).first(where: { $0.id == runID })?.agentName
-        let result = onMemoryReinforce?(parentSessionID, runID, agentName, request) ?? "\(AppBrand.displayName) memory is not available."
-        clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: result)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let result = await self.onMemoryReinforce?(parentSessionID, runID, agentName, request) ?? "\(AppBrand.displayName) memory is not available."
+            self.clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: result)
+        }
     }
 
     private func handleMemoryUpdateBridgeRequest(_ event: PiAgentRPCEvent, requestID: String, rawLine: String, runID: UUID, parentSessionID: UUID) {
@@ -1151,8 +1154,11 @@ final class PiSubagentRunService {
             return
         }
         let agentName = store.subagentRuns(for: parentSessionID).first(where: { $0.id == runID })?.agentName
-        let result = onMemoryUpdate?(parentSessionID, runID, agentName, request) ?? "\(AppBrand.displayName) memory is not available."
-        clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: result)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let result = await self.onMemoryUpdate?(parentSessionID, runID, agentName, request) ?? "\(AppBrand.displayName) memory is not available."
+            self.clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: result)
+        }
     }
 
     private func handleMemoryDeleteBridgeRequest(_ event: PiAgentRPCEvent, requestID: String, rawLine: String, runID: UUID, parentSessionID: UUID) {
@@ -1161,8 +1167,11 @@ final class PiSubagentRunService {
             return
         }
         let agentName = store.subagentRuns(for: parentSessionID).first(where: { $0.id == runID })?.agentName
-        let result = onMemoryDelete?(parentSessionID, runID, agentName, request) ?? "\(AppBrand.displayName) memory is not available."
-        clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: result)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let result = await self.onMemoryDelete?(parentSessionID, runID, agentName, request) ?? "\(AppBrand.displayName) memory is not available."
+            self.clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: result)
+        }
     }
 
     private func handleMemoryMarkStaleBridgeRequest(_ event: PiAgentRPCEvent, requestID: String, rawLine: String, runID: UUID, parentSessionID: UUID) {
@@ -1206,8 +1215,11 @@ final class PiSubagentRunService {
             return
         }
         let agentName = store.subagentRuns(for: parentSessionID).first(where: { $0.id == runID })?.agentName
-        let result = onMemoryWrite?(parentSessionID, runID, agentName, request) ?? "\(AppBrand.displayName) memory is not available."
-        clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: result)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let result = await self.onMemoryWrite?(parentSessionID, runID, agentName, request) ?? "\(AppBrand.displayName) memory is not available."
+            self.clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: result)
+        }
     }
 
     private func bridgePayload(from event: PiAgentRPCEvent) -> String? {

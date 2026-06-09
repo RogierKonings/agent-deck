@@ -55,24 +55,24 @@ extension AppViewModel: PiAgentRunnerHost {
         try boundAgentSkillArguments(for: agent)
     }
 
-    func handleMemoryWrite(sessionID: UUID, request: AgentMemoryWriteBridgeRequest) -> String {
-        handleParentMemoryWrite(sessionID: sessionID, request: request)
+    func handleMemoryWrite(sessionID: UUID, request: AgentMemoryWriteBridgeRequest) async -> String {
+        await handleParentMemoryWrite(sessionID: sessionID, request: request)
     }
 
     func handleMemoryRecall(sessionID: UUID, request: AgentMemoryRecallBridgeRequest) async -> String {
         await handleParentMemoryRecall(sessionID: sessionID, request: request)
     }
 
-    func handleMemoryReinforce(sessionID: UUID, request: AgentMemoryReinforceBridgeRequest) -> String {
-        handleParentMemoryReinforce(sessionID: sessionID, request: request)
+    func handleMemoryReinforce(sessionID: UUID, request: AgentMemoryReinforceBridgeRequest) async -> String {
+        await handleParentMemoryReinforce(sessionID: sessionID, request: request)
     }
 
-    func handleMemoryUpdate(sessionID: UUID, request: AgentMemoryUpdateBridgeRequest) -> String {
-        handleParentMemoryUpdate(sessionID: sessionID, request: request)
+    func handleMemoryUpdate(sessionID: UUID, request: AgentMemoryUpdateBridgeRequest) async -> String {
+        await handleParentMemoryUpdate(sessionID: sessionID, request: request)
     }
 
-    func handleMemoryDelete(sessionID: UUID, request: AgentMemoryDeleteBridgeRequest) -> String {
-        handleParentMemoryDelete(sessionID: sessionID, request: request)
+    func handleMemoryDelete(sessionID: UUID, request: AgentMemoryDeleteBridgeRequest) async -> String {
+        await handleParentMemoryDelete(sessionID: sessionID, request: request)
     }
 
     func handleMemoryMarkStale(sessionID: UUID, request: AgentMemoryStaleBridgeRequest) async -> String {

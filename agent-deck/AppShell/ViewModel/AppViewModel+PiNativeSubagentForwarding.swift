@@ -15,24 +15,24 @@ extension AppViewModel: PiNativeSubagentHost {
         await childMemoryArguments(for: parentSession, agent: agent, task: task)
     }
 
-    func performSubagentMemoryWrite(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryWriteBridgeRequest) -> String {
-        handleSubagentMemoryWrite(parentSessionID: parentSessionID, runID: runID, agentName: agentName, request: request)
+    func performSubagentMemoryWrite(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryWriteBridgeRequest) async -> String {
+        await handleSubagentMemoryWrite(parentSessionID: parentSessionID, runID: runID, agentName: agentName, request: request)
     }
 
     func performSubagentMemoryRecall(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryRecallBridgeRequest) async -> String {
         await handleSubagentMemoryRecall(parentSessionID: parentSessionID, runID: runID, agentName: agentName, request: request)
     }
 
-    func performSubagentMemoryReinforce(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryReinforceBridgeRequest) -> String {
-        handleSubagentMemoryReinforce(parentSessionID: parentSessionID, runID: runID, agentName: agentName, request: request)
+    func performSubagentMemoryReinforce(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryReinforceBridgeRequest) async -> String {
+        await handleSubagentMemoryReinforce(parentSessionID: parentSessionID, runID: runID, agentName: agentName, request: request)
     }
 
-    func performSubagentMemoryUpdate(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryUpdateBridgeRequest) -> String {
-        handleSubagentMemoryUpdate(parentSessionID: parentSessionID, runID: runID, agentName: agentName, request: request)
+    func performSubagentMemoryUpdate(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryUpdateBridgeRequest) async -> String {
+        await handleSubagentMemoryUpdate(parentSessionID: parentSessionID, runID: runID, agentName: agentName, request: request)
     }
 
-    func performSubagentMemoryDelete(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryDeleteBridgeRequest) -> String {
-        handleSubagentMemoryDelete(parentSessionID: parentSessionID, runID: runID, agentName: agentName, request: request)
+    func performSubagentMemoryDelete(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryDeleteBridgeRequest) async -> String {
+        await handleSubagentMemoryDelete(parentSessionID: parentSessionID, runID: runID, agentName: agentName, request: request)
     }
 
     func performSubagentMemoryMarkStale(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryStaleBridgeRequest) async -> String {

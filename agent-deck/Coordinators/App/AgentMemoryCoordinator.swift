@@ -25,56 +25,68 @@ final class AgentMemoryCoordinator {
     }
 
     func createAgentMemory(title: String, content: String, reasoning: String, kind: AgentMemoryKind, scope: AgentMemoryScope, tags: [String], weight: Double, supersedes: String?) {
-        do {
-            let record = try store.createMemory(
-                kind: kind,
-                title: title,
-                summary: content,
-                body: content,
-                reasoning: reasoning,
-                weight: weight,
-                scope: scope,
-                projectPath: host?.selectedProjectPath,
-                tags: tags,
-                supersedes: supersedes
-            )
-            appendMemoryEvent(.stored, records: [record], summary: "Stored \(record.kind.displayName.lowercased()) memory: \(record.title).")
-        } catch {
-            appendMemoryBlockedEvent(error.localizedDescription)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let record = try await store.createMemory(
+                    kind: kind,
+                    title: title,
+                    summary: content,
+                    body: content,
+                    reasoning: reasoning,
+                    weight: weight,
+                    scope: scope,
+                    projectPath: host?.selectedProjectPath,
+                    tags: tags,
+                    supersedes: supersedes
+                )
+                appendMemoryEvent(.stored, records: [record], summary: "Stored \(record.kind.displayName.lowercased()) memory: \(record.title).")
+            } catch {
+                appendMemoryBlockedEvent(error.localizedDescription)
+            }
         }
     }
 
     func updateAgentMemory(id: String, title: String, content: String, reasoning: String, kind: AgentMemoryKind, scope: AgentMemoryScope, tags: [String], weight: Double, supersedes: String?) {
-        do {
-            let supersession = AgentMemorySupersessionChange.from(optional: supersedes, wasProvided: true)
-            try store.updateMemory(id: id, title: title, body: content, reasoning: reasoning, kind: kind, scope: scope, projectPath: host?.selectedProjectPath, tags: tags, weight: weight, supersession: supersession)
-            if let record = store.records.first(where: { $0.id == id }) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let supersession = AgentMemorySupersessionChange.from(optional: supersedes, wasProvided: true)
+                let record = try await store.updateMemory(id: id, title: title, body: content, reasoning: reasoning, kind: kind, scope: scope, projectPath: host?.selectedProjectPath, tags: tags, weight: weight, supersession: supersession)
                 appendMemoryEvent(.edited, records: [record], summary: "Edited memory: \(record.title).")
+            } catch {
+                appendMemoryBlockedEvent(error.localizedDescription)
             }
-        } catch {
-            appendMemoryBlockedEvent(error.localizedDescription)
         }
     }
 
     func setAgentMemoryStatus(_ id: String, status: AgentMemoryStatus) {
-        store.setStatus(id: id, status: status)
-        if let record = store.records.first(where: { $0.id == id }) {
-            let eventKind: AgentMemoryEventKind = status == .stale ? .stale : .edited
-            appendMemoryEvent(eventKind, records: [record], summary: "Set memory state to \(status.displayName): \(record.title).")
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await store.setStatus(id: id, status: status)
+            if let record = store.records.first(where: { $0.id == id }) {
+                let eventKind: AgentMemoryEventKind = status == .stale ? .stale : .edited
+                appendMemoryEvent(eventKind, records: [record], summary: "Set memory state to \(status.displayName): \(record.title).")
+            }
         }
     }
 
     func deleteAgentMemory(_ id: String) {
-        do {
-            let deleted = try store.deleteMemory(id: id)
-            appendMemoryEvent(.archived, records: [], summary: "Deleted memory \(deleted.title).")
-        } catch {
-            appendMemoryBlockedEvent(error.localizedDescription)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let deleted = try await store.deleteMemory(id: id)
+                appendMemoryEvent(.archived, records: [], summary: "Deleted memory \(deleted.title).")
+            } catch {
+                appendMemoryBlockedEvent(error.localizedDescription)
+            }
         }
     }
 
     func refreshAgentMemory() {
-        store.refresh()
+        Task { @MainActor [weak self] in
+            await self?.store.refresh()
+        }
     }
 
     func startDreamMemory() {
@@ -167,16 +179,19 @@ final class AgentMemoryCoordinator {
     func applyDreamMemoryProposals(_ proposals: [PiMemoryDreamProposal]) {
         let actionable = proposals.filter { $0.action != .skip }
         guard !actionable.isEmpty else { return }
-        do {
-            try store.applyDreamProposals(actionable)
-            dreamResult = nil
-            dreamApprovedProposalIDs = []
-            dreamError = nil
-            dreamProgress = "Applied \(actionable.count) dream memory proposal\(actionable.count == 1 ? "" : "s")."
-            appendMemoryEvent(.edited, records: [], summary: "Applied \(actionable.count) dream memory proposal\(actionable.count == 1 ? "" : "s").")
-        } catch {
-            dreamError = error.localizedDescription
-            appendMemoryBlockedEvent(error.localizedDescription)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await store.applyDreamProposals(actionable)
+                dreamResult = nil
+                dreamApprovedProposalIDs = []
+                dreamError = nil
+                dreamProgress = "Applied \(actionable.count) dream memory proposal\(actionable.count == 1 ? "" : "s")."
+                appendMemoryEvent(.edited, records: [], summary: "Applied \(actionable.count) dream memory proposal\(actionable.count == 1 ? "" : "s").")
+            } catch {
+                dreamError = error.localizedDescription
+                appendMemoryBlockedEvent(error.localizedDescription)
+            }
         }
     }
 
@@ -260,16 +275,16 @@ final class AgentMemoryCoordinator {
         """
     }
 
-    func handleParentMemoryWrite(sessionID: UUID, request: AgentMemoryWriteBridgeRequest) -> String {
+    func handleParentMemoryWrite(sessionID: UUID, request: AgentMemoryWriteBridgeRequest) async -> String {
         guard host?.agentMemoryEnabled == true else { return "\(AppBrand.displayName) memory is disabled." }
         let session = host?.session(for: sessionID)
-        return createAutomaticMemory(request, sourceSessionID: sessionID, sourceRunID: nil, sourceAgentName: nil, fallbackProjectPath: session?.projectPath)
+        return await createAutomaticMemory(request, sourceSessionID: sessionID, sourceRunID: nil, sourceAgentName: nil, fallbackProjectPath: session?.projectPath)
     }
 
-    func handleSubagentMemoryWrite(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryWriteBridgeRequest) -> String {
+    func handleSubagentMemoryWrite(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryWriteBridgeRequest) async -> String {
         guard host?.agentMemoryEnabled == true else { return "\(AppBrand.displayName) memory is disabled." }
         let session = host?.session(for: parentSessionID)
-        return createAutomaticMemory(request, sourceSessionID: parentSessionID, sourceRunID: runID, sourceAgentName: agentName, fallbackProjectPath: session?.projectPath)
+        return await createAutomaticMemory(request, sourceSessionID: parentSessionID, sourceRunID: runID, sourceAgentName: agentName, fallbackProjectPath: session?.projectPath)
     }
 
     func handleParentMemoryRecall(sessionID: UUID, request: AgentMemoryRecallBridgeRequest) async -> String {
@@ -284,41 +299,40 @@ final class AgentMemoryCoordinator {
         return await recallMemories(request, cardSessionID: parentSessionID, snapshotSessionID: nil, projectPath: session?.projectPath)
     }
 
-    func handleParentMemoryReinforce(sessionID: UUID, request: AgentMemoryReinforceBridgeRequest) -> String { reinforceMemory(request, sessionID: sessionID) }
+    func handleParentMemoryReinforce(sessionID: UUID, request: AgentMemoryReinforceBridgeRequest) async -> String { await reinforceMemory(request, sessionID: sessionID) }
 
-    func handleSubagentMemoryReinforce(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryReinforceBridgeRequest) -> String { reinforceMemory(request, sessionID: parentSessionID) }
+    func handleSubagentMemoryReinforce(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryReinforceBridgeRequest) async -> String { await reinforceMemory(request, sessionID: parentSessionID) }
 
-    private func reinforceMemory(_ request: AgentMemoryReinforceBridgeRequest, sessionID: UUID) -> String {
+    private func reinforceMemory(_ request: AgentMemoryReinforceBridgeRequest, sessionID: UUID) async -> String {
         do {
-            let record = try store.reinforceMemory(id: request.id)
+            let record = try await store.reinforceMemory(id: request.id)
             appendMemoryEvent(.edited, records: [record], summary: "Reinforced memory \(record.title).", sessionID: sessionID)
             return "Memory reinforced: \(record.title) (\(record.id)). Access count: \(record.useCount), effective weight: \(String(format: "%.2f", record.effectiveWeight))."
         } catch { return error.localizedDescription }
     }
 
-    func handleParentMemoryUpdate(sessionID: UUID, request: AgentMemoryUpdateBridgeRequest) -> String { updateMemory(request, sessionID: sessionID) }
+    func handleParentMemoryUpdate(sessionID: UUID, request: AgentMemoryUpdateBridgeRequest) async -> String { await updateMemory(request, sessionID: sessionID) }
 
-    func handleSubagentMemoryUpdate(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryUpdateBridgeRequest) -> String { updateMemory(request, sessionID: parentSessionID) }
+    func handleSubagentMemoryUpdate(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryUpdateBridgeRequest) async -> String { await updateMemory(request, sessionID: parentSessionID) }
 
-    private func updateMemory(_ request: AgentMemoryUpdateBridgeRequest, sessionID: UUID) -> String {
+    private func updateMemory(_ request: AgentMemoryUpdateBridgeRequest, sessionID: UUID) async -> String {
         do {
             let projectPath = host?.session(for: sessionID)?.projectPath
             let scope: AgentMemoryScope? = request.project == "general" ? .general : (request.project == nil ? nil : .project)
             let supersession = AgentMemorySupersessionChange.from(optional: request.supersedes, wasProvided: request.supersedesWasProvided)
-            try store.updateMemory(id: request.id, title: request.title, body: request.content, reasoning: request.reasoning, kind: request.type, scope: scope, projectPath: projectPath, tags: request.tags, weight: request.weight, supersession: supersession)
-            guard let record = store.records.first(where: { $0.id == request.id }) else { return "Memory updated: \(request.id)." }
+            let record = try await store.updateMemory(id: request.id, title: request.title, body: request.content, reasoning: request.reasoning, kind: request.type, scope: scope, projectPath: projectPath, tags: request.tags, weight: request.weight, supersession: supersession)
             appendMemoryEvent(.edited, records: [record], summary: "Updated memory \(record.title).", sessionID: sessionID)
             return "Memory updated: \(record.title) (\(record.id))."
         } catch { return error.localizedDescription }
     }
 
-    func handleParentMemoryDelete(sessionID: UUID, request: AgentMemoryDeleteBridgeRequest) -> String { deleteMemory(request, sessionID: sessionID) }
+    func handleParentMemoryDelete(sessionID: UUID, request: AgentMemoryDeleteBridgeRequest) async -> String { await deleteMemory(request, sessionID: sessionID) }
 
-    func handleSubagentMemoryDelete(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryDeleteBridgeRequest) -> String { deleteMemory(request, sessionID: parentSessionID) }
+    func handleSubagentMemoryDelete(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryDeleteBridgeRequest) async -> String { await deleteMemory(request, sessionID: parentSessionID) }
 
-    private func deleteMemory(_ request: AgentMemoryDeleteBridgeRequest, sessionID: UUID) -> String {
+    private func deleteMemory(_ request: AgentMemoryDeleteBridgeRequest, sessionID: UUID) async -> String {
         do {
-            let deleted = try store.deleteMemory(id: request.id)
+            let deleted = try await store.deleteMemory(id: request.id)
             appendMemoryEvent(.archived, records: [], summary: "Deleted memory \(deleted.title).", sessionID: sessionID)
             return "Memory deleted: \(deleted.title) (\(deleted.id))."
         } catch {
@@ -326,10 +340,10 @@ final class AgentMemoryCoordinator {
         }
     }
 
-    private func createAutomaticMemory(_ request: AgentMemoryWriteBridgeRequest, sourceSessionID: UUID, sourceRunID: UUID?, sourceAgentName: String?, fallbackProjectPath: String?) -> String {
+    private func createAutomaticMemory(_ request: AgentMemoryWriteBridgeRequest, sourceSessionID: UUID, sourceRunID: UUID?, sourceAgentName: String?, fallbackProjectPath: String?) async -> String {
         let classification = classifyMemoryWrite(request, fallbackProjectPath: fallbackProjectPath, sourceAgentName: sourceAgentName)
         do {
-            let record = try store.createMemory(
+            let record = try await store.createMemory(
                 kind: request.type ?? classification.kind,
                 title: request.title,
                 summary: request.content,
@@ -382,7 +396,7 @@ final class AgentMemoryCoordinator {
             return summary
         }
         for record in uniqueRecords {
-            store.setStatus(id: record.id, status: .stale)
+            await store.setStatus(id: record.id, status: .stale)
         }
         appendMemoryEvent(.stale, records: uniqueRecords, summary: "Marked \(uniqueRecords.count) memor\(uniqueRecords.count == 1 ? "y" : "ies") stale; stale memory is no longer injected automatically.", sessionID: sourceSessionID)
         return "Marked \(uniqueRecords.count) Agent Deck memor\(uniqueRecords.count == 1 ? "y" : "ies") stale."

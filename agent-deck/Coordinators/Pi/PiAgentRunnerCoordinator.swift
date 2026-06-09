@@ -76,7 +76,7 @@ final class PiAgentRunnerCoordinator {
             try host?.resolveBoundAgentSkillArguments(for: agent) ?? []
         }
         runner.onMemoryWrite = { [weak host] sessionID, request in
-            host?.handleMemoryWrite(sessionID: sessionID, request: request)
+            await host?.handleMemoryWrite(sessionID: sessionID, request: request)
                 ?? "\(brand) memory is not available."
         }
         runner.onMemoryRecall = { [weak host] sessionID, request in
@@ -84,15 +84,15 @@ final class PiAgentRunnerCoordinator {
                 ?? "\(brand) memory is not available."
         }
         runner.onMemoryReinforce = { [weak host] sessionID, request in
-            host?.handleMemoryReinforce(sessionID: sessionID, request: request)
+            await host?.handleMemoryReinforce(sessionID: sessionID, request: request)
                 ?? "\(brand) memory is not available."
         }
         runner.onMemoryUpdate = { [weak host] sessionID, request in
-            host?.handleMemoryUpdate(sessionID: sessionID, request: request)
+            await host?.handleMemoryUpdate(sessionID: sessionID, request: request)
                 ?? "\(brand) memory is not available."
         }
         runner.onMemoryDelete = { [weak host] sessionID, request in
-            host?.handleMemoryDelete(sessionID: sessionID, request: request)
+            await host?.handleMemoryDelete(sessionID: sessionID, request: request)
                 ?? "\(brand) memory is not available."
         }
         runner.onMemoryMarkStale = { [weak host] sessionID, request in

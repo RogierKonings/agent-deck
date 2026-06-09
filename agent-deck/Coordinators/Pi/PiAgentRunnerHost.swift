@@ -27,11 +27,11 @@ protocol PiAgentRunnerHost: AnyObject {
     func resolveBoundAgent(for session: PiAgentSessionRecord) -> EffectiveAgentRecord?
     func resolveBoundAgentSkillArguments(for agent: EffectiveAgentRecord) throws -> [String]
 
-    func handleMemoryWrite(sessionID: UUID, request: AgentMemoryWriteBridgeRequest) -> String
+    func handleMemoryWrite(sessionID: UUID, request: AgentMemoryWriteBridgeRequest) async -> String
     func handleMemoryRecall(sessionID: UUID, request: AgentMemoryRecallBridgeRequest) async -> String
-    func handleMemoryReinforce(sessionID: UUID, request: AgentMemoryReinforceBridgeRequest) -> String
-    func handleMemoryUpdate(sessionID: UUID, request: AgentMemoryUpdateBridgeRequest) -> String
-    func handleMemoryDelete(sessionID: UUID, request: AgentMemoryDeleteBridgeRequest) -> String
+    func handleMemoryReinforce(sessionID: UUID, request: AgentMemoryReinforceBridgeRequest) async -> String
+    func handleMemoryUpdate(sessionID: UUID, request: AgentMemoryUpdateBridgeRequest) async -> String
+    func handleMemoryDelete(sessionID: UUID, request: AgentMemoryDeleteBridgeRequest) async -> String
     func handleMemoryMarkStale(sessionID: UUID, request: AgentMemoryStaleBridgeRequest) async -> String
     func handleMemorySearch(sessionID: UUID, request: AgentMemorySearchBridgeRequest) async -> String
 

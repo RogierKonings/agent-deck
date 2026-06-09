@@ -89,12 +89,12 @@ nonisolated struct AgentMemoryRecord: Identifiable, Codable, Hashable, Sendable 
     var isSuperseded: Bool { supersededBy?.isEmpty == false }
 }
 
-struct AgentMemoryDocument: Hashable {
+struct AgentMemoryDocument: Hashable, Sendable {
     var record: AgentMemoryRecord
     var body: String
 }
 
-struct AgentMemoryRetrieval: Hashable {
+struct AgentMemoryRetrieval: Hashable, Sendable {
     var records: [AgentMemoryRecord]
     var prompt: String
 }
@@ -133,7 +133,7 @@ enum AgentMemoryEventKind: String, Codable, Hashable {
     }
 }
 
-struct AgentMemoryTranscriptEvent: Codable, Hashable {
+struct AgentMemoryTranscriptEvent: Codable, Hashable, Sendable {
     var type: String
     var event: AgentMemoryEventKind
     var memoryIDs: [String]
@@ -145,7 +145,7 @@ struct AgentMemoryTranscriptEvent: Codable, Hashable {
     static let rawType = "agent_deck_memory_event"
 }
 
-struct AgentMemoryStoreBridgeRequest: Codable, Hashable {
+struct AgentMemoryStoreBridgeRequest: Codable, Hashable, Sendable {
     var title: String
     var content: String
     var reasoning: String
@@ -161,7 +161,7 @@ struct AgentMemoryStoreBridgeRequest: Codable, Hashable {
     }
 }
 
-struct AgentMemoryRecallBridgeRequest: Codable, Hashable {
+struct AgentMemoryRecallBridgeRequest: Codable, Hashable, Sendable {
     var query: String?
     var id: String?
     var project: String?
@@ -170,11 +170,11 @@ struct AgentMemoryRecallBridgeRequest: Codable, Hashable {
     var limit: Int?
 }
 
-struct AgentMemoryReinforceBridgeRequest: Codable, Hashable {
+struct AgentMemoryReinforceBridgeRequest: Codable, Hashable, Sendable {
     var id: String
 }
 
-struct AgentMemoryUpdateBridgeRequest: Codable, Hashable {
+struct AgentMemoryUpdateBridgeRequest: Codable, Hashable, Sendable {
     var id: String
     var title: String?
     var content: String?
@@ -231,20 +231,20 @@ struct AgentMemoryUpdateBridgeRequest: Codable, Hashable {
     }
 }
 
-struct AgentMemoryDeleteBridgeRequest: Codable, Hashable {
+struct AgentMemoryDeleteBridgeRequest: Codable, Hashable, Sendable {
     var id: String
 }
 
 // Compatibility DTOs retained so older generated bridge payloads and tests decode while the model-facing tools use canonical Pi names.
 typealias AgentMemoryWriteBridgeRequest = AgentMemoryStoreBridgeRequest
 
-struct AgentMemoryStaleBridgeRequest: Codable, Hashable {
+struct AgentMemoryStaleBridgeRequest: Codable, Hashable, Sendable {
     var memoryIDs: [String]?
     var query: String?
     var reason: String?
 }
 
-struct AgentMemorySearchBridgeRequest: Codable, Hashable {
+struct AgentMemorySearchBridgeRequest: Codable, Hashable, Sendable {
     var query: String
     var limit: Int?
 }

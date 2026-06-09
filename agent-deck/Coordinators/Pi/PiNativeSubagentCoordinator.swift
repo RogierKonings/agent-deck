@@ -68,7 +68,7 @@ final class PiNativeSubagentCoordinator {
             await host?.resolveChildMemoryArguments(for: parentSession, agent: agent, task: task) ?? []
         }
         runner.onMemoryWrite = { [weak host] parentSessionID, runID, agentName, request in
-            host?.performSubagentMemoryWrite(parentSessionID: parentSessionID, runID: runID, agentName: agentName, request: request)
+            await host?.performSubagentMemoryWrite(parentSessionID: parentSessionID, runID: runID, agentName: agentName, request: request)
                 ?? "\(AppBrand.displayName) memory is not available."
         }
         runner.onMemoryRecall = { [weak host] parentSessionID, runID, agentName, request in
@@ -76,15 +76,15 @@ final class PiNativeSubagentCoordinator {
                 ?? "\(AppBrand.displayName) memory is not available."
         }
         runner.onMemoryReinforce = { [weak host] parentSessionID, runID, agentName, request in
-            host?.performSubagentMemoryReinforce(parentSessionID: parentSessionID, runID: runID, agentName: agentName, request: request)
+            await host?.performSubagentMemoryReinforce(parentSessionID: parentSessionID, runID: runID, agentName: agentName, request: request)
                 ?? "\(AppBrand.displayName) memory is not available."
         }
         runner.onMemoryUpdate = { [weak host] parentSessionID, runID, agentName, request in
-            host?.performSubagentMemoryUpdate(parentSessionID: parentSessionID, runID: runID, agentName: agentName, request: request)
+            await host?.performSubagentMemoryUpdate(parentSessionID: parentSessionID, runID: runID, agentName: agentName, request: request)
                 ?? "\(AppBrand.displayName) memory is not available."
         }
         runner.onMemoryDelete = { [weak host] parentSessionID, runID, agentName, request in
-            host?.performSubagentMemoryDelete(parentSessionID: parentSessionID, runID: runID, agentName: agentName, request: request)
+            await host?.performSubagentMemoryDelete(parentSessionID: parentSessionID, runID: runID, agentName: agentName, request: request)
                 ?? "\(AppBrand.displayName) memory is not available."
         }
         runner.onMemoryMarkStale = { [weak host] parentSessionID, runID, agentName, request in

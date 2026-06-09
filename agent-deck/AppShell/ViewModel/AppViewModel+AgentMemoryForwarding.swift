@@ -108,12 +108,12 @@ extension AppViewModel {
         await memory.childMemoryArguments(for: parentSession, agent: agent, task: task)
     }
 
-    func handleParentMemoryWrite(sessionID: UUID, request: AgentMemoryWriteBridgeRequest) -> String {
-        memory.handleParentMemoryWrite(sessionID: sessionID, request: request)
+    func handleParentMemoryWrite(sessionID: UUID, request: AgentMemoryWriteBridgeRequest) async -> String {
+        await memory.handleParentMemoryWrite(sessionID: sessionID, request: request)
     }
 
-    func handleSubagentMemoryWrite(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryWriteBridgeRequest) -> String {
-        memory.handleSubagentMemoryWrite(parentSessionID: parentSessionID, runID: runID, agentName: agentName, request: request)
+    func handleSubagentMemoryWrite(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryWriteBridgeRequest) async -> String {
+        await memory.handleSubagentMemoryWrite(parentSessionID: parentSessionID, runID: runID, agentName: agentName, request: request)
     }
 
     func handleParentMemoryRecall(sessionID: UUID, request: AgentMemoryRecallBridgeRequest) async -> String {
@@ -124,28 +124,28 @@ extension AppViewModel {
         await memory.handleSubagentMemoryRecall(parentSessionID: parentSessionID, runID: runID, agentName: agentName, request: request)
     }
 
-    func handleParentMemoryReinforce(sessionID: UUID, request: AgentMemoryReinforceBridgeRequest) -> String {
-        memory.handleParentMemoryReinforce(sessionID: sessionID, request: request)
+    func handleParentMemoryReinforce(sessionID: UUID, request: AgentMemoryReinforceBridgeRequest) async -> String {
+        await memory.handleParentMemoryReinforce(sessionID: sessionID, request: request)
     }
 
-    func handleSubagentMemoryReinforce(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryReinforceBridgeRequest) -> String {
-        memory.handleSubagentMemoryReinforce(parentSessionID: parentSessionID, runID: runID, agentName: agentName, request: request)
+    func handleSubagentMemoryReinforce(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryReinforceBridgeRequest) async -> String {
+        await memory.handleSubagentMemoryReinforce(parentSessionID: parentSessionID, runID: runID, agentName: agentName, request: request)
     }
 
-    func handleParentMemoryUpdate(sessionID: UUID, request: AgentMemoryUpdateBridgeRequest) -> String {
-        memory.handleParentMemoryUpdate(sessionID: sessionID, request: request)
+    func handleParentMemoryUpdate(sessionID: UUID, request: AgentMemoryUpdateBridgeRequest) async -> String {
+        await memory.handleParentMemoryUpdate(sessionID: sessionID, request: request)
     }
 
-    func handleSubagentMemoryUpdate(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryUpdateBridgeRequest) -> String {
-        memory.handleSubagentMemoryUpdate(parentSessionID: parentSessionID, runID: runID, agentName: agentName, request: request)
+    func handleSubagentMemoryUpdate(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryUpdateBridgeRequest) async -> String {
+        await memory.handleSubagentMemoryUpdate(parentSessionID: parentSessionID, runID: runID, agentName: agentName, request: request)
     }
 
-    func handleParentMemoryDelete(sessionID: UUID, request: AgentMemoryDeleteBridgeRequest) -> String {
-        memory.handleParentMemoryDelete(sessionID: sessionID, request: request)
+    func handleParentMemoryDelete(sessionID: UUID, request: AgentMemoryDeleteBridgeRequest) async -> String {
+        await memory.handleParentMemoryDelete(sessionID: sessionID, request: request)
     }
 
-    func handleSubagentMemoryDelete(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryDeleteBridgeRequest) -> String {
-        memory.handleSubagentMemoryDelete(parentSessionID: parentSessionID, runID: runID, agentName: agentName, request: request)
+    func handleSubagentMemoryDelete(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryDeleteBridgeRequest) async -> String {
+        await memory.handleSubagentMemoryDelete(parentSessionID: parentSessionID, runID: runID, agentName: agentName, request: request)
     }
 
     func handleParentMemoryMarkStale(sessionID: UUID, request: AgentMemoryStaleBridgeRequest) async -> String {
