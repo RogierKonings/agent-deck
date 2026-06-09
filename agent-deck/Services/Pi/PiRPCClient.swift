@@ -1,6 +1,47 @@
 import Foundation
 import os
 
+/// One message from a Pi client's I/O callbacks, funneled through a single
+/// `MainActorEventDrain` so stdout batches, stderr lines, and termination are
+/// handled in FIFO order by one long-lived MainActor task instead of a fresh
+/// `Task { @MainActor }` per callback.
+enum PiClientMessage: Sendable {
+    case events([PiRPCClient.EventLine])
+    case stderr([String])
+    case terminated(Int32)
+}
+
+/// Funnels `@Sendable` callback payloads into one long-lived MainActor task.
+/// Spawning a new `Task { @MainActor }` per stdout batch creates heavy MainActor
+/// enqueue churn under streaming load; a single drain task processes batches in
+/// order with one suspension point. The stream finishes when `finish()` is
+/// called (after `.terminated`) or when the drain is deallocated.
+nonisolated final class MainActorEventDrain<Element: Sendable>: Sendable {
+    private let continuation: AsyncStream<Element>.Continuation
+
+    init(handler: @escaping @MainActor (Element) -> Void) {
+        let (stream, continuation) = AsyncStream<Element>.makeStream(bufferingPolicy: .unbounded)
+        self.continuation = continuation
+        Task { @MainActor in
+            for await element in stream {
+                handler(element)
+            }
+        }
+    }
+
+    deinit {
+        continuation.finish()
+    }
+
+    func send(_ element: Element) {
+        continuation.yield(element)
+    }
+
+    func finish() {
+        continuation.finish()
+    }
+}
+
 final class PiRPCClient: @unchecked Sendable {
     nonisolated private static let logger = Logger(subsystem: "streetcoding.agent-deck", category: "PiRPC")
     struct EventLine: Sendable {
@@ -42,19 +83,31 @@ final class PiRPCClient: @unchecked Sendable {
             extraArguments: extraArguments
         )
 
+        // One decoder per client: the stdout reader invokes this callback serially,
+        // and allocating a fresh JSONDecoder per line is measurable overhead during
+        // token streaming (dozens to hundreds of lines per second).
+        let decoder = LineDecoder()
         process = try PiAgentProcess(
             configuration: .init(arguments: args, currentDirectoryURL: cwd, environment: environment),
             onStdoutLines: { lines in
                 let events = lines.map { line in
-                    let data = Data(line.utf8)
-                    let event = try? JSONDecoder().decode(PiAgentRPCEvent.self, from: data)
-                    return EventLine(rawLine: line, event: event)
+                    EventLine(rawLine: line, event: decoder.decodeEvent(from: line))
                 }
                 onEvent(events)
             },
             onStderrLines: onStderr,
             onTermination: onTermination
         )
+    }
+
+    /// Wraps a reusable `JSONDecoder` for the stdout line callback. Safe because
+    /// `LineStreamReader` invokes its callback serially per file handle.
+    private nonisolated final class LineDecoder: @unchecked Sendable {
+        private let decoder = JSONDecoder()
+
+        nonisolated func decodeEvent(from line: String) -> PiAgentRPCEvent? {
+            try? decoder.decode(PiAgentRPCEvent.self, from: Data(line.utf8))
+        }
     }
 
     static func launchArguments(

@@ -2,6 +2,8 @@ import Foundation
 
 @MainActor
 final class PiSubagentRunService {
+    /// Reused for all bridge-request payload decoding on the MainActor hot path.
+    private let bridgeDecoder = JSONDecoder()
     private let store: PiAgentSessionStore
     private var clientsByRunID: [UUID: PiRPCClient] = [:]
     private var finalTextByRunID: [UUID: String] = [:]
@@ -263,6 +265,22 @@ final class PiSubagentRunService {
         let childSessionID = UUID()
         let parentSessionID = parentSession.id
         finalTextByRunID[runID] = nil
+        // Single long-lived MainActor drain per child client (see PiRPCClient).
+        let drain = MainActorEventDrain<PiClientMessage> { [weak self] message in
+            guard let self else { return }
+            switch message {
+            case let .events(events):
+                for event in events {
+                    self.handle(rawLine: event.rawLine, event: event.event, runID: runID, parentSessionID: parentSessionID)
+                }
+            case let .stderr(lines):
+                for line in lines {
+                    self.handle(stderr: line, runID: runID, parentSessionID: parentSessionID)
+                }
+            case let .terminated(exitCode):
+                self.handleTermination(exitCode: exitCode, runID: runID, parentSessionID: parentSessionID)
+            }
+        }
         let client = try PiRPCClient(
             cwd: childProjectURL,
             sessionFile: continuingRun?.childPiSessionFile,
@@ -270,24 +288,11 @@ final class PiSubagentRunService {
             modelArgument: modelArgument,
             extraArguments: extraArguments,
             environment: environment,
-            onEvent: { [weak self] events in
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    for event in events {
-                        self.handle(rawLine: event.rawLine, event: event.event, runID: runID, parentSessionID: parentSessionID)
-                    }
-                }
-            },
-            onStderr: { [weak self] lines in
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    for line in lines {
-                        self.handle(stderr: line, runID: runID, parentSessionID: parentSessionID)
-                    }
-                }
-            },
-            onTermination: { [weak self] exitCode in
-                Task { @MainActor [weak self] in self?.handleTermination(exitCode: exitCode, runID: runID, parentSessionID: parentSessionID) }
+            onEvent: { drain.send(.events($0)) },
+            onStderr: { drain.send(.stderr($0)) },
+            onTermination: { exitCode in
+                drain.send(.terminated(exitCode))
+                drain.finish()
             }
         )
         clientsByRunID[runID] = client
@@ -1129,7 +1134,7 @@ final class PiSubagentRunService {
     }
 
     private func handleMemoryRecallBridgeRequest(_ event: PiAgentRPCEvent, requestID: String, rawLine: String, runID: UUID, parentSessionID: UUID) {
-        guard let payload = bridgePayload(from: event), let request = try? JSONDecoder().decode(AgentMemoryRecallBridgeRequest.self, from: Data(payload.utf8)) else {
+        guard let payload = bridgePayload(from: event), let request = try? bridgeDecoder.decode(AgentMemoryRecallBridgeRequest.self, from: Data(payload.utf8)) else {
             clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: "\(AppBrand.displayName) could not parse the memory recall request.")
             return
         }
@@ -1142,7 +1147,7 @@ final class PiSubagentRunService {
     }
 
     private func handleMemoryReinforceBridgeRequest(_ event: PiAgentRPCEvent, requestID: String, rawLine: String, runID: UUID, parentSessionID: UUID) {
-        guard let payload = bridgePayload(from: event), let request = try? JSONDecoder().decode(AgentMemoryReinforceBridgeRequest.self, from: Data(payload.utf8)) else {
+        guard let payload = bridgePayload(from: event), let request = try? bridgeDecoder.decode(AgentMemoryReinforceBridgeRequest.self, from: Data(payload.utf8)) else {
             clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: "\(AppBrand.displayName) could not parse the memory reinforce request.")
             return
         }
@@ -1155,7 +1160,7 @@ final class PiSubagentRunService {
     }
 
     private func handleMemoryUpdateBridgeRequest(_ event: PiAgentRPCEvent, requestID: String, rawLine: String, runID: UUID, parentSessionID: UUID) {
-        guard let payload = bridgePayload(from: event), let request = try? JSONDecoder().decode(AgentMemoryUpdateBridgeRequest.self, from: Data(payload.utf8)) else {
+        guard let payload = bridgePayload(from: event), let request = try? bridgeDecoder.decode(AgentMemoryUpdateBridgeRequest.self, from: Data(payload.utf8)) else {
             clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: "\(AppBrand.displayName) could not parse the memory update request.")
             return
         }
@@ -1168,7 +1173,7 @@ final class PiSubagentRunService {
     }
 
     private func handleMemoryDeleteBridgeRequest(_ event: PiAgentRPCEvent, requestID: String, rawLine: String, runID: UUID, parentSessionID: UUID) {
-        guard let payload = bridgePayload(from: event), let request = try? JSONDecoder().decode(AgentMemoryDeleteBridgeRequest.self, from: Data(payload.utf8)) else {
+        guard let payload = bridgePayload(from: event), let request = try? bridgeDecoder.decode(AgentMemoryDeleteBridgeRequest.self, from: Data(payload.utf8)) else {
             clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: "\(AppBrand.displayName) could not parse the memory delete request.")
             return
         }
@@ -1183,7 +1188,7 @@ final class PiSubagentRunService {
     private func handleMemoryMarkStaleBridgeRequest(_ event: PiAgentRPCEvent, requestID: String, rawLine: String, runID: UUID, parentSessionID: UUID) {
         guard let payload = bridgePayload(from: event),
               let data = payload.data(using: .utf8),
-              let request = try? JSONDecoder().decode(AgentMemoryStaleBridgeRequest.self, from: data) else {
+              let request = try? bridgeDecoder.decode(AgentMemoryStaleBridgeRequest.self, from: data) else {
             clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: "\(AppBrand.displayName) could not parse the stale memory request.")
             store.appendSubagentTranscript(.init(sessionID: parentSessionID, role: .error, title: "\(AppBrand.displayName) Bridge Error", text: "Could not parse stale memory request.", rawJSON: rawLine), runID: runID, parentSessionID: parentSessionID)
             return
@@ -1199,7 +1204,7 @@ final class PiSubagentRunService {
     private func handleMemorySearchBridgeRequest(_ event: PiAgentRPCEvent, requestID: String, rawLine: String, runID: UUID, parentSessionID: UUID) {
         guard let payload = bridgePayload(from: event),
               let data = payload.data(using: .utf8),
-              let request = try? JSONDecoder().decode(AgentMemorySearchBridgeRequest.self, from: data) else {
+              let request = try? bridgeDecoder.decode(AgentMemorySearchBridgeRequest.self, from: data) else {
             clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: "\(AppBrand.displayName) could not parse the memory search request.")
             store.appendSubagentTranscript(.init(sessionID: parentSessionID, role: .error, title: "\(AppBrand.displayName) Bridge Error", text: "Could not parse memory search request.", rawJSON: rawLine), runID: runID, parentSessionID: parentSessionID)
             return
@@ -1215,7 +1220,7 @@ final class PiSubagentRunService {
     private func handleMemoryWriteBridgeRequest(_ event: PiAgentRPCEvent, requestID: String, rawLine: String, runID: UUID, parentSessionID: UUID) {
         guard let payload = bridgePayload(from: event),
               let data = payload.data(using: .utf8),
-              let request = try? JSONDecoder().decode(AgentMemoryWriteBridgeRequest.self, from: data) else {
+              let request = try? bridgeDecoder.decode(AgentMemoryWriteBridgeRequest.self, from: data) else {
             clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: "\(AppBrand.displayName) could not parse the memory write request.")
             store.appendSubagentTranscript(.init(sessionID: parentSessionID, role: .error, title: "\(AppBrand.displayName) Bridge Error", text: "Could not parse memory write request.", rawJSON: rawLine), runID: runID, parentSessionID: parentSessionID)
             return
@@ -1236,7 +1241,7 @@ final class PiSubagentRunService {
 
     private func handleSystemPromptAuditBridgeRequest(_ event: PiAgentRPCEvent, requestID: String, rawLine: String, runID: UUID, parentSessionID: UUID) {
         guard let payload = bridgePayload(from: event),
-              let request = try? JSONDecoder().decode(PiSystemPromptAuditBridgeRequest.self, from: Data(payload.utf8)) else {
+              let request = try? bridgeDecoder.decode(PiSystemPromptAuditBridgeRequest.self, from: Data(payload.utf8)) else {
             clientsByRunID[runID]?.respondToExtensionUI(id: requestID, value: "\(AppBrand.displayName) could not parse the system prompt audit request.")
             return
         }
