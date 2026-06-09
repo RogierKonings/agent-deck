@@ -1841,7 +1841,10 @@ final class PiAgentRunnerService {
         default:
             text = rawLine
         }
-        store.upsert(.init(id: entryID, sessionID: sessionID, role: event.isError == true ? .error : .tool, title: title, text: text, rawJSON: rawLine))
+        // Partial tool output streams many times per second for long-running tools;
+        // keep those flushes in memory only and let tool_execution_end write to disk.
+        let persistEntry = event.type != "tool_execution_update"
+        store.upsert(.init(id: entryID, sessionID: sessionID, role: event.isError == true ? .error : .tool, title: title, text: text, rawJSON: rawLine), persist: persistEntry)
     }
 
     /// Flushes any pending thinking text to the store and clears the in-flight thinking

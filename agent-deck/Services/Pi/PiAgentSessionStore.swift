@@ -822,7 +822,7 @@ final class PiAgentSessionStore {
         touchSession(parentSessionID, bumpUpdatedAt: false)
     }
 
-    func upsertSubagentTranscript(_ entry: PiAgentTranscriptEntry, runID: UUID, parentSessionID: UUID, before beforeEntryID: UUID? = nil) {
+    func upsertSubagentTranscript(_ entry: PiAgentTranscriptEntry, runID: UUID, parentSessionID: UUID, before beforeEntryID: UUID? = nil, persist: Bool = true) {
         modifySubagentTranscriptEntries(for: runID) { entries in
             if let index = entries.firstIndex(where: { $0.id == entry.id }) {
                 entries[index] = entry
@@ -833,10 +833,19 @@ final class PiAgentSessionStore {
             }
             trimTranscriptEntries(&entries)
         }
-        persistSubagentTranscript(runID)
         markSubagentTranscriptUsed(runID)
+        guard persist else { return }
+        persistSubagentTranscript(runID)
         evictTranscriptsIfNeeded()
         touchSession(parentSessionID, bumpUpdatedAt: false)
+    }
+
+    /// Forces a (debounced) disk snapshot of a subagent transcript. Used at run
+    /// completion/termination so streaming entries written with `persist: false`
+    /// still reach disk even when no persisting upsert followed them.
+    func persistSubagentTranscriptNow(_ runID: UUID) {
+        guard subagentTranscriptsByRunID[runID] != nil else { return }
+        persistSubagentTranscript(runID)
     }
 
     func upsertSupervisorRequest(_ request: PiSubagentSupervisorRequest) {

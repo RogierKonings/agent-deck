@@ -410,7 +410,9 @@ final class PiSubagentRunService {
                 let key = "\(runID.uuidString):\(toolCallID)"
                 let entryID = toolEntryIDsByCallID[key] ?? UUID()
                 toolEntryIDsByCallID[key] = event.type == "tool_execution_end" ? nil : entryID
-                store.upsertSubagentTranscript(.init(id: entryID, sessionID: transcript.sessionID, role: transcript.role, title: transcript.title, text: transcript.text, rawJSON: transcript.rawJSON), runID: runID, parentSessionID: parentSessionID)
+                // Partial tool output streams rapidly; keep updates in memory only and
+                // let tool_execution_end (or run completion) write to disk.
+                store.upsertSubagentTranscript(.init(id: entryID, sessionID: transcript.sessionID, role: transcript.role, title: transcript.title, text: transcript.text, rawJSON: transcript.rawJSON), runID: runID, parentSessionID: parentSessionID, persist: event.type != "tool_execution_update")
             } else {
                 store.appendSubagentTranscript(transcript, runID: runID, parentSessionID: parentSessionID)
             }
@@ -466,6 +468,8 @@ final class PiSubagentRunService {
     }
 
     private func flushStreamingEntries(runID: UUID, parentSessionID: UUID) {
+        // Streaming flushes run every ~33ms; keep them in memory only. The final
+        // persisting upsert happens in handleMessageEnd / run completion.
         if let thinkingEntryID = thinkingEntryIDsByRunID[runID],
            let thinkingText = thinkingTextByRunID[runID],
            !thinkingText.isEmpty {
@@ -476,7 +480,7 @@ final class PiSubagentRunService {
                 title: "Thinking",
                 text: thinkingText,
                 rawJSON: nil
-            ), runID: runID, parentSessionID: parentSessionID, before: assistantEntryIDsByRunID[runID])
+            ), runID: runID, parentSessionID: parentSessionID, before: assistantEntryIDsByRunID[runID], persist: false)
         }
 
         if let assistantEntryID = assistantEntryIDsByRunID[runID],
@@ -488,7 +492,7 @@ final class PiSubagentRunService {
                 title: "Assistant",
                 text: assistantText,
                 rawJSON: nil
-            ), runID: runID, parentSessionID: parentSessionID)
+            ), runID: runID, parentSessionID: parentSessionID, persist: false)
         }
     }
 
@@ -534,6 +538,7 @@ final class PiSubagentRunService {
         clientsByRunID[runID] = nil
         cancelSupervisorTimeouts(for: runID, parentSessionID: parentSessionID)
         clearStreamingState(for: runID)
+        store.persistSubagentTranscriptNow(runID)
         if exitCode == 0 {
             completeIfNeeded(runID: runID, parentSessionID: parentSessionID)
         } else {
@@ -635,6 +640,7 @@ final class PiSubagentRunService {
         clientsByRunID[runID]?.stop()
         clientsByRunID[runID] = nil
         clearStreamingState(for: runID)
+        store.persistSubagentTranscriptNow(runID)
         if shouldAppend {
             if finalSummary.count > 1200 {
                 finalSummary = String(finalSummary.prefix(1200)) + "…"
