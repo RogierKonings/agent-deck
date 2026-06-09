@@ -1407,6 +1407,20 @@ struct ContentView: View {
         }
     }
 
+    private var memoryDreamToolbarTitle: String {
+        if viewModel.isDreamMemoryRunning { return "Dreaming" }
+        if viewModel.dreamMemoryResult != nil { return "Dream Ready" }
+        if viewModel.dreamMemoryError != nil { return "Dream Error" }
+        return "Dream"
+    }
+
+    private var memoryDreamToolbarImage: String {
+        if viewModel.isDreamMemoryRunning { return "moon.stars.fill" }
+        if viewModel.dreamMemoryResult != nil { return "checkmark.circle" }
+        if viewModel.dreamMemoryError != nil { return "exclamationmark.triangle" }
+        return "moon.stars"
+    }
+
     // Memory's toolbar lives here in the central switch — same level as every
     // other view — so its button island sits in the same place and doesn't jump
     // when switching to/from Projects. The "New Memory" action is posted to
@@ -1442,12 +1456,13 @@ struct ContentView: View {
                 .help("Refresh Pi memory")
 
                 Button {
-                    NotificationCenter.default.post(name: .agentDeckDreamMemoryRequested, object: nil)
+                    viewModel.startDreamMemory()
                 } label: {
-                    Label("Dream", systemImage: "moon.stars")
+                    Label(memoryDreamToolbarTitle, systemImage: memoryDreamToolbarImage)
                 }
                 .toolbarNeutralChrome()
-                .help("Analyze memory and propose mutations")
+                .help(viewModel.isDreamMemoryRunning ? "Dream is running in the background" : "Analyze memory and propose mutations")
+                .disabled(viewModel.isDreamMemoryRunning)
 
                 Button {
                     NotificationCenter.default.post(name: .agentDeckNewMemoryRequested, object: nil)

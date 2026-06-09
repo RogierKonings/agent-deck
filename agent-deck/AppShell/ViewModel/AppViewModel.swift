@@ -263,6 +263,7 @@ final class AppViewModel: NSObject {
         refreshCoordinator.cancelPendingRefresh()
         piSessions.cancelAllPendingNotifications()
         piSessionTitleGenerator.cancelAll()
+        memory.cancelDreamMemory()
         piRunner.stopAll(recordTranscript: recordTranscript)
         piSubagents.stopAll(recordTranscript: recordTranscript)
         projectServer.terminateAll()

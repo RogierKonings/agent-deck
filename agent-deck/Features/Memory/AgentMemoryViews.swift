@@ -11,11 +11,6 @@ struct MemoryScreen: View {
     @State private var selectedRecordID: String?
     @State private var isEditorPresented = false
     @State private var editingRecord: AgentMemoryRecord?
-    @State private var dreamResult: PiMemoryDreamCycleResult?
-    @State private var approvedDreamIDs: Set<String> = []
-    @State private var dreamProgress: String?
-    @State private var dreamError: String?
-    @State private var isDreamSheetPresented = false
 
     var body: some View {
         AppPage("Memory", subtitle: "Inspect and manage canonical Pi persistent memory") {
@@ -30,7 +25,7 @@ struct MemoryScreen: View {
             viewModel.refreshAgentMemory()
         }
         .onReceive(NotificationCenter.default.publisher(for: .agentDeckDreamMemoryRequested)) { _ in
-            startDream()
+            viewModel.startDreamMemory()
         }
         .sheet(isPresented: $isEditorPresented) {
             MemoryEditorSheet(record: editingRecord, selectedProjectPath: viewModel.selectedProjectPath) { draft in
@@ -39,13 +34,6 @@ struct MemoryScreen: View {
                 } else {
                     viewModel.createAgentMemory(title: draft.title, content: draft.content, reasoning: draft.reasoning, kind: draft.kind, scope: draft.scope, tags: draft.tags, weight: draft.weight, supersedes: draft.supersedes)
                 }
-            }
-        }
-        .sheet(isPresented: $isDreamSheetPresented) {
-            DreamProposalSheet(result: dreamResult, approvedIDs: $approvedDreamIDs, progress: dreamProgress, error: dreamError) { selected in
-                let proposals = dreamResult?.proposals.filter { selected.contains($0.id) } ?? []
-                viewModel.applyDreamMemoryProposals(proposals)
-                isDreamSheetPresented = false
             }
         }
         .onAppear { consumePendingMemorySelection() }
@@ -74,6 +62,23 @@ struct MemoryScreen: View {
         return filteredRecords.first(where: { $0.id == selectedRecordID }) ?? filteredRecords.first
     }
 
+    private var shouldShowDreamPanel: Bool {
+        viewModel.isDreamMemoryRunning || viewModel.dreamMemoryResult != nil || viewModel.dreamMemoryError != nil || viewModel.dreamMemoryProgress != nil
+    }
+
+    private var dreamButtonTitle: String {
+        if viewModel.isDreamMemoryRunning { return "Dreaming…" }
+        if viewModel.dreamMemoryResult != nil { return "Dream Ready" }
+        return "Dream"
+    }
+
+    private var dreamButtonImage: String {
+        if viewModel.isDreamMemoryRunning { return "moon.stars.fill" }
+        if viewModel.dreamMemoryResult != nil { return "checkmark.circle" }
+        if viewModel.dreamMemoryError != nil { return "exclamationmark.triangle" }
+        return "moon.stars"
+    }
+
     private var overviewCard: some View {
         AppCard(title: "Pi Memory", trailing: {
             Toggle("Memory", isOn: Binding(get: { viewModel.appSettings.agentMemoryEnabled }, set: { viewModel.setAgentMemoryEnabled($0) }))
@@ -97,6 +102,9 @@ struct MemoryScreen: View {
         AppCard(title: "Memory Library") {
             VStack(alignment: .leading, spacing: 14) {
                 filterBar
+                if shouldShowDreamPanel {
+                    DreamStatusPanel(viewModel: viewModel)
+                }
                 if filteredRecords.isEmpty {
                     ContentUnavailableView(scopedRecords.isEmpty ? "No Memories" : "No Matching Memories", systemImage: "brain", description: Text(scopedRecords.isEmpty ? "General plus current-project memory will appear here after loading." : "Try changing search, filters, or history visibility."))
                         .frame(maxWidth: .infinity, minHeight: 360)
@@ -142,12 +150,13 @@ struct MemoryScreen: View {
                 .toggleStyle(.switch)
                 .help("Show memories that have been superseded by newer entries")
             Button {
-                startDream()
+                viewModel.startDreamMemory()
             } label: {
-                Label("Dream", systemImage: "moon.stars")
+                Label(dreamButtonTitle, systemImage: dreamButtonImage)
             }
             .appSecondaryButton()
-            .help("Analyze memory and propose mutations")
+            .disabled(viewModel.isDreamMemoryRunning)
+            .help(viewModel.isDreamMemoryRunning ? "Dream is running in the background" : "Analyze memory and propose mutations")
         }
     }
 
@@ -185,28 +194,6 @@ struct MemoryScreen: View {
         searchText = ""
         selectedRecordID = id
         viewModel.selectedMemoryID = nil
-    }
-
-    private func startDream() {
-        isDreamSheetPresented = true
-        dreamResult = nil
-        dreamError = nil
-        dreamProgress = "Starting dream cycle…"
-        approvedDreamIDs = []
-        let memories = memoryStore.activeRecords
-        Task {
-            do {
-                let result = try await viewModel.proposeDreamMemory(memories: memories) { message in
-                    dreamProgress = message
-                }
-                dreamResult = result
-                approvedDreamIDs = Set(result.proposals.filter { $0.action != .skip }.map(\.id))
-                dreamProgress = result.proposals.filter { $0.action != .skip }.isEmpty ? "No mutations proposed." : "Review proposed mutations before applying."
-            } catch {
-                dreamError = error.localizedDescription
-                dreamProgress = nil
-            }
-        }
     }
 }
 
@@ -355,39 +342,128 @@ private struct MemoryEditorSheet: View {
     private var parsedTags: [String] { tags.split(separator: ",").map { String($0).trimmedForMemory }.filter { !$0.isEmpty } }
 }
 
-private struct DreamProposalSheet: View {
-    let result: PiMemoryDreamCycleResult?
-    @Binding var approvedIDs: Set<String>
-    let progress: String?
-    let error: String?
-    let onApply: (Set<String>) -> Void
-    @Environment(\.dismiss) private var dismiss
+private struct DreamStatusPanel: View {
+    var viewModel: AppViewModel
+
+    private var result: PiMemoryDreamCycleResult? { viewModel.dreamMemoryResult }
+    private var actionableProposals: [PiMemoryDreamProposal] {
+        result?.proposals.filter { $0.action != .skip } ?? []
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack { Label("Dream Memory", systemImage: "moon.stars").font(.title2.weight(.bold)); Spacer(); if result == nil { ProgressView().controlSize(.small) } }
-            if let error { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red) }
-            if let progress { Text(progress).foregroundStyle(AppTheme.mutedText) }
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 10) {
+                Label("Dream Memory", systemImage: "moon.stars")
+                    .font(.headline)
+                    .fontWidth(.expanded)
+                if viewModel.isDreamMemoryRunning {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Running in background")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(AppTheme.mutedText)
+                } else if result != nil {
+                    Label("Ready", systemImage: "checkmark.circle")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.green)
+                }
+                Spacer()
+                if !viewModel.isDreamMemoryRunning {
+                    Button("Run Again") { viewModel.startDreamMemory() }
+                        .appSecondaryButton()
+                    Button("Clear") { viewModel.clearDreamMemoryResult() }
+                        .appSecondaryButton()
+                }
+            }
+
+            if let error = viewModel.dreamMemoryError {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.red)
+            }
+            if let progress = viewModel.dreamMemoryProgress {
+                Text(progress)
+                    .foregroundStyle(AppTheme.mutedText)
+            }
+
             if let result {
-                if result.proposals.isEmpty {
+                DreamSummaryRow(result: result)
+                if actionableProposals.isEmpty {
                     ContentUnavailableView("No Proposals", systemImage: "moon", description: Text("Dream analyzed current memories and found no safe mutations to propose."))
+                        .frame(maxWidth: .infinity, minHeight: 120)
                 } else {
-                    List {
-                        ForEach(PiMemoryDreamPhase.allCases) { phase in
-                            let phaseProposals = result.proposals.filter { $0.phase == phase }
-                            if !phaseProposals.isEmpty {
-                                Section(phase.displayName) {
-                                    ForEach(phaseProposals) { proposal in
-                                        DreamProposalToggle(proposal: proposal, isSelected: Binding(get: { approvedIDs.contains(proposal.id) }, set: { isOn in if isOn { approvedIDs.insert(proposal.id) } else { approvedIDs.remove(proposal.id) } }))
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 12) {
+                            ForEach(PiMemoryDreamPhase.allCases) { phase in
+                                let phaseProposals = actionableProposals.filter { $0.phase == phase }
+                                if !phaseProposals.isEmpty {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Text(phase.displayName)
+                                            .font(.subheadline.weight(.semibold))
+                                            .foregroundStyle(AppTheme.mutedText)
+                                        ForEach(phaseProposals) { proposal in
+                                            DreamProposalToggle(
+                                                proposal: proposal,
+                                                isSelected: Binding(
+                                                    get: { viewModel.dreamMemoryApprovedProposalIDs.contains(proposal.id) },
+                                                    set: { viewModel.setDreamMemoryProposalApproved(id: proposal.id, isApproved: $0) }
+                                                )
+                                            )
+                                            .padding(10)
+                                            .appContentSurface(cornerRadius: 10)
+                                        }
                                     }
                                 }
                             }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(minHeight: 340)
+                    .frame(maxHeight: 300)
                 }
             }
-            HStack { Spacer(); Button("Cancel") { dismiss() }.appSecondaryButton(); Button("Apply Selected") { onApply(approvedIDs) }.buttonStyle(AppPrimaryButtonStyle()).disabled(result == nil || approvedIDs.isEmpty) }
-        }.padding(22).frame(width: 820, height: 600)
+
+            if result != nil {
+                HStack {
+                    Spacer()
+                    Button("Apply Selected") {
+                        let selected = viewModel.dreamMemoryApprovedProposalIDs
+                        let proposals = actionableProposals.filter { selected.contains($0.id) }
+                        viewModel.applyDreamMemoryProposals(proposals)
+                    }
+                    .buttonStyle(AppPrimaryButtonStyle())
+                    .disabled(viewModel.dreamMemoryApprovedProposalIDs.isEmpty)
+                }
+            }
+        }
+        .padding(14)
+        .appContentSurface(cornerRadius: 14)
+    }
+}
+
+private struct DreamSummaryRow: View {
+    let result: PiMemoryDreamCycleResult
+
+    var body: some View {
+        HStack(spacing: 8) {
+            stat("Clusters", result.clustersReviewed)
+            stat("Merged", result.memoriesMerged)
+            stat("Created", result.schemasCreated + result.patternsDiscovered)
+            stat("Weights", result.weightsAdjusted)
+            stat("Flags", result.contradictionsFound)
+        }
+    }
+
+    private func stat(_ title: String, _ value: Int) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(value)")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.primary)
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(AppTheme.mutedText)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(8)
+        .background(AppTheme.panelFill, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
     }
 }
 

@@ -437,7 +437,18 @@ struct PiMemoryDreamJSONParser {
 
 @MainActor
 final class PiMemoryDreamLLMReviewer: PiMemoryDreamReviewing {
-    enum ReviewError: LocalizedError { case emptyResponse, timedOut, processExited(Int32), rpc(String) }
+    enum ReviewError: LocalizedError {
+        case emptyResponse, timedOut, processExited(Int32), rpc(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .emptyResponse: return "Dream reviewer returned an empty response."
+            case .timedOut: return "Dream reviewer timed out."
+            case let .processExited(code): return "Dream reviewer process exited with code \(code)."
+            case let .rpc(message): return message
+            }
+        }
+    }
 
     private let model: AvailableModel
     private let projectURL: URL

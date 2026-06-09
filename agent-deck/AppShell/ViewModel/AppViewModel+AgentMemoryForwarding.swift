@@ -71,6 +71,27 @@ extension AppViewModel {
         memory.refreshAgentMemory()
     }
 
+    var isDreamMemoryRunning: Bool { memory.isDreaming }
+    var dreamMemoryProgress: String? { memory.dreamProgress }
+    var dreamMemoryError: String? { memory.dreamError }
+    var dreamMemoryResult: PiMemoryDreamCycleResult? { memory.dreamResult }
+    var dreamMemoryApprovedProposalIDs: Set<String> {
+        get { memory.dreamApprovedProposalIDs }
+        set { memory.dreamApprovedProposalIDs = newValue }
+    }
+
+    func startDreamMemory() {
+        memory.startDreamMemory()
+    }
+
+    func clearDreamMemoryResult() {
+        memory.clearDreamMemoryResult()
+    }
+
+    func setDreamMemoryProposalApproved(id: String, isApproved: Bool) {
+        memory.setDreamProposalApproved(id: id, isApproved: isApproved)
+    }
+
     func proposeDreamMemory(memories: [AgentMemoryRecord], progress: @escaping @MainActor (String) -> Void) async throws -> PiMemoryDreamCycleResult {
         try await memory.proposeDreamMemory(memories: memories, progress: progress)
     }

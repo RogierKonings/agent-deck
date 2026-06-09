@@ -6,6 +6,15 @@ import Observation
 final class AgentMemoryCoordinator {
     weak var host: AgentMemoryHost?
     let store: AgentMemoryStore
+    private(set) var isDreaming = false
+    private(set) var dreamProgress: String?
+    private(set) var dreamError: String?
+    private(set) var dreamResult: PiMemoryDreamCycleResult?
+    var dreamApprovedProposalIDs: Set<String> = []
+    private(set) var dreamStartedAt: Date?
+    private(set) var dreamFinishedAt: Date?
+    @ObservationIgnored private var dreamTask: Task<Void, Never>?
+    @ObservationIgnored private var dreamRunID: UUID?
 
     init(store: AgentMemoryStore = AgentMemoryStore()) {
         self.store = store
@@ -68,6 +77,83 @@ final class AgentMemoryCoordinator {
         store.refresh()
     }
 
+    func startDreamMemory() {
+        guard !isDreaming else { return }
+        let memories = store.activeRecords
+        let runID = UUID()
+        dreamRunID = runID
+        dreamTask?.cancel()
+        isDreaming = true
+        dreamStartedAt = Date()
+        dreamFinishedAt = nil
+        dreamResult = nil
+        dreamApprovedProposalIDs = []
+        dreamError = nil
+        dreamProgress = "Starting dream cycle…"
+
+        dreamTask = Task { @MainActor [weak self, memories, runID] in
+            guard let self else { return }
+            defer {
+                if self.dreamRunID == runID {
+                    self.isDreaming = false
+                    self.dreamTask = nil
+                    self.dreamFinishedAt = Date()
+                }
+            }
+
+            do {
+                let result = try await self.proposeDreamMemory(memories: memories) { [weak self] message in
+                    guard let self, self.dreamRunID == runID else { return }
+                    self.dreamProgress = message
+                }
+                guard self.dreamRunID == runID else { return }
+                let actionableIDs = Set(result.proposals.filter { $0.action != .skip }.map(\.id))
+                self.dreamResult = result
+                self.dreamApprovedProposalIDs = actionableIDs
+                self.dreamError = nil
+                self.dreamProgress = actionableIDs.isEmpty ? "Dream finished with no safe mutations proposed." : "Dream finished. Review proposed mutations below."
+            } catch is CancellationError {
+                guard self.dreamRunID == runID else { return }
+                self.dreamResult = nil
+                self.dreamApprovedProposalIDs = []
+                self.dreamError = nil
+                self.dreamProgress = "Dream cycle cancelled."
+            } catch {
+                guard self.dreamRunID == runID else { return }
+                self.dreamResult = nil
+                self.dreamApprovedProposalIDs = []
+                self.dreamError = error.localizedDescription
+                self.dreamProgress = nil
+            }
+        }
+    }
+
+    func clearDreamMemoryResult() {
+        guard !isDreaming else { return }
+        dreamResult = nil
+        dreamApprovedProposalIDs = []
+        dreamError = nil
+        dreamProgress = nil
+        dreamStartedAt = nil
+        dreamFinishedAt = nil
+        dreamRunID = nil
+    }
+
+    func setDreamProposalApproved(id: String, isApproved: Bool) {
+        if isApproved {
+            dreamApprovedProposalIDs.insert(id)
+        } else {
+            dreamApprovedProposalIDs.remove(id)
+        }
+    }
+
+    func cancelDreamMemory() {
+        dreamRunID = nil
+        dreamTask?.cancel()
+        dreamTask = nil
+        isDreaming = false
+    }
+
     func proposeDreamMemory(memories: [AgentMemoryRecord], progress: @escaping @MainActor (String) -> Void) async throws -> PiMemoryDreamCycleResult {
         guard let model = host?.dreamReviewModel() else {
             throw PiMemoryDreamService.DreamError.noReviewer
@@ -83,8 +169,13 @@ final class AgentMemoryCoordinator {
         guard !actionable.isEmpty else { return }
         do {
             try store.applyDreamProposals(actionable)
+            dreamResult = nil
+            dreamApprovedProposalIDs = []
+            dreamError = nil
+            dreamProgress = "Applied \(actionable.count) dream memory proposal\(actionable.count == 1 ? "" : "s")."
             appendMemoryEvent(.edited, records: [], summary: "Applied \(actionable.count) dream memory proposal\(actionable.count == 1 ? "" : "s").")
         } catch {
+            dreamError = error.localizedDescription
             appendMemoryBlockedEvent(error.localizedDescription)
         }
     }
