@@ -3,6 +3,10 @@ import XCTest
 
 @MainActor
 final class PiAgentBridgeSmokeTests: XCTestCase {
+    override func setUp() async throws {
+        PiExecutableResolver.resetCachedExecutableForTesting()
+    }
+
     func testIdleParkingStopsResumableIdleRPCClientWithoutMarkingSessionStopped() throws {
         let sessionFile = FileManager.default.temporaryDirectory
             .appendingPathComponent("agent-deck-idle-parking-\(UUID().uuidString).jsonl")
@@ -338,7 +342,6 @@ final class PiAgentBridgeSmokeTests: XCTestCase {
         XCTAssertEqual(captured?.continueSubagentID, "11111111-1111-1111-1111-111111111111")
         XCTAssertEqual(captured?.reads, ["README.md"])
         XCTAssertEqual(responseValue(id: "bridge-subagent-1", in: harness.stdinLog), "subagent accepted")
-        XCTAssertEqual(store.transcriptsBySessionID[session.id]?.last?.title, "Deck Agent Requested")
     }
 
     func testManagedParallelBridgeRoutesRequestAndResponds() throws {

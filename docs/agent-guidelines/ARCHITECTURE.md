@@ -62,10 +62,30 @@ Native subagents are app-managed child Pi RPC sessions, not raw slash-command de
 ## Where to Look
 
 Use the source map as an entry point, but always inspect actual files before editing:
-- Scanner/resources: `PiScanner.swift`, `Models.swift`
-- Native subagents: `PiSubagentRunService.swift`, `PiNativeSubagentBridgeExtensions.swift`, `bundled-agents/*.md`
-- Pi Agent RPC: `PiRPCClient.swift`, `PiAgentRunnerService.swift`
-- Persistence: `*Persistence.swift`, `PiAgentSessionStore.swift`
-- UI: relevant view file + `AppViewModel.swift`
+- Scanner/resources: `Services/Catalog/PiScanner.swift`, `Models/Models.swift`
+- Native subagents: `Services/Pi/PiSubagentRunService.swift`, `Services/Pi/PiNativeSubagentBridgeExtensions.swift`, `bundled-agents/*.md`
+- Pi Agent RPC: `Services/Pi/PiRPCClient.swift`, `Services/Pi/PiAgentRunnerService.swift`
+- Persistence: `Services/Catalog/*Persistence.swift`, `Services/Pi/PiAgentSessionStore.swift`
+- UI: relevant file under `Features/` + `AppShell/ViewModel/AppViewModel.swift`
+
+## Source Folder Layout
+
+Swift source lives under `agent-deck/` in feature-oriented folders. Xcode uses a synchronized root group, so filesystem moves are picked up automatically — no per-file project edits needed (except entitlements and bundled-resource exceptions).
+
+```
+agent-deck/
+├── App/                    Entry point, commands, environment wiring
+├── AppShell/               AppViewModel, refresh orchestration, forwarding extensions
+├── Coordinators/           @Observable coordinators + host protocols (by domain)
+├── Models/                 Shared records, configs, DTOs
+├── Services/               Scanning, persistence, Pi RPC, GitHub, automation
+├── Features/               SwiftUI screens grouped by product area
+├── Design/                 Theme, design system, shared UI primitives
+├── Resources/              Assets, fonts, entitlements, app icons
+├── Debug/                  Profiling and debug-only helpers
+├── bundled-agents/         Read-only shipped agents (do not edit in place)
+├── bundled-skills/
+└── bundled-prompts/
+```
 
 For full architecture details, see `agent-deck-documentation/contributors/architecture.md`.

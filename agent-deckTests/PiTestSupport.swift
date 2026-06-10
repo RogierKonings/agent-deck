@@ -13,6 +13,36 @@ enum PiTestSupport {
         let restoreEnvironment: () -> Void
     }
 
+    struct AppSettingsHarness {
+        let restore: () -> Void
+    }
+
+    @MainActor
+    static func isolateAppSettings(_ configure: (inout AppSettings) -> Void) -> AppSettingsHarness {
+        let previous = AppSettingsStore.shared.settings
+        var copy = previous
+        configure(&copy)
+        AppSettingsStore.shared.settings = copy
+        return AppSettingsHarness {
+            AppSettingsStore.shared.settings = previous
+        }
+    }
+
+    private static func installFakePiExecutable(at executable: URL, restore: @escaping () -> Void) -> () -> Void {
+        PiExecutableResolver.resetCachedExecutableForTesting()
+        let oldPiPath = getenv("AGENT_DECK_PI_PATH").map { String(cString: $0) }
+        setenv("AGENT_DECK_PI_PATH", executable.path, 1)
+        return {
+            if let oldPiPath {
+                setenv("AGENT_DECK_PI_PATH", oldPiPath, 1)
+            } else {
+                unsetenv("AGENT_DECK_PI_PATH")
+            }
+            PiExecutableResolver.resetCachedExecutableForTesting()
+            restore()
+        }
+    }
+
     static func temporaryStateFile() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("agent-deck-tests-\(UUID().uuidString)", isDirectory: true)
@@ -163,15 +193,8 @@ enum PiTestSupport {
         try script.write(to: executable, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
 
-        let oldPiPath = getenv("AGENT_DECK_PI_PATH").map { String(cString: $0) }
-        setenv("AGENT_DECK_PI_PATH", executable.path, 1)
-        return RPCHarness(stdinLog: stdinLog) {
-            if let oldPiPath {
-                setenv("AGENT_DECK_PI_PATH", oldPiPath, 1)
-            } else {
-                unsetenv("AGENT_DECK_PI_PATH")
-            }
-        }
+        let restoreEnvironment = installFakePiExecutable(at: executable) {}
+        return RPCHarness(stdinLog: stdinLog, restoreEnvironment: restoreEnvironment)
     }
 
     static func makeFakePiExecutable() throws -> URL {
@@ -197,11 +220,16 @@ enum PiTestSupport {
         let lines = keys.map { key in
             "printf '\(key)=%s\\n' \"${\(key)-}\""
         }.joined(separator: "\n")
+        // Write to a temp file and rename: `>` creates the log the instant the
+        // redirection opens, so tests polling for the file's existence could
+        // read it before the printf lines landed. The rename makes existence
+        // imply complete contents.
         let script = """
         #!/bin/sh
         {
         \(lines)
-        } > \(shellSingleQuoted(envLog.path))
+        } > \(shellSingleQuoted(envLog.path + ".tmp"))
+        mv \(shellSingleQuoted(envLog.path + ".tmp")) \(shellSingleQuoted(envLog.path))
         while IFS= read -r line; do
           sleep 1
         done
@@ -209,15 +237,8 @@ enum PiTestSupport {
         try script.write(to: executable, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
 
-        let oldPiPath = getenv("AGENT_DECK_PI_PATH").map { String(cString: $0) }
-        setenv("AGENT_DECK_PI_PATH", executable.path, 1)
-        return EnvCaptureHarness(envLog: envLog) {
-            if let oldPiPath {
-                setenv("AGENT_DECK_PI_PATH", oldPiPath, 1)
-            } else {
-                unsetenv("AGENT_DECK_PI_PATH")
-            }
-        }
+        let restoreEnvironment = installFakePiExecutable(at: executable) {}
+        return EnvCaptureHarness(envLog: envLog, restoreEnvironment: restoreEnvironment)
     }
 
     static func capturedEnvironment(in logURL: URL) -> [String: String] {

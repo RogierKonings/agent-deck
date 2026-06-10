@@ -1,0 +1,299 @@
+import AppKit
+import SwiftUI
+
+/// Drives PI's own OAuth login flow from inside Agent Deck so subscription
+/// providers (Claude Pro/Max, ChatGPT/Codex, GitHub Copilot) can be signed in
+/// without the terminal.
+///
+/// PI exposes no auth method over RPC, so we run a small Node bridge that
+/// imports PI's SDK and calls `AuthStorage.login(provider, callbacks)` — the
+/// exact same call PI's TUI `/login` makes. The SDK performs the real handshake
+/// (endpoints, PKCE, token exchange/refresh, file locking) and writes
+/// `~/.pi/agent/auth.json`. The bridge relays each callback over stdio; this
+/// service turns those into UI phases and feeds pasted codes back on stdin.
+@MainActor
+@Observable
+final class PiProviderLoginService {
+    struct SelectOption: Equatable, Identifiable {
+        let id: String
+        let label: String
+    }
+
+    enum Phase: Equatable {
+        case launching
+        case opening(url: URL, instructions: String?)
+        case pasteCode(promptID: Int, message: String, placeholder: String?, allowEmpty: Bool)
+        case select(promptID: Int, message: String, options: [SelectOption])
+        case deviceCode(userCode: String, verificationURI: URL)
+        case progress(String)
+        case success
+        case failure(String)
+    }
+
+    /// Providers whose model-list id equals their PI OAuth provider id, so a
+    /// successful `login` writes credentials the catalog immediately uses.
+    static let oauthCapableProviders: Set<String> = ["anthropic", "github-copilot", "openai-codex"]
+
+    static func isOAuthCapable(_ provider: String) -> Bool {
+        oauthCapableProviders.contains(provider)
+    }
+
+    private(set) var providerID: String = ""
+    private(set) var phase: Phase = .launching
+    /// Invoked once on successful login so the catalog/auth state can refresh.
+    var onCompleted: (@MainActor () -> Void)?
+
+    private var process: PiAgentProcess?
+    private var didFinish = false
+    private let sentinel = "@@ADAUTH@@"
+
+    /// Spawns the bridge for `providerID`. Resolves Node + pi up front so a
+    /// missing toolchain fails gracefully instead of crashing the child.
+    func start(providerID: String) {
+        self.providerID = providerID
+        phase = .launching
+        didFinish = false
+
+        let resolver = PiExecutableResolver()
+        guard let node = resolver.resolveNode() else {
+            phase = .failure("Couldn't find Node. Install it, or sign in from the terminal with `pi`, then return here.")
+            return
+        }
+        guard let piPath = resolver.resolve()?.path else {
+            phase = .failure("Couldn't find the pi binary. Install it, or sign in from the terminal with `pi`.")
+            return
+        }
+
+        let configuration = PiAgentProcess.Configuration(
+            arguments: ["--input-type=module", "--eval", Self.bridgeScript],
+            currentDirectoryURL: FileManager.default.homeDirectoryForCurrentUser,
+            environment: [
+                "AGENT_DECK_PI_PATH": piPath,
+                "AGENT_DECK_OAUTH_PROVIDER": providerID
+            ],
+            executableURL: node
+        )
+
+        do {
+            process = try PiAgentProcess(
+                configuration: configuration,
+                onStdoutLines: { [weak self] lines in
+                    let texts = lines.map(\.text)
+                    Task { @MainActor in self?.handleStdout(texts) }
+                },
+                onStderrLines: { _ in },
+                onTermination: { [weak self] code in
+                    Task { @MainActor in self?.handleTermination(code) }
+                }
+            )
+        } catch {
+            phase = .failure(error.localizedDescription)
+        }
+    }
+
+    /// Sends a pasted code or chosen option id back to the bridge.
+    func submit(promptID: Int, value: String) {
+        writeResponse(["id": promptID, "value": value])
+        phase = .progress("Working…")
+    }
+
+    func cancel() {
+        guard !didFinish else { return }
+        didFinish = true
+        process?.terminate()
+        process = nil
+        phase = .failure("Cancelled.")
+    }
+
+    func reopenBrowser() {
+        if case let .opening(url, _) = phase { NSWorkspace.shared.open(url) }
+    }
+
+    func openVerificationPage() {
+        if case let .deviceCode(_, uri) = phase { NSWorkspace.shared.open(uri) }
+    }
+
+    // MARK: - Bridge IO
+
+    private func writeResponse(_ object: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: object),
+              let json = String(data: data, encoding: .utf8) else { return }
+        process?.writeJSONLine(json)
+    }
+
+    private func handleStdout(_ lines: [String]) {
+        for line in lines where line.hasPrefix(sentinel) {
+            let payload = String(line.dropFirst(sentinel.count))
+            guard let data = payload.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let type = object["t"] as? String
+            else { continue }
+            apply(type: type, object: object)
+        }
+    }
+
+    private func apply(type: String, object: [String: Any]) {
+        switch type {
+        case "auth_url":
+            if let urlString = object["url"] as? String, let url = URL(string: urlString) {
+                phase = .opening(url: url, instructions: object["instructions"] as? String)
+                NSWorkspace.shared.open(url)
+            }
+        case "device_code":
+            if let userCode = object["userCode"] as? String,
+               let uriString = object["verificationUri"] as? String,
+               let uri = URL(string: uriString) {
+                phase = .deviceCode(userCode: userCode, verificationURI: uri)
+            }
+        case "progress":
+            phase = .progress(object["message"] as? String ?? "Working…")
+        case "prompt":
+            if let id = object["id"] as? Int {
+                phase = .pasteCode(
+                    promptID: id,
+                    message: object["message"] as? String ?? "Paste the authorization code",
+                    placeholder: object["placeholder"] as? String,
+                    allowEmpty: object["allowEmpty"] as? Bool ?? false
+                )
+            }
+        case "select":
+            if let id = object["id"] as? Int {
+                let options = (object["options"] as? [[String: Any]] ?? []).compactMap { entry -> SelectOption? in
+                    guard let optionID = entry["id"] as? String, let label = entry["label"] as? String else { return nil }
+                    return SelectOption(id: optionID, label: label)
+                }
+                phase = .select(
+                    promptID: id,
+                    message: object["message"] as? String ?? "Choose an option",
+                    options: options
+                )
+            }
+        case "done":
+            finishSuccess()
+        case "error":
+            finishFailure(object["message"] as? String ?? "Login failed.")
+        default:
+            break
+        }
+    }
+
+    private func handleTermination(_ code: Int32) {
+        process = nil
+        guard !didFinish else { return }
+        if code == 0 {
+            finishSuccess()
+        } else {
+            finishFailure("The login helper exited unexpectedly (code \(code)).")
+        }
+    }
+
+    private func finishSuccess() {
+        guard !didFinish else { return }
+        didFinish = true
+        phase = .success
+        onCompleted?()
+    }
+
+    private func finishFailure(_ message: String) {
+        guard !didFinish else { return }
+        didFinish = true
+        phase = .failure(message)
+    }
+
+    /// ESM script run via `node --input-type=module --eval`. Mirrors the model
+    /// discovery bridge: walk up from the real `pi` binary to its package, then
+    /// `import` `AuthStorage` and run `login` with stdio-relayed callbacks.
+    /// Protocol lines on stdout are prefixed with `@@ADAUTH@@`; responses arrive
+    /// on stdin as `{ "id":n, "value":"…" }` (or `{ "id":n, "cancel":true }`).
+    private static let bridgeScript = #"""
+    import { existsSync, realpathSync } from 'node:fs';
+    import { dirname, resolve } from 'node:path';
+    import { createInterface } from 'node:readline';
+
+    const SENTINEL = '@@ADAUTH@@';
+    const send = (m) => process.stdout.write(SENTINEL + JSON.stringify(m) + '\n');
+    const fail = (message) => { send({ t: 'error', message: String(message) }); process.exit(1); };
+
+    function findIndex() {
+      const candidates = [];
+      const piPath = process.env.AGENT_DECK_PI_PATH;
+      if (piPath && existsSync(piPath)) {
+        try {
+          const real = realpathSync(piPath);
+          // cli.js and index.js are siblings in dist/.
+          candidates.push(resolve(dirname(real), 'index.js'));
+          let dir = dirname(real);
+          for (let i = 0; i < 10; i++) {
+            candidates.push(resolve(dir, 'node_modules/@earendil-works/pi-coding-agent/dist/index.js'));
+            const parent = dirname(dir);
+            if (parent === dir) break;
+            dir = parent;
+          }
+        } catch {}
+      }
+      candidates.push(
+        '/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist/index.js',
+        '/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/dist/index.js',
+      );
+      return candidates.find((p) => existsSync(p));
+    }
+
+    const providerId = process.env.AGENT_DECK_OAUTH_PROVIDER;
+    if (!providerId) fail('Missing provider id.');
+
+    const indexPath = findIndex();
+    if (!indexPath) fail('Could not locate the pi package. Make sure pi is installed.');
+
+    let AuthStorage;
+    try {
+      ({ AuthStorage } = await import(indexPath));
+    } catch (e) {
+      fail(e && e.message ? e.message : e);
+    }
+    if (!AuthStorage) fail('pi package does not export AuthStorage.');
+
+    const pending = new Map();
+    let nextId = 1;
+    const ask = (base) => new Promise((res, rej) => {
+      const id = nextId++;
+      pending.set(id, { res, rej });
+      send({ ...base, id });
+    });
+
+    createInterface({ input: process.stdin }).on('line', (line) => {
+      let msg;
+      try { msg = JSON.parse(line); } catch { return; }
+      const p = pending.get(msg.id);
+      if (!p) return;
+      pending.delete(msg.id);
+      if (msg.cancel) p.rej(new Error('cancelled'));
+      else p.res(msg.value);
+    });
+
+    // Hold the event loop open while we await stdin replies. readline + an open
+    // stdin don't reliably keep Node alive when it's idle at a prompt, so the
+    // process can exit with code 13 (unsettled top-level await) the instant a
+    // flow's first step is a prompt — e.g. GitHub Copilot's enterprise-domain
+    // question, before any socket/timer exists. A long interval guarantees it.
+    process.stdin.resume();
+    const keepAlive = setInterval(() => {}, 1 << 30);
+
+    try {
+      const auth = AuthStorage.create();
+      await auth.login(providerId, {
+        onAuth: (info) => send({ t: 'auth_url', url: info.url, instructions: info.instructions }),
+        onDeviceCode: (info) => send({ t: 'device_code', userCode: info.userCode, verificationUri: info.verificationUri, intervalSeconds: info.intervalSeconds }),
+        onProgress: (message) => send({ t: 'progress', message }),
+        onPrompt: (p) => ask({ t: 'prompt', message: p.message, placeholder: p.placeholder, allowEmpty: p.allowEmpty }),
+        onManualCodeInput: () => ask({ t: 'prompt', message: 'Paste the authorization code from your browser', allowEmpty: false }),
+        onSelect: (p) => ask({ t: 'select', message: p.message, options: p.options }),
+      });
+      clearInterval(keepAlive);
+      send({ t: 'done' });
+      process.exit(0);
+    } catch (e) {
+      clearInterval(keepAlive);
+      fail(e && e.message ? e.message : e);
+    }
+    """#
+}
