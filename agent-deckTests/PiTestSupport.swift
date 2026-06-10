@@ -220,11 +220,16 @@ enum PiTestSupport {
         let lines = keys.map { key in
             "printf '\(key)=%s\\n' \"${\(key)-}\""
         }.joined(separator: "\n")
+        // Write to a temp file and rename: `>` creates the log the instant the
+        // redirection opens, so tests polling for the file's existence could
+        // read it before the printf lines landed. The rename makes existence
+        // imply complete contents.
         let script = """
         #!/bin/sh
         {
         \(lines)
-        } > \(shellSingleQuoted(envLog.path))
+        } > \(shellSingleQuoted(envLog.path + ".tmp"))
+        mv \(shellSingleQuoted(envLog.path + ".tmp")) \(shellSingleQuoted(envLog.path))
         while IFS= read -r line; do
           sleep 1
         done

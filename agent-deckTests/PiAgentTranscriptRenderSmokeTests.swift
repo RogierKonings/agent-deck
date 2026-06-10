@@ -9,6 +9,27 @@ final class PiAgentTranscriptRenderSmokeTests: XCTestCase {
         PiExecutableResolver.resetCachedExecutableForTesting()
     }
 
+    /// Programmatic `NSWindow`s default to `isReleasedWhenClosed = true`, which
+    /// under ARC over-releases the window when `close()` runs. The corpse — and
+    /// the `_NSWindowTransformAnimation` AppKit attaches when the window orders
+    /// front — then blows up minutes later inside an unrelated test's CA commit
+    /// (SIGSEGV in `-[_NSWindowTransformAnimation dealloc]`), which made the
+    /// whole suite intermittently crash. Build test windows safely: no ARC
+    /// double-release, no order-front animation.
+    private func makeRenderWindow(contentView: NSView) -> NSWindow {
+        let window = NSWindow(
+            contentRect: contentView.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.animationBehavior = .none
+        window.contentView = contentView
+        window.orderFrontRegardless()
+        return window
+    }
+
     func testMarkdownHighlightingUsesThemeColorsAndToggleOnlyChangesAttributes() {
         let manager = ThemeManager.shared
         let previousTheme = manager.activeTheme
@@ -118,14 +139,7 @@ final class PiAgentTranscriptRenderSmokeTests: XCTestCase {
         let host = NSHostingView(rootView: MarkdownTextView(source: source).frame(width: 620, alignment: .leading))
         host.frame = NSRect(x: 0, y: 0, width: 620, height: 1_000)
 
-        let window = NSWindow(
-            contentRect: host.frame,
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
-        window.contentView = host
-        window.orderFrontRegardless()
+        let window = makeRenderWindow(contentView: host)
         defer { window.close() }
 
         runMainLoop(iterations: 6, delay: 0.02)
@@ -145,14 +159,7 @@ final class PiAgentTranscriptRenderSmokeTests: XCTestCase {
         ))
         host.frame = NSRect(x: 0, y: 0, width: 520, height: 420)
 
-        let window = NSWindow(
-            contentRect: host.frame,
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
-        window.contentView = host
-        window.orderFrontRegardless()
+        let window = makeRenderWindow(contentView: host)
         defer { window.close() }
 
         runMainLoop(iterations: 10, delay: 0.03)
@@ -170,14 +177,7 @@ final class PiAgentTranscriptRenderSmokeTests: XCTestCase {
         let host = NSHostingView(rootView: PiAgentTranscriptAppendSmokeView())
         host.frame = NSRect(x: 0, y: 0, width: 520, height: 420)
 
-        let window = NSWindow(
-            contentRect: host.frame,
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
-        window.contentView = host
-        window.orderFrontRegardless()
+        let window = makeRenderWindow(contentView: host)
         defer { window.close() }
 
         runMainLoop(iterations: 12, delay: 0.03)

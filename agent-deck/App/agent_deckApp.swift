@@ -20,6 +20,16 @@ final class AgentDeckAppDelegate: NSObject, NSApplicationDelegate, UNUserNotific
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            // Unit-test host: stay out of the way. AppKit's window open/close
+            // transform animation intermittently over-releases during CA commits
+            // while tests pump the run loop (SIGSEGV in
+            // -[_NSWindowTransformAnimation dealloc]), so suppress window
+            // animations entirely and skip the real startup side effects.
+            NSApp.setActivationPolicy(.accessory)
+            suppressWindowAnimationsForTesting()
+            return
+        }
         // Crash-proof hang detector: when the main thread freezes (janky scroll),
         // it auto-captures the hung backtrace via the external `sample` tool to
         // /tmp/agentdeck-hang-<n>.txt. Disable with HangWatchdogEnabled=NO.
@@ -43,14 +53,31 @@ final class AgentDeckAppDelegate: NSObject, NSApplicationDelegate, UNUserNotific
         // controller is still constructed at first scene-body eval (via the
         // `.environmentObject(appDelegate.updater)` injection), but the
         // explicit `checkForUpdatesInBackground()` call no longer sits inside
-        // applicationDidFinishLaunching. Skipped under XCTest, like the
-        // watchdog above — test runs shouldn't hit the update feed.
-        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
+        // applicationDidFinishLaunching.
         let updater = updater
         Task.detached(priority: .background) {
             await MainActor.run {
                 updater.checkForUpdatesInBackground()
             }
+        }
+    }
+
+    /// There is no "window created" notification, so re-apply `.none` to every
+    /// window after each event cycle. `didUpdateNotification` is chatty, but the
+    /// observer only exists in test runs and the window list stays tiny.
+    private func suppressWindowAnimationsForTesting() {
+        let disable = {
+            for window in NSApp.windows {
+                window.animationBehavior = .none
+            }
+        }
+        disable()
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didUpdateNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated(disable)
         }
     }
 
@@ -119,6 +146,10 @@ struct agent_deckApp: App {
         .defaultSize(width: 1180, height: 760)
         .windowToolbarStyle(.unified)
         .windowResizability(.contentMinSize)
+        // Under XCTest, never open the main window at launch. The window-open
+        // transform animation is what later over-releases (see
+        // `isHostingUnitTests`); a window that never appears never animates.
+        .defaultLaunchBehavior(Self.isHostingUnitTests ? .suppressed : .automatic)
         Settings {
             SettingsSceneContent()
                 .environment(viewModel)
