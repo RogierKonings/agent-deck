@@ -43,7 +43,9 @@ final class AgentDeckAppDelegate: NSObject, NSApplicationDelegate, UNUserNotific
         // controller is still constructed at first scene-body eval (via the
         // `.environmentObject(appDelegate.updater)` injection), but the
         // explicit `checkForUpdatesInBackground()` call no longer sits inside
-        // applicationDidFinishLaunching.
+        // applicationDidFinishLaunching. Skipped under XCTest, like the
+        // watchdog above — test runs shouldn't hit the update feed.
+        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
         let updater = updater
         Task.detached(priority: .background) {
             await MainActor.run {
@@ -85,20 +87,34 @@ struct agent_deckApp: App {
     @State private var viewModel = AppViewModel()
     @State private var themeManager = ThemeManager.shared
 
+    /// Unit tests are hosted inside the full app (TEST_HOST). Rendering the
+    /// real `ContentView` during test runs boots the entire UI — including the
+    /// launch splash cover panel and its animated fade-out, whose window
+    /// animation teardown intermittently crashes (over-released
+    /// `_NSWindowTransformAnimation`) while tests pump the run loop. Show an
+    /// inert placeholder instead; tests build their own stores/services.
+    private static let isHostingUnitTests =
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+
     init() {
         AppFonts.registerBundledFonts()
     }
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .environment(viewModel)
-                .environmentObject(appDelegate.updater)
-                .preferredColorScheme(.dark)
-                // `AppTheme`'s themed tokens are computed `static var`s, so a
-                // theme switch is invisible to SwiftUI's dependency graph.
-                // Re-keying on the theme revision forces a uniform repaint.
-                .id(themeManager.revision)
+            if Self.isHostingUnitTests {
+                Text("Running unit tests…")
+                    .frame(width: 320, height: 160)
+            } else {
+                ContentView()
+                    .environment(viewModel)
+                    .environmentObject(appDelegate.updater)
+                    .preferredColorScheme(.dark)
+                    // `AppTheme`'s themed tokens are computed `static var`s, so a
+                    // theme switch is invisible to SwiftUI's dependency graph.
+                    // Re-keying on the theme revision forces a uniform repaint.
+                    .id(themeManager.revision)
+            }
         }
         .defaultSize(width: 1180, height: 760)
         .windowToolbarStyle(.unified)

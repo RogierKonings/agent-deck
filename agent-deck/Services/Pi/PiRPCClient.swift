@@ -91,7 +91,7 @@ final class PiRPCClient: @unchecked Sendable {
             configuration: .init(arguments: args, currentDirectoryURL: cwd, environment: environment),
             onStdoutLines: { lines in
                 let events = lines.map { line in
-                    EventLine(rawLine: line, event: decoder.decodeEvent(from: line))
+                    EventLine(rawLine: line.text, event: decoder.decodeEvent(from: line.data))
                 }
                 onEvent(events)
             },
@@ -105,8 +105,8 @@ final class PiRPCClient: @unchecked Sendable {
     private nonisolated final class LineDecoder: @unchecked Sendable {
         private let decoder = JSONDecoder()
 
-        nonisolated func decodeEvent(from line: String) -> PiAgentRPCEvent? {
-            try? decoder.decode(PiAgentRPCEvent.self, from: Data(line.utf8))
+        nonisolated func decodeEvent(from data: Data) -> PiAgentRPCEvent? {
+            try? decoder.decode(PiAgentRPCEvent.self, from: data)
         }
     }
 

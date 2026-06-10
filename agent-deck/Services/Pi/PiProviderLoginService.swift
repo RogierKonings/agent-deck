@@ -78,7 +78,8 @@ final class PiProviderLoginService {
             process = try PiAgentProcess(
                 configuration: configuration,
                 onStdoutLines: { [weak self] lines in
-                    Task { @MainActor in self?.handleStdout(lines) }
+                    let texts = lines.map(\.text)
+                    Task { @MainActor in self?.handleStdout(texts) }
                 },
                 onStderrLines: { _ in },
                 onTermination: { [weak self] code in

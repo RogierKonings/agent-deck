@@ -225,6 +225,12 @@ final class AppViewModel: NSObject {
         // deterministic "nothing installed" state for the onboarding/Doctor previews.
         if ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1" { return }
         #endif
+        // XCTest host: the unit-test bundle is injected into the full app
+        // (TEST_HOST), so without this guard every test run boots the real
+        // startup pipeline — project scans, pi/gh subprocesses, session-store
+        // loads — competing with the tests under measurement and making smoke
+        // tests flaky. Tests build their own stores/services explicitly.
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil { return }
         projects.loadPersistedSelection()
         piAgentSessionStore.newSessionSubagentsEnabled = appSettings.nativeSubagentsEnabledForNewSessions
         piSessions.configureIdleParking()

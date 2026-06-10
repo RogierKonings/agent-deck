@@ -1598,9 +1598,10 @@ extension PiAgentTranscriptThread {
 }
 
 /// The session list, isolated as an `Equatable` view so it can be wrapped in
-/// `.equatable()`. It lives next to the transcript inside `PiAgentScreen.body`,
-/// which re-runs at the streaming cadence (the transcript render cache is an
-/// ObservableObject, so any of its published changes invalidates the whole body).
+/// `.equatable()`. It lives next to the transcript inside `PiAgentScreen.body`.
+/// The transcript render cache is `@State`-owned and only `PiAgentTranscriptHost`
+/// observes it, so cache publishes no longer invalidate the whole screen body —
+/// but the body still re-runs when screen-level observed state changes.
 /// A SwiftUI `List` re-measures every row whenever its enclosing view updates —
 /// even when the rows themselves are unchanged — so those pulses were re-laying
 /// out the entire list ~30×/sec (the dominant `sizeThatFits` cost in the scroll

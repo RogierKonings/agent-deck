@@ -38,7 +38,7 @@ nonisolated final class PiAgentProcess: @unchecked Sendable {
     private var didTerminate = false
     private var didCleanupIO = false
 
-    init(configuration: Configuration, onStdoutLines: @escaping @Sendable ([String]) -> Void, onStderrLines: @escaping @Sendable ([String]) -> Void, onTermination: @escaping @Sendable (Int32) -> Void) throws {
+    init(configuration: Configuration, onStdoutLines: @escaping @Sendable ([StreamedLine]) -> Void, onStderrLines: @escaping @Sendable ([String]) -> Void, onTermination: @escaping @Sendable (Int32) -> Void) throws {
         let executable = try configuration.executableURL ?? Self.resolvePiExecutable()
         let process = Process()
         process.executableURL = executable
@@ -155,18 +155,33 @@ nonisolated final class PiAgentProcess: @unchecked Sendable {
     }
 }
 
+/// One complete stdout line: the raw bytes (for JSON decoding without a
+/// `String → Data` re-encode) plus the decoded text (for rawLine storage and
+/// debug logging).
+nonisolated struct StreamedLine: Sendable {
+    let data: Data
+    let text: String
+}
+
 /// Buffers a `FileHandle`'s bytes and emits complete, non-empty lines.
 /// Shared by `PiAgentProcess` and `ManagedProcess`.
 nonisolated final class LineStreamReader: @unchecked Sendable {
     private let handle: FileHandle
-    private let callback: @Sendable ([String]) -> Void
+    private let callback: @Sendable ([StreamedLine]) -> Void
     private let lock = NSLock()
     private var buffer = Data()
     private var isStopped = false
 
-    init(handle: FileHandle, callback: @escaping @Sendable ([String]) -> Void) {
+    init(handle: FileHandle, callback: @escaping @Sendable ([StreamedLine]) -> Void) {
         self.handle = handle
         self.callback = callback
+    }
+
+    /// Text-only convenience for consumers that never need the raw bytes.
+    convenience init(handle: FileHandle, callback: @escaping @Sendable ([String]) -> Void) {
+        self.init(handle: handle) { lines in
+            callback(lines.map(\.text))
+        }
     }
 
     deinit {
@@ -201,20 +216,15 @@ nonisolated final class LineStreamReader: @unchecked Sendable {
             return
         }
         buffer.append(data)
-        var lines: [String] = []
+        var lines: [StreamedLine] = []
         var lineStart = buffer.startIndex
-        var index = lineStart
-        while index < buffer.endIndex {
-            guard buffer[index] == 0x0A else {
-                index = buffer.index(after: index)
-                continue
-            }
-            let lineData = buffer[lineStart..<index]
-            if let line = Self.normalizedLine(from: lineData) {
+        // firstIndex(of:) scans with the optimized contiguous-bytes path instead
+        // of a per-byte Data subscript loop.
+        while let newlineIndex = buffer[lineStart...].firstIndex(of: 0x0A) {
+            if let line = Self.normalizedLine(from: buffer[lineStart..<newlineIndex]) {
                 lines.append(line)
             }
-            index = buffer.index(after: index)
-            lineStart = index
+            lineStart = buffer.index(after: newlineIndex)
         }
         if lineStart > buffer.startIndex {
             buffer.removeSubrange(..<lineStart)
@@ -236,9 +246,14 @@ nonisolated final class LineStreamReader: @unchecked Sendable {
         }
     }
 
-    private static func normalizedLine(from data: Data) -> String? {
-        var line = String(data: data, encoding: .utf8) ?? ""
-        if line.hasSuffix("\r") { line.removeLast() }
-        return line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : line
+    private static func normalizedLine(from slice: Data) -> StreamedLine? {
+        var slice = slice
+        if slice.last == 0x0D { slice = slice.dropLast() }
+        // Copy out of the shared buffer so the emitted line doesn't pin (or get
+        // invalidated by) subsequent buffer mutations.
+        let data = Data(slice)
+        let text = String(data: data, encoding: .utf8) ?? ""
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return StreamedLine(data: data, text: text)
     }
 }
