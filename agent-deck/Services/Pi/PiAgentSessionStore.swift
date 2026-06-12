@@ -1710,7 +1710,7 @@ private enum LoadedPersistedState: Sendable {
 // debounced streaming saves. Concurrent encode/decode with a shared instance is
 // safe as long as the configuration is never mutated after creation.
 private nonisolated extension JSONEncoder {
-    nonisolated(unsafe) static let piAgent: JSONEncoder = {
+    static let piAgent: JSONEncoder = {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
@@ -1719,7 +1719,7 @@ private nonisolated extension JSONEncoder {
 }
 
 private nonisolated extension JSONDecoder {
-    nonisolated(unsafe) static let piAgent: JSONDecoder = {
+    static let piAgent: JSONDecoder = {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return decoder
